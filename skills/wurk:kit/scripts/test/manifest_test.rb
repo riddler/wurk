@@ -25,6 +25,19 @@ module ManifestFixtures
   def load(name)
     Manifest.new(path: path(name), raw: JSON.parse(File.read(path(name))))
   end
+
+  # A one-off manifest from the named fixture with `overrides` deep-merged
+  # in, for a test that needs one field different and nothing else.
+  def load_with(name, overrides)
+    raw = deep_merge(JSON.parse(File.read(path(name))), overrides)
+    Manifest.new(path: path(name), raw: raw)
+  end
+
+  def deep_merge(base, overrides)
+    base.merge(overrides) do |_key, old, new|
+      old.is_a?(Hash) && new.is_a?(Hash) ? deep_merge(old, new) : new
+    end
+  end
 end
 
 class ManifestValidationTest < Minitest::Test
@@ -71,6 +84,20 @@ class ManifestValidationTest < Minitest::Test
     refute m.valid?
     assert_match(/gate\.full must be an argv array of strings/, m.errors.join("\n"))
   end
+
+  # sabotage: drop the is_a?(Array) check in validate_regex_lists -> red
+  def test_non_array_project_level_skips_blocks_naming_the_field
+    m = ManifestFixtures.load_with("valid", "gate" => { "project_level_skips" => "not installed" })
+    refute m.valid?
+    assert_match(/gate\.project_level_skips must be a list of regex source strings/, m.errors.join("\n"))
+  end
+
+  # sabotage: stop rescuing RegexpError in validate_regex_lists -> red
+  def test_uncompilable_project_level_skip_blocks_naming_the_entry
+    m = ManifestFixtures.load_with("valid", "gate" => { "project_level_skips" => ["not installed", "["] })
+    refute m.valid?
+    assert_match(/gate\.project_level_skips entry "\[" is not a valid regular expression/, m.errors.join("\n"))
+  end
 end
 
 class ManifestAccessorTest < Minitest::Test
@@ -110,6 +137,12 @@ class ManifestAccessorTest < Minitest::Test
   def test_absent_tmux_section_reports_no_tmux_integration
     refute @m.tmux?
     assert_nil @m.tmux_session
+  end
+
+  # sabotage: return a match-anything regex instead of nil when the key is
+  # absent -> red
+  def test_project_level_skip_re_is_nil_when_absent
+    assert_nil @m.project_level_skip_re
   end
 end
 

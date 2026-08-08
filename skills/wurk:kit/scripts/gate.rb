@@ -8,9 +8,10 @@ require_relative "lib/cli"
 require_relative "lib/gate_paths"
 require_relative "lib/manifest"
 
-# Gate wraps `mix gate.verify` and `mix quality --format json --report -`,
-# serving /commit, /merge-request, /implement-plan, and /work. See
-# statifier-ex docs/plans/260806-st-hzf-skill-mechanics-scripts.md Phase 7 - this is the
+# Gate runs the consumer's own gate commands (gate.full, gate.loop,
+# gate.report, gate.report_loop, gate.attest) and reports which tier of
+# wurk docs/gate-contract.md the project reached. See statifier-ex
+# docs/plans/260806-st-hzf-skill-mechanics-scripts.md Phase 7 - this is the
 # most constrained script in the set: it must make the gate easier to read
 # without making it easier to weaken.
 #
@@ -28,43 +29,29 @@ require_relative "lib/manifest"
 #      missing, Tests skipping because compilation half-failed: the gate was
 #      asked to measure something and could not, so `ok` is false.
 #    - A gap in **what the project checks at all** is reported, not blocked.
-#      `:doctor not installed`, `:gettext not installed`, `adr_judge
-#      disabled in .quality.exs` are standing project properties, true on
-#      every run including the ones that were green when the policy was
-#      written. Blocking on them makes `ok` false on *every* full gate run
-#      forever, which does not enforce the rule - it deletes the signal, and
-#      the first thing anyone does with a check that is always red is stop
+#      A check that is not installed, or a stage disabled in the project's
+#      own gate config, is a standing project property, true on every run
+#      including the ones that were green when the policy was written.
+#      Blocking on them makes `ok` false on *every* full gate run forever,
+#      which does not enforce the rule - it deletes the signal, and the
+#      first thing anyone does with a check that is always red is stop
 #      reading it.
 #
-#    `PROJECT_LEVEL_SKIP_RE` draws that line, and it is deliberately narrow:
-#    anything it does not match blocks. Adding a pattern to it is the same
-#    class of decision as editing the gate config, so it belongs in review.
-#    This is still stricter than `mix gate.verify`'s `data.attested`, which
-#    mirrors only statifier-ex ADR-0011's narrowing test.
+#    `gate.project_level_skips` (a manifest field, see docs/manifest.md)
+#    draws that line, and a project declaring none gets the strict reading:
+#    anything not matched blocks. Widening the list is the same class of
+#    decision as editing the gate config, so it belongs in review - in the
+#    consumer's own manifest, not in this script.
 # 2. This script accepts exactly one profile argument, `--profile loop`, and
 #    forwarding it always sets `attested: false`. Every other `--profile`
 #    value, and `--skip`/`--quick` in any form, are simply not options this
 #    parser defines - OptionParser rejects them as usage errors (exit 2)
 #    before any envelope is built. There is no flag this script owns that
-#    narrows what `mix quality` runs beyond that one case.
+#    narrows what the gate command runs beyond that one case.
 # 3. `data.sabotage.missing` and `data.gate_guard` are reports. Neither ever
 #    flips `ok`, and there is no code path anywhere in this file that writes
 #    docs/quality-gate-changes.md - see test/contract_test.rb.
 module Gate
-  # Skip reasons that describe the project's standing configuration rather
-  # than a failure of this run. Matched against a stage's `summary` from the
-  # `mix quality` JSON report. See rule 1 in the module doc for why this is
-  # narrow and why widening it is a review decision, not a convenience.
-  #
-  #   ":doctor not installed"        - optional dep the project never added
-  #   ":gettext not installed"       - same
-  #   "disabled in .quality.exs"     - e.g. adr_judge, off outside --profile merge
-  PROJECT_LEVEL_SKIP_RE = /
-    \bnot\s+installed\b
-    |
-    \bdisabled\s+in\s+\.quality\.exs\b
-  /x.freeze
-
   SABOTAGE_DIFF_ARGS = %w[
     git diff main...HEAD -U0 -- test/ :!test/scion_tests :!test/scxml_tests
   ].freeze
@@ -182,25 +169,30 @@ module Gate
       scan_sabotage(diff_res.out)
     end
 
-    def skipped_from(stages)
+    def skipped_from(stages, project_level_re)
       Array(stages)
         .select { |s| s["status"] == "skipped" }
         .map do |s|
           summary = s["summary"]
-          { name: s["name"], summary: summary, project_level: project_level_skip?(summary) }
+          { name: s["name"], summary: summary,
+            project_level: project_level_skip?(summary, project_level_re) }
         end
     end
 
     # True when the skip describes what this project checks at all, rather
-    # than something this run could not do. See rule 1 in the module doc -
-    # narrow on purpose; an unrecognized skip reason blocks.
-    def project_level_skip?(summary)
-      !(summary.to_s =~ PROJECT_LEVEL_SKIP_RE).nil?
+    # than something this run could not do. The patterns are manifest data
+    # (gate.project_level_skips): a project that declares none gets the
+    # strict reading, where every skipped stage blocks. See rule 1 in the
+    # module doc.
+    def project_level_skip?(summary, project_level_re)
+      return false if project_level_re.nil?
+
+      !(summary.to_s =~ project_level_re).nil?
     end
 
     # `data.gate_guard` is a report, never repaired: the ledger existence
     # check below is read-only (File.exist?), and the guarded-path findings
-    # (if any) come straight from the "Gate guard" stage `mix quality`
+    # (if any) come straight from the "Gate guard" stage the gate command
     # itself already ran - this method adds no write path of its own. See
     # test/contract_test.rb, which asserts that mechanically.
     # Names the paths the project actually gates on, from the manifest, so
@@ -250,12 +242,15 @@ module Gate
     def build_parser(options)
       Cli.build("gate.rb [--profile loop]", options) do |opts|
         opts.separator ""
-        opts.separator "Wraps mix gate.verify and mix quality --format json --report -."
+        opts.separator "Runs the gate commands the manifest names (gate.full, gate.loop,"
+        opts.separator "gate.report, gate.report_loop, gate.attest) and reports which tier of"
+        opts.separator "wurk docs/gate-contract.md the project reached. It knows no gate tool's"
+        opts.separator "flag surface."
         opts.separator "The only --profile value accepted is 'loop' (inner-loop iteration; sets"
         opts.separator "data.attested to false so the caller cannot mistake it for a full green)."
         opts.separator "No --skip, no --quick, and no other --profile value is defined by this"
         opts.separator "parser, so OptionParser rejects them as a usage error (exit 2) - there is"
-        opts.separator "no way to narrow what mix quality runs beyond the one --profile loop case."
+        opts.separator "no way to narrow what the gate command runs beyond the one --profile loop case."
         opts.separator ""
         opts.separator "data.sabotage.missing is a report, not a gate: it never blocks and never"
         opts.separator "flips ok. A present '# sabotage:' note is not evidence the mutation was"
@@ -295,7 +290,7 @@ module Gate
       env.data[:applicable] = applicable
       env.data[:carve_out_reason] = applicable ? nil : carve_out_reason(manifest)
 
-      # The carve-out ("skip mix quality and review the diff instead") is a
+      # The carve-out ("skip the gate command and review the diff instead") is a
       # pre-commit decision about the full gate - see /commit's Step 0. It
       # does not apply to --profile loop: that flag is a deliberate ask for
       # inner-loop feedback, not a request to decide whether a commit needs
@@ -317,7 +312,7 @@ module Gate
       tier = report.nil? ? 0 : 1
       report ||= {}
       stages = report["stages"] || []
-      skipped = skipped_from(stages)
+      skipped = skipped_from(stages, manifest.project_level_skip_re)
 
       env.data[:ran] = loop_mode ? "loop" : "all"
       env.data[:tier] = tier

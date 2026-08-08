@@ -67,7 +67,8 @@ class Manifest
     "beads" => %w[prefix topology areas],
     "beads.areas" => %w[labels lands_alone always_batchable],
     "forge" => %w[kind labels],
-    "gate" => %w[full loop report report_loop attest guard_ledger build_paths also_gated_paths moving_files],
+    "gate" => %w[full loop report report_loop attest guard_ledger build_paths also_gated_paths moving_files
+                 project_level_skips],
     "parallelism" => %w[model worktrees_dir trust warm_clone warm_globs warm repair_when repair post_branch],
     "tmux" => %w[session model],
     "models" => %w[direction],
@@ -261,6 +262,17 @@ class Manifest
     Array(fetch("gate.moving_files"))
   end
 
+  # Compiles gate.project_level_skips into one Regexp, or nil when the
+  # project declares none. nil is the strict direction: every skipped stage
+  # blocks. Widening this list is a review decision made in the consumer's
+  # own manifest, not a default this kit guesses at.
+  def project_level_skip_re
+    sources = Array(fetch("gate.project_level_skips"))
+    return nil if sources.empty?
+
+    Regexp.union(sources.map { |s| Regexp.new(s) })
+  end
+
   def parallelism_model
     fetch("parallelism.model")
   end
@@ -404,12 +416,35 @@ class Manifest
   COMMAND_FIELDS = %w[gate.full gate.loop gate.report gate.report_loop gate.attest parallelism.trust].freeze
   COMMAND_LIST_FIELDS = %w[parallelism.warm parallelism.repair parallelism.post_branch].freeze
 
+  # Fields that hold a list of regex source strings rather than argv. Each
+  # entry must compile; the field itself may be absent.
+  REGEX_LIST_FIELDS = %w[gate.project_level_skips].freeze
+
   def validate!
     validate_version
     validate_required
     validate_enums
     validate_commands
+    validate_regex_lists
     collect_unknown_keys(raw, nil)
+  end
+
+  def validate_regex_lists
+    REGEX_LIST_FIELDS.each do |dotted|
+      value = fetch(dotted)
+      next if value.nil?
+
+      unless value.is_a?(Array) && value.all? { |v| v.is_a?(String) }
+        errors << "#{path}: #{dotted} must be a list of regex source strings, got #{value.inspect}"
+        next
+      end
+
+      value.each do |source|
+        Regexp.new(source)
+      rescue RegexpError => e
+        errors << "#{path}: #{dotted} entry #{source.inspect} is not a valid regular expression (#{e.message})"
+      end
+    end
   end
 
   def validate_commands

@@ -220,13 +220,78 @@ class GateTest < Minitest::Test
     end
   end
 
-  # sabotage: widen PROJECT_LEVEL_SKIP_RE with `|.` -> red
+  # sabotage: widen gate_tier1's project_level_skips with `|.` -> red
   def test_unrecognized_skip_reason_blocks_by_default
-    refute Gate.project_level_skip?("some new reason nobody anticipated")
-    refute Gate.project_level_skip?(nil)
-    refute Gate.project_level_skip?("")
-    assert Gate.project_level_skip?(":doctor not installed")
-    assert Gate.project_level_skip?("disabled in .quality.exs")
+    re = fixture_manifest("gate_tier1").project_level_skip_re
+
+    refute Gate.project_level_skip?("some new reason nobody anticipated", re)
+    refute Gate.project_level_skip?(nil, re)
+    refute Gate.project_level_skip?("", re)
+    assert Gate.project_level_skip?(":doctor not installed", re)
+    assert Gate.project_level_skip?("disabled in .quality.exs", re)
+  end
+
+  # With gate.project_level_skips absent, the strict default applies: even a
+  # summary that looks project-level (":doctor not installed") blocks.
+  # sabotage: make project_level_skip_re return a match-anything regex when
+  # the field is nil -> red
+  def test_absent_project_level_skips_blocks_even_a_familiar_looking_reason
+    report = {
+      "status" => "ok",
+      "scope" => "all",
+      "stages" => [
+        { "name" => "Doctor", "status" => "skipped", "summary" => ":doctor not installed" }
+      ]
+    }
+
+    other = manifest_with("gate_tier1", "gate" => { "project_level_skips" => nil })
+
+    Manifest.reset!
+    with_manifest(other) do
+      Dir.mktmpdir do |dir|
+        Dir.chdir(dir) do
+          expect_elixir_diff
+          expect_no_sabotage_diff
+          @fake.expect(%w[make report], out: JSON.generate(report))
+          @fake.expect(%w[make attest], out: "Full gate green...\n")
+
+          code, env = run_gate
+
+          assert_equal 1, code
+          assert_equal false, env["ok"]
+          assert_equal ["stage_skipped"], env["blocked"].map { |b| b["code"] }
+          assert_equal false, env["data"]["skipped_stages"].first["project_level"]
+        end
+      end
+    end
+  end
+
+  # The mirror of the above: with the field declared (gate_tier1's fixture
+  # value), the same summary is project-level and does not block. Proves the
+  # field is actually read, not that the strictness is unconditional.
+  # sabotage: make project_level_skip? ignore project_level_re entirely -> red
+  def test_declared_project_level_skips_makes_the_same_reason_non_blocking
+    report = {
+      "status" => "ok",
+      "scope" => "all",
+      "stages" => [
+        { "name" => "Doctor", "status" => "skipped", "summary" => ":doctor not installed" }
+      ]
+    }
+
+    in_tmp_cwd do
+      expect_elixir_diff
+      expect_no_sabotage_diff
+      @fake.expect(%w[make report], out: JSON.generate(report))
+      @fake.expect(%w[make attest], out: "Full gate green...\n")
+
+      code, env = run_gate
+
+      assert_equal 0, code
+      assert_equal true, env["ok"]
+      assert_equal [], env["blocked"]
+      assert_equal true, env["data"]["skipped_stages"].first["project_level"]
+    end
   end
 
   def test_red_gate_fails_without_being_blocked

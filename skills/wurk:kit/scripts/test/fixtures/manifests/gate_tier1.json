@@ -44,6 +44,10 @@
       ".credo.exs",
       "coveralls.json",
       ".sobelow-conf"
+    ],
+    "project_level_skips": [
+      "not installed",
+      "disabled in \\.quality\\.exs"
     ]
   },
   "parallelism": {
