@@ -539,15 +539,15 @@ and one asserting `sabotage?` is false with no section and that
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] `grep -niE 'scion|scxml' skills/wurk:kit/scripts/gate.rb` returns no
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] `grep -niE 'scion|scxml' skills/wurk:kit/scripts/gate.rb` returns no
       matches
-- [ ] `grep -nE 'SABOTAGE_DIFF_ARGS|TEST_LINE_RE|EXEMPT_TEST_DIR_PREFIXES' -r skills/wurk:kit/scripts`
+- [x] `grep -nE 'SABOTAGE_DIFF_ARGS|TEST_LINE_RE|EXEMPT_TEST_DIR_PREFIXES' -r skills/wurk:kit/scripts`
       returns no matches outside `test/`
-- [ ] Running the real script in this repo (which declares no `gate.sabotage`)
+- [x] Running the real script in this repo (which declares no `gate.sabotage`)
       reports the scan off and names no `test/` pathspec:
       `ruby skills/wurk:kit/scripts/gate.rb | ruby -rjson -e 'e=JSON.parse($stdin.read); abort("enabled") if e["data"]["sabotage"]["enabled"]; abort("pathspec leaked") if e["commands"].join(" ").include?("scion")'`
-- [ ] `docs/manifest.md` documents `gate.sabotage` in the same commit as the
+- [x] `docs/manifest.md` documents `gate.sabotage` in the same commit as the
       `lib/manifest.rb` change
 
 #### Manual Verification:
@@ -734,6 +734,26 @@ before considering the plan fully landed.
       project-level argument as forcefully as gate.rb:17-43 did
 - [ ] No regressions in `/wurk:commit` Step 0 reading of the gate envelope
       (field names unchanged: `data.skipped_stages[].project_level`)
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution, pause
+here for the human to confirm the manual testing before moving to the next
+phase. In looped (`--loop`) execution, this phase's Automated Verification
+gates advancement automatically (via `/wurk:commit --auto`), and Manual
+Verification items are deferred and surfaced once at the end instead of
+blocking here.
+
+---
+
+### Phase 2
+
+- [ ] With statifier-shaped fixture data, the scan still flags exactly what it
+      flagged before (spot-check the diff of `gate_test.rb` assertions: the
+      expected findings should be unchanged, only their inputs moved)
+- [ ] The `/wurk:commit` Step 0 wording makes the off state unmistakable - a
+      reader cannot mistake an empty `missing` for a clean bill of health
+- [ ] `docs/manifest.md`'s new subsection is comprehensible to someone
+      onboarding a project that has never heard of the sabotage protocol
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution, pause

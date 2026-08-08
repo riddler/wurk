@@ -68,7 +68,7 @@ class GateTest < Minitest::Test
 
   def expect_no_sabotage_diff(out: "")
     @fake.expect(
-      %w[git diff main...HEAD -U0 -- test/ :!test/scion_tests :!test/scxml_tests],
+      %w[git diff main...HEAD -U0 -- test/ :!test/scion_tests/ :!test/scxml_tests/],
       out: out
     )
   end
@@ -376,7 +376,6 @@ class GateTest < Minitest::Test
   def test_tier_0_green_comes_from_the_exit_code_of_gate_full
     in_tmp_cwd(fixture: "gate_tier0") do
       expect_elixir_diff
-      expect_no_sabotage_diff
       @fake.expect(%w[make check], out: "everything is fine\n")
 
       code, env = run_gate
@@ -393,7 +392,6 @@ class GateTest < Minitest::Test
   def test_tier_0_red_exit_code_makes_the_envelope_not_ok
     in_tmp_cwd(fixture: "gate_tier0") do
       expect_elixir_diff
-      expect_no_sabotage_diff
       @fake.expect(%w[make check], out: "boom\n", exitstatus: 1)
 
       code, env = run_gate
@@ -412,7 +410,6 @@ class GateTest < Minitest::Test
   def test_absent_attest_command_reports_attested_false_and_explains_why
     in_tmp_cwd(fixture: "gate_tier0") do
       expect_elixir_diff
-      expect_no_sabotage_diff
       @fake.expect(%w[make check], out: "fine\n")
 
       _code, env = run_gate
@@ -425,7 +422,6 @@ class GateTest < Minitest::Test
   def test_tier_0_loop_run_uses_gate_loop
     in_tmp_cwd(fixture: "gate_tier0") do
       expect_elixir_diff
-      expect_no_sabotage_diff
       @fake.expect(%w[make quick], out: "fine\n")
 
       code, env = run_gate(["--profile", "loop"])
@@ -607,6 +603,8 @@ class GateTest < Minitest::Test
 
   # --- Sabotage scan ---
 
+  EXUNIT_TEST_RE = /\btest\s+"/.freeze
+
   def test_sabotage_scan_flags_a_missing_note
     diff = <<~DIFF
       diff --git a/test/acme/foo_test.exs b/test/acme/foo_test.exs
@@ -617,7 +615,7 @@ class GateTest < Minitest::Test
       +  end
     DIFF
 
-    missing = Gate.scan_sabotage(diff)
+    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE)
 
     assert_equal 1, missing.length
     assert_equal "test/acme/foo_test.exs", missing.first[:file]
@@ -634,7 +632,7 @@ class GateTest < Minitest::Test
       +  end
     DIFF
 
-    assert_empty Gate.scan_sabotage(diff)
+    assert_empty Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE)
   end
 
   def test_sabotage_scan_accepts_an_n_a_exemption_note
@@ -648,7 +646,7 @@ class GateTest < Minitest::Test
       +  end
     DIFF
 
-    assert_empty Gate.scan_sabotage(diff)
+    assert_empty Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE)
   end
 
   # sabotage: change `idx -= 1` to `idx -= 2` in sabotage_note_above? -> red
@@ -664,7 +662,7 @@ class GateTest < Minitest::Test
       +  end
     DIFF
 
-    assert_empty Gate.scan_sabotage(diff)
+    assert_empty Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE)
   end
 
   # sabotage: change COMMENT_LINE_RE from /\A\s*#/ to /\A\s*##/ -> red
@@ -681,7 +679,7 @@ class GateTest < Minitest::Test
       +  end
     DIFF
 
-    assert_empty Gate.scan_sabotage(diff)
+    assert_empty Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE)
   end
 
   # sabotage: change COMMENT_LINE_RE from /\A\s*#/ to /\A\s*#?/ so the blank
@@ -698,7 +696,7 @@ class GateTest < Minitest::Test
       +  end
     DIFF
 
-    missing = Gate.scan_sabotage(diff)
+    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE)
 
     assert_equal 1, missing.length
     assert_equal "test/acme/foo_test.exs", missing.first[:file]
@@ -719,7 +717,7 @@ class GateTest < Minitest::Test
       +  end
     DIFF
 
-    missing = Gate.scan_sabotage(diff)
+    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE)
 
     assert_equal 1, missing.length
     assert_equal "test/acme/foo_test.exs", missing.first[:file]
@@ -739,12 +737,14 @@ class GateTest < Minitest::Test
       +  end
     DIFF
 
-    missing = Gate.scan_sabotage(diff)
+    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE)
 
     assert_equal 1, missing.length
     assert_equal "test/acme/foo_test.exs", missing.first[:file]
   end
 
+  # sabotage: drop exempt_prefixes filtering from scan_sabotage -> red (both
+  # corpus dirs would flag, proving the prefixes are honored from data)
   def test_sabotage_scan_ignores_scion_and_scxml_test_dirs
     diff = <<~DIFF
       diff --git a/test/scion_tests/foo_test.exs b/test/scion_tests/foo_test.exs
@@ -761,14 +761,35 @@ class GateTest < Minitest::Test
       +  end
     DIFF
 
-    assert_empty Gate.scan_sabotage(diff)
+    assert_empty Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE, exempt_prefixes: %w[test/scion_tests/ test/scxml_tests/])
+  end
+
+  # sabotage: hardcode /\btest\s+"/ back into scan_sabotage instead of
+  # threading test_re -> red (a Python/Ruby-shaped "def test_" line would be
+  # missed and this test's flagged declaration would go empty)
+  def test_sabotage_scan_pattern_is_data_driven
+    python_test_re = /\bdef test_/.freeze
+    diff = <<~DIFF
+      diff --git a/test/acme/foo_test.py b/test/acme/foo_test.py
+      --- a/test/acme/foo_test.py
+      +++ b/test/acme/foo_test.py
+      @@ -0,0 +1,2 @@
+      +  def test_does_the_thing():
+      +      pass
+    DIFF
+
+    missing = Gate.scan_sabotage(diff, test_re: python_test_re)
+    assert_equal 1, missing.length
+
+    # The ExUnit pattern does not match this Python-shaped declaration at all.
+    assert_empty Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE)
   end
 
   def test_sabotage_scan_runs_over_the_committed_diff_pathspec
     in_tmp_cwd do
       expect_no_elixir_diff
       @fake.expect(
-        %w[git diff main...HEAD -U0 -- test/ :!test/scion_tests :!test/scxml_tests],
+        %w[git diff main...HEAD -U0 -- test/ :!test/scion_tests/ :!test/scxml_tests/],
         out: "diff --git a/test/foo_test.exs b/test/foo_test.exs\n" \
              "--- a/test/foo_test.exs\n+++ b/test/foo_test.exs\n@@ -0,0 +1,1 @@\n" \
              "+  test \"missing its note\" do\n"
@@ -776,12 +797,33 @@ class GateTest < Minitest::Test
 
       _code, env = run_gate
 
+      assert_equal true, env["data"]["sabotage"]["enabled"]
       assert_equal 1, env["data"]["sabotage"]["missing"].length
       assert_equal 1, env["warnings"].length
       assert_equal "sabotage_note_missing", env["warnings"].first["code"]
       # A warning never blocks and never flips ok, even though applicable
       # is false here (the carve-out and the sabotage scan are independent).
       assert_equal true, env["ok"]
+    end
+  end
+
+  # sabotage: keep the sabotage git-diff call even when the manifest has no
+  # gate.sabotage section -> red (FakeSh would raise UnexpectedCommand)
+  def test_sabotage_scan_is_off_when_the_manifest_declares_no_section
+    in_tmp_cwd(fixture: "gate_tier0") do
+      expect_elixir_diff
+      @fake.expect(%w[make check], out: "fine\n")
+
+      _code, env = run_gate
+
+      assert_equal false, env["data"]["sabotage"]["enabled"]
+      refute_nil env["data"]["sabotage"]["reason"]
+      assert_equal [], env["data"]["sabotage"]["missing"]
+      assert_equal [], env["warnings"]
+      assert_equal true, env["ok"]
+      # No `git diff main...HEAD -U0 -- ...` call was ever registered above,
+      # so if the script tried to shell out for the sabotage scan, FakeSh
+      # would raise FakeSh::UnexpectedCommand and this test would fail loudly.
     end
   end
 

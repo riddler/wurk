@@ -281,6 +281,11 @@ surface; every command is manifest data. The most constrained script here.
   actually run against broken code - only reading the diff by hand and
   confirming the test failed for the right reason is. `/commit`'s own
   Step 0 carries that judgment call; this script only reports absence.
+  The scan itself is a manifest capability, `gate.sabotage` (see
+  `docs/manifest.md`): when a project declares no such section,
+  `data.sabotage.enabled` is `false` with a `reason`, and `missing` is then
+  always `[]` - absence of findings there is not evidence of discipline,
+  only evidence the scan never ran.
 - **`data.gate_guard` reports; it never writes.** There is no code path in
   `gate.rb` that writes `docs/quality-gate-changes.md` - `test/contract_test.rb`
   asserts that mechanically over every file under `scripts/`.

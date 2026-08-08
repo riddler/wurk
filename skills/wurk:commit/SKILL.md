@@ -130,7 +130,9 @@ Read the result:
   exists. What to do about a missing note is project policy: if
   `.claude/wurk/commit.md` states a discipline, follow it exactly, including
   any refusal condition it defines. If the project states none, name the
-  entries in the Step 4 report and move on.
+  entries in the Step 4 report and move on. `data.sabotage.enabled: false`
+  means the project has not configured the scan at all - an empty `missing`
+  in that case says nothing, and must not be reported as a clean result.
 
 ### Step 1: Analyze changes
 
