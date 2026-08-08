@@ -317,14 +317,14 @@ one asserting `project_level_skip_re` is `nil` when the key is absent.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] `grep -nE 'quality\.exs|gate\.verify|mix quality' skills/wurk:kit/scripts/gate.rb`
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] `grep -nE 'quality\.exs|gate\.verify|mix quality' skills/wurk:kit/scripts/gate.rb`
       returns no matches
-- [ ] `grep -n PROJECT_LEVEL_SKIP_RE -r skills/wurk:kit/scripts` returns no
+- [x] `grep -n PROJECT_LEVEL_SKIP_RE -r skills/wurk:kit/scripts` returns no
       matches outside `test/`
-- [ ] `ruby skills/wurk:kit/scripts/lib/manifest.rb check --file skills/wurk:kit/scripts/test/fixtures/manifests/gate_tier1.json`
+- [x] `ruby skills/wurk:kit/scripts/lib/manifest.rb check --file skills/wurk:kit/scripts/test/fixtures/manifests/gate_tier1.json`
       exits 0 with `data.valid` true
-- [ ] `docs/manifest.md` documents `gate.project_level_skips` in the same
+- [x] `docs/manifest.md` documents `gate.project_level_skips` in the same
       commit as the `lib/manifest.rb` change (verify with
       `git show --stat` on the phase commit)
 
@@ -718,3 +718,29 @@ blocking here.
   `skills/wurk:kit/scripts/gate.rb:209-212` and its test at
   `test/gate_test.rb:380-391`
 - Fixture conventions: `skills/wurk:kit/scripts/test/support/manifest_helper.rb:66-84`
+
+## Deferred Manual Verification
+
+Manual verification items are deferred during looped (--loop) execution and
+surfaced here once, rather than blocking after each phase. Confirm these
+before considering the plan fully landed.
+
+### Phase 1
+
+- [ ] `ruby skills/wurk:kit/scripts/gate.rb --help` reads as instructions for
+      any project, not for an Elixir one, names no gate tool, and still says
+      everything a caller needs about `--profile loop`
+- [ ] The rewritten module-doc paragraph still makes the run-level vs
+      project-level argument as forcefully as gate.rb:17-43 did
+- [ ] No regressions in `/wurk:commit` Step 0 reading of the gate envelope
+      (field names unchanged: `data.skipped_stages[].project_level`)
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution, pause
+here for the human to confirm the manual testing before moving to the next
+phase. In looped (`--loop`) execution, this phase's Automated Verification
+gates advancement automatically (via `/wurk:commit --auto`), and Manual
+Verification items are deferred and surfaced once at the end instead of
+blocking here.
+
+---

@@ -267,8 +267,10 @@ surface; every command is manifest data. The most constrained script here.
   green ones, so blocking on it would make `ok` false on every full gate run
   forever - which deletes the signal rather than enforcing it. Either way a
   skipped stage is never a passing one, and both kinds must appear in what
-  you report. `PROJECT_LEVEL_SKIP_RE` is narrow by design: an unrecognized
-  skip reason blocks, and widening it is a review decision.
+  you report. The taxonomy comes from `gate.project_level_skips` in the
+  manifest: a project declaring none gets the strict reading, where an
+  unrecognized skip reason blocks, and widening it is an edit to the
+  consumer's own manifest, not to kit source.
 - Only one profile argument is accepted: `--profile loop`. It always sets
   `data.attested` to `false`. No `--skip`, `--quick`, or other `--profile`
   value is defined by this script's parser, so passing one is a usage error

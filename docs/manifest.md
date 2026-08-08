@@ -36,8 +36,12 @@ defaults are listed under "Defaults" below.
     "guard_ledger": "docs/quality-gate-changes.md",  // (opt) tier 2
     "build_paths": ["lib/", "test/", "config/", "mix.exs", "mix.lock"],
     "also_gated_paths": [".claude/scripts/", ".claude/skills/"],
-    "moving_files": [".quality.exs", ".credo.exs", "coveralls.json"]
+    "moving_files": [".quality.exs", ".credo.exs", "coveralls.json"],
                                       // files whose change invalidates green
+    "project_level_skips": [         // (opt) tier 1
+      "not\\s+installed",
+      "disabled in \\.quality\\.exs"
+    ]
   },
 
   "parallelism": {
@@ -108,6 +112,21 @@ rather than guessing which file holds the version.
 changelogs) is phase-4 work. Any unimplemented kind is refused by name - a
 half-performed release recipe is indistinguishable from a finished one by
 looking.
+
+## `gate.project_level_skips`
+
+Regex source strings, matched against a skipped stage's `summary` to decide
+whether the gap is in this run or in what the project checks at all
+(`gate.rb`'s module doc draws the same line). A match means the stage is
+reported with `project_level: true` and a warning, but does not block; no
+match blocks, and a skipped stage is never reported as passing either way.
+
+Absent means the list is empty, which is the strict reading: nothing is
+project-level, so every skipped stage blocks. Widening the list is a review
+decision made in this file, not a kit default - see `gate.rb`'s module doc
+for why the strict direction is deliberate. statifier-ex's values above
+(`not installed`, `disabled in .quality.exs`) are that project's own
+taxonomy, not a default any other consumer inherits.
 
 ## Two path lists, not one
 
@@ -183,7 +202,8 @@ Defaults applied when a key is absent: `beads.topology` = `beads`,
 
 Everything else absent means the capability is off, and the scripts say so
 rather than guessing: no `tmux` section means no tmux integration, no
-`gate.report` means tier 0, no `gate.attest` means `attested: false`.
+`gate.report` means tier 0, no `gate.attest` means `attested: false`, no
+`gate.project_level_skips` means every skipped stage blocks.
 
 ## Validation
 
