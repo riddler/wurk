@@ -605,23 +605,49 @@ may proceed against the `st-urc` worktree as the source of truth. Accept the
 small drift risk knowingly: if the merge changes a script, the copy here must
 be re-synced.
 
+#### Tracking
+
+From 2026-08-08 the remaining work is tracked as beads in this repo
+(prefix `wu-`), one per step, with dependencies wired. `bd ready` is
+authority on what is startable; this document stays authority on what each
+step means and why. Two rules keep them from drifting apart:
+
+- **A step is done when its bead closes.** Mark the step here in the same
+  commit, with the bead id and an outcome note where reality diverged.
+- **Statifier- and predicator-side steps get a `wu-` bead for tracking and
+  their own bead + branch in that repo for execution** - the consumer repo's
+  gate is what the work has to pass, so the branch belongs there.
+
 #### Where a fresh session picks up
 
-**Start in the wurk repo, on `main`.** Step 2 is half done; the next work is
-the second half of it, and is entirely wurk-side.
+**Start in the wurk repo, on `main`.** Steps 1-3 are done; step 4 is next and
+is entirely wurk-side.
 
 State as of 2026-08-08:
 
-| | |
-|---|---|
-| Step 1 | Done - `308e36b` (the lift), `ea60279` (SKILL.md + REFERENCE.md) |
-| Step 2, first half | Done - wurk:commit, wurk:mr, wurk:research, wurk:plan, wurk:iterate, wurk:implement. See "Step 2 outcome notes" below |
-| Step 2, second half | Done - wurk:branch, wurk:refresh, wurk:cleanup, wurk:work, wurk:next, wurk:issue, wurk:release. See "Step 2 outcome notes (second half)" |
-| Step 3 | Done - all eight agents in `agents/`. See "Step 3 outcome notes" |
-| Step 4 | **Next.** `install.rb` |
-| Step 5 | Not started |
-| Steps 6-10 | **Blocked** until `st-urc` merges (item 5) |
-| Phase 1 smoke | **Owed** the moment `st-urc` merges |
+| | Bead | |
+|---|---|---|
+| Step 1 | - | Done - `308e36b` (the lift), `ea60279` (SKILL.md + REFERENCE.md) |
+| Step 2, first half | - | Done - wurk:commit, wurk:mr, wurk:research, wurk:plan, wurk:iterate, wurk:implement. See "Step 2 outcome notes" below |
+| Step 2, second half | - | Done - wurk:branch, wurk:refresh, wurk:cleanup, wurk:work, wurk:next, wurk:issue, wurk:release. See "Step 2 outcome notes (second half)" |
+| Step 3 | - | Done - all eight agents in `agents/`. See "Step 3 outcome notes" |
+| Step 4 | `wu-k9j` | **Next.** `install.rb` |
+| Step 5 | `wu-em8` | Not started |
+| Steps 6-7 | `wu-off` | **Blocked** until `st-urc` merges (item 5) |
+| Step 8 | `wu-s36` | Blocked; HUMAN-GATED |
+| Step 9 | `wu-1oo` | Blocked |
+| Step 10 | `wu-cgw` | Blocked |
+| Phase 2 done | `wu-902` | The definition-of-done checks, once all of the above land |
+| st-urc merge + phase 1 smoke | `wu-b1p` | **Owed.** Needs a human; unblocks steps 6-10 |
+| Phase 3 | `wu-4tq` | Blocked on `wu-902` |
+| Phase 4 | `wu-4wl` | Blocked on `wu-4tq` |
+
+Not attached to a step, but in the same backlog: `wu-gd1` (statifier
+constants still in `gate.rb` - blocks the slim-down, since the extensions
+those constants should come from are written there), `wu-z6n` (the
+atomic-claim fold-in carried out of step 2), `wu-mkm` (how host-project
+orientation reaches the codebase agents, opened by step 3), and `wu-upg`
+(wurk dogfooding its own workflow, blocked on `install.rb`).
 
 The second half is the orchestration chain, and it is where the manifest's
 structural switches actually bite: `parallelism.model` (wurk:branch, and the
@@ -859,7 +885,7 @@ Steps, wurk side:
      inside the walk, or claim-then-release the losers), not a prose fold-in.
      wurk:next currently keeps the select-then-claim path with the
      `bd_claim_failed` fallback - which is correct behavior, just one race
-     window wider than predicator's. Do it as its own bead.
+     window wider than predicator's. Do it as its own bead - **`wu-z6n`**.
 
    **Material extracted for statifier's extension files** (step 7 writes
    them; the source is still live in `st-urc` until then):
@@ -974,31 +1000,31 @@ Steps, wurk side:
      validator cannot make. It records nothing anywhere, per the settled
      open question: findings are conversational, and the bead stays the
      loop's state channel.
-4. Write `install.rb` (stdlib-only): symlink each `skills/wurk:*` dir and
+4. **`wu-k9j`.** Write `install.rb` (stdlib-only): symlink each `skills/wurk:*` dir and
    each `agents/*.md` into `~/.claude/`; idempotent; `--dry-run`; refuses
    to overwrite non-symlink entries; `--uninstall` removes only symlinks
    that point into this repo.
-5. Wurk repo hygiene: update README status, CLAUDE.md gate command, and
+5. **`wu-em8`.** Wurk repo hygiene: update README status, CLAUDE.md gate command, and
    docs/manifest.md (loader is now authority).
 
 Steps, statifier side (a bead + branch there):
 
-6. Confirm no live worktrees (item 5).
-7. Delete ported skills, scripts, and agent files; keep `wurk.json`,
+6. **`wu-off`.** Confirm no live worktrees (item 5).
+7. **`wu-off`.** Delete ported skills, scripts, and agent files; keep `wurk.json`,
    `.claude/wurk/*.md` extensions (write them in this step from the
    material extracted in step 2), and settings.json.
-8. Gate rewiring - HUMAN-GATED (items 1-3): remove/retarget the
+8. **`wu-s36`.** Gate rewiring - HUMAN-GATED (items 1-3): remove/retarget the
    `Script tests` stage in `.quality.exs`; narrow the ADR judge scope to
    `.claude/wurk/**`; adjust `gate.paths` in wurk.json. Present the
    `.quality.exs` diff and the ledger entry draft to the user; the ledger
    entry in `docs/quality-gate-changes.md` is the human's to write.
-9. Write the statifier ADR recording the move (skills/scripts now live in
+9. **`wu-1oo`.** Write the statifier ADR recording the move (skills/scripts now live in
    wurk; gate scope narrowed; extension surface is what remains judged).
-10. Update statifier CLAUDE.md (skill names in the authority table and
+10. **`wu-cgw`.** Update statifier CLAUDE.md (skill names in the authority table and
     loop paragraph), docs/workflow.md, docs/skill-automation.md, and any
     ADR text naming old paths (cross-reference checklist).
 
-Definition of done:
+Definition of done (**`wu-902`**):
 - Wurk suite green standalone on system Ruby.
 - `install.rb` run on this machine; `ls -la ~/.claude/skills` shows the
   wurk symlinks; `/wurk:commit` etc. resolve in a statifier session.
@@ -1009,7 +1035,7 @@ Definition of done:
 - `git grep` in statifier shows no references to the deleted skill names
   outside history/ADR prose that intentionally records them.
 
-### Phase 3: predicator-ex adoption
+### Phase 3: predicator-ex adoption (`wu-4tq`)
 
 1. Write predicator's `.claude/wurk.json`: `px-` prefix, its worktree dir
    and tmux session, its area vocabulary, gate commands (no report? verify:
@@ -1037,7 +1063,7 @@ Definition of done:
   is neither in wurk nor in an extension file is either deliberately
   dropped (say so, in the phase's report) or a bug.
 
-### Phase 4: fixative (later; design now, build when wanted)
+### Phase 4: fixative (`wu-4wl`; design now, build when wanted)
 
 1. Verify fixative's actual bead prefix and id shape from its `.beads/`
    config before writing the manifest (survey did not capture it).
@@ -1086,6 +1112,10 @@ example agents is scheduled work - they are the documented pattern for
 where such a thing goes when a project wants it.
 
 ## Backlog (after phase 4; not scheduled)
+
+Deliberately not beads yet. A backlog item becomes a bead when someone
+intends to do it; filing five speculative beads just makes `bd ready`
+noisier without making any of them likelier to happen.
 
 - **wurk-conflict-scout** (agent): when refresh/mr abort on a rebase
   conflict, a read-only agent examines the captured conflict and reports
