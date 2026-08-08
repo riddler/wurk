@@ -134,6 +134,32 @@ module Contract
     end
     hits
   end
+
+  # Domain vocabulary from the consumer repos wurk serves. A kit script that
+  # names one has a constant that belongs in the manifest (CLAUDE.md's hard
+  # rule; ADR-0004). Comments are exempt, same as every other rule here - a
+  # comment may cite where a behavior came from; a code line may not encode
+  # it.
+  #
+  # This list is allowed to name consumer values precisely because it is the
+  # enforcement site, the same way BANNED_CALLS names the operations it bans.
+  CONSUMER_VOCABULARY = {
+    "statifier corpus dirs" => /scion|scxml/i,
+    "elixir gate config" => /\.(quality|credo|sobelow-conf)\b|coveralls\.json/,
+    "mix gate commands" => /\bmix\s+(quality|gate\.\w+)\b/,
+    "exunit test macro" => /\btest\s+"/,
+    "consumer repo names" => /statifier|predicator|fixative/i
+  }.freeze
+
+  # Returns [[lineno, label], ...] for every consumer-vocabulary hit found in
+  # content.
+  def consumer_vocabulary(content)
+    hits = []
+    each_code_line(content) do |code, lineno|
+      CONSUMER_VOCABULARY.each { |label, re| hits << [lineno, label] if code =~ re }
+    end
+    hits
+  end
 end
 
 class ContractRulesTest < Minitest::Test
@@ -195,6 +221,20 @@ class ContractRulesTest < Minitest::Test
     assert_empty Contract.unsafe_cp_rm_mv(%(Sh.run(["rm", "-rf", path])\n))
     assert_empty Contract.unsafe_cp_rm_mv(%(Sh.run(["cp", "-Rfc", src, dst])\n))
     assert_empty Contract.unsafe_cp_rm_mv(%(Sh.run(["mv", "-f", src, dst])\n))
+  end
+
+  def test_consumer_vocabulary_detected_on_code_line
+    assert_equal [[1, "statifier corpus dirs"]],
+                 Contract.consumer_vocabulary(%(EXEMPT = ["test/scion_tests/"]\n))
+    assert_equal [[1, "exunit test macro"]],
+                 Contract.consumer_vocabulary(%(test "some description" do\n))
+    assert_equal [[1, "consumer repo names"]],
+                 Contract.consumer_vocabulary(%(repo = "statifier-ex"\n))
+  end
+
+  def test_consumer_vocabulary_ignores_comments
+    hits = Contract.consumer_vocabulary(%(# statifier's scion/scxml corpora and mix quality are exempt here\n))
+    assert_empty hits
   end
 end
 
@@ -269,19 +309,35 @@ class ContractTest < Minitest::Test
     assert_empty offenders, "cp/rm/mv argv missing a non-interactive flag in: #{offenders.join(', ')}"
   end
 
+  def test_no_consumer_vocabulary_in_kit_source
+    offenders = []
+    non_test_files.each do |file|
+      Contract.consumer_vocabulary(File.read(file)).each do |(lineno, label)|
+        offenders << "#{file}:#{lineno} (#{label})"
+      end
+    end
+    assert_empty offenders,
+                 "consumer vocabulary found outside comments: #{offenders.join(', ')} - " \
+                 "move the value into the manifest (lib/manifest.rb) and document it in docs/manifest.md"
+  end
+
   # A meta-check on the guardrail itself: prove the scan is not vacuously
   # green just because no scripts exist yet in Phase 1. A fixture file with a
   # violation, dropped into a temp copy of the tree shape, must be caught.
   def test_meta_the_scan_actually_catches_a_planted_violation
     Dir.mktmpdir do |dir|
       planted = File.join(dir, "planted.rb")
-      File.write(planted, %(Sh.run(["git", "push", "origin", "main"])\nFile.write(".credo.exs", weakened)\n))
+      File.write(planted,
+                 %(Sh.run(["git", "push", "origin", "main"])\nFile.write(".credo.exs", weakened)\n) \
+                 "EXEMPT = [\"test/scion_tests/\"]\n")
 
       content = File.read(planted)
 
       refute_empty Contract.banned_calls(content), "the contract scan failed to catch a planted git push"
       refute_empty Contract.guarded_writes(content, [".credo.exs"]),
                    "the contract scan failed to catch a planted gate-config write"
+      refute_empty Contract.consumer_vocabulary(content),
+                   "the contract scan failed to catch a planted consumer-vocabulary constant"
     end
   end
 

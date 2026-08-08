@@ -131,7 +131,11 @@ module Beads
       out = { id: candidate[:id], strategy: candidate[:strategy], confidence: candidate[:confidence], status: candidate[:status] }
       out[:warning] =
         if candidate[:status] == "closed"
-          candidate[:strategy] == "branch_prefix" ? "stale branch name (statifier-ex ADR-0010)" : "bead #{candidate[:id]} is closed"
+          # A worktree branch is named for the bead that created it (see the
+          # candidate[:strategy] annotation above); once that bead closes the
+          # branch name is stale by construction (statifier-ex ADR-0010's
+          # original framing, generalized here for any consumer).
+          candidate[:strategy] == "branch_prefix" ? "stale branch name - the branch predates the bead id" : "bead #{candidate[:id]} is closed"
         elsif candidate[:status].nil?
           "bead #{candidate[:id]} not found"
         end

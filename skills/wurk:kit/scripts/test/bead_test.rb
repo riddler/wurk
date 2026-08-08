@@ -158,7 +158,7 @@ class BeadsLibTest < Minitest::Test
 
     assert_nil ranked[:resolved]
     assert_equal 1, ranked[:candidates].length
-    assert_equal "stale branch name (statifier-ex ADR-0010)", ranked[:candidates].first[:warning]
+    assert_equal "stale branch name - the branch predates the bead id", ranked[:candidates].first[:warning]
   end
 
   def test_rank_candidates_skips_closed_candidate_and_resolves_the_next_eligible_one
@@ -452,7 +452,7 @@ class BeadCliTest < Minitest::Test
     assert_equal 0, code
     assert_nil env["data"]["resolved"]
     assert_equal 1, env["data"]["candidates"].length
-    assert_equal "stale branch name (statifier-ex ADR-0010)", env["data"]["candidates"].first["warning"]
+    assert_equal "stale branch name - the branch predates the bead id", env["data"]["candidates"].first["warning"]
     assert env["warnings"].any? { |w| w["code"] == "bead_unavailable" }
   end
 
