@@ -620,7 +620,7 @@ step means and why. Two rules keep them from drifting apart:
 
 #### Where a fresh session picks up
 
-**Start in the wurk repo, on `main`.** Steps 1-3 are done; step 4 is next and
+**Start in the wurk repo, on `main`.** Steps 1-4 are done; step 5 is next and
 is entirely wurk-side.
 
 State as of 2026-08-08:
@@ -631,8 +631,8 @@ State as of 2026-08-08:
 | Step 2, first half | - | Done - wurk:commit, wurk:mr, wurk:research, wurk:plan, wurk:iterate, wurk:implement. See "Step 2 outcome notes" below |
 | Step 2, second half | - | Done - wurk:branch, wurk:refresh, wurk:cleanup, wurk:work, wurk:next, wurk:issue, wurk:release. See "Step 2 outcome notes (second half)" |
 | Step 3 | - | Done - all eight agents in `agents/`. See "Step 3 outcome notes" |
-| Step 4 | `wu-k9j` | **Next.** `install.rb` |
-| Step 5 | `wu-em8` | Not started |
+| Step 4 | `wu-k9j` | Done - `install.rb`. See "Step 4 outcome notes" |
+| Step 5 | `wu-em8` | **Next.** Wurk repo hygiene |
 | Steps 6-7 | `wu-off` | **Blocked** until `st-urc` merges (item 5) |
 | Step 8 | `wu-s36` | Blocked; HUMAN-GATED |
 | Step 9 | `wu-1oo` | Blocked |
@@ -1004,6 +1004,46 @@ Steps, wurk side:
    each `agents/*.md` into `~/.claude/`; idempotent; `--dry-run`; refuses
    to overwrite non-symlink entries; `--uninstall` removes only symlinks
    that point into this repo.
+   **Step 4 outcome notes (2026-08-08).** `install.rb` at the repo root, 2.6-
+   compatible stdlib Ruby, no shell-out at all (symlinks are `File.symlink`;
+   `lib/sh.rb` is a kit concern and the installer is not a kit script). Notes:
+
+   - **Plain-text output, not the JSON envelope.** The envelope contract
+     governs scripts a skill runs and a model reads. This one is run by a
+     human at a shell once per machine, so it prints lines and exits 0/1/2
+     (2 for usage, matching the kit's convention). The header says so, since
+     the divergence is the first thing a reader will question.
+   - **The plan is computed before anything is touched**, which is what makes
+     `--dry-run` exact rather than a narrated guess: the same action list is
+     printed either way and only `apply` executes.
+   - **Four destination states, one refusal.** Already-our-symlink is a
+     no-op; a symlink pointing elsewhere *inside this repo* is silently
+     re-pointed (a renamed skill); a symlink pointing outside the repo and
+     any non-symlink entry are refused by name and left alone, exit 1. The
+     symlink test runs before `File.exist?` - a broken link is invisible to
+     `exist?` and would otherwise look absent and then fail `EEXIST`.
+   - **`--uninstall` works from what is installed, not from what the repo
+     ships**, so a link left behind by a since-renamed skill is removed too.
+     It only unlinks symlinks resolving inside this repo; foreign entries in
+     the same directories survive untouched.
+   - **`--home DIR`** exists so the scratch-HOME proof is a flag rather than
+     an `env` incantation. Nothing reads a username: repo root from
+     `__dir__`, destination from `$HOME` (item 22).
+   - **Verified live against a scratch HOME**: dry-run, install (2 mkdir, 22
+     link), idempotent re-run (22 ok), then seeded conflicts - a real
+     directory, a symlink to `/etc/hosts`, a stale in-repo link, a link for
+     a skill the repo no longer ships, and an unrelated foreign entry. The
+     run relinked the stale one, refused the other two by name, exited 1, and
+     changed nothing else; uninstall then removed exactly 21 links and left
+     the three foreign/non-symlink entries. Exit codes checked for usage
+     error and unexpected argument. A dry-run against the real `$HOME` is
+     clean (22 links, no conflicts) - the actual install on this machine is
+     `wu-902`'s check.
+   - **No test file.** The kit suite is this repo's gate and it must stay
+     self-contained: a test under `skills/wurk:kit/` reaching up to
+     `../../../install.rb` is the exact coupling step 1 removed from
+     `plan_state_test.rb`, and a second root-level suite would fork the gate
+     command. Left as a knowing gap - the verification above is manual.
 5. **`wu-em8`.** Wurk repo hygiene: update README status, CLAUDE.md gate command, and
    docs/manifest.md (loader is now authority).
 

@@ -30,6 +30,19 @@ docs/                plan, architecture, manifest schema, gate contract
 docs/adr/            settled decisions; cite numbers instead of re-arguing
 ```
 
+## Install
+
+```
+ruby install.rb              # symlink skills/wurk:* and agents/*.md into ~/.claude
+ruby install.rb --dry-run    # say what would happen, change nothing
+ruby install.rb --uninstall  # remove only the symlinks that point into this clone
+```
+
+Re-running is a no-op. Anything in the way that wurk did not create - a real
+directory, a real file, a symlink pointing somewhere else - is refused by name
+and left untouched; the run exits 1 and you move it aside by hand. Skills and
+agents are linked, not copied, so an edit in this clone is live immediately.
+
 ## Reading order
 
 1. `docs/architecture.md` - the four layers and where project-specific
