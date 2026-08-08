@@ -523,8 +523,8 @@ Steps, wurk side:
    | wurk-docs-locator | pink | #F48FB1 |
    | wurk-docs-analyzer | orange | #F2B482 |
    | wurk-web-search-researcher | yellow | #FFE6B3 |
-   | wurk-gate-reader (new) | red | - |
-   | wurk-plan-critic (new) | blue | - |
+   | wurk-gate-reader (new) | red | #F02E6E (Embark's error red) |
+   | wurk-plan-critic (new) | blue | #65B2FF |
 
    Two NEW agents join the six ported ones. The bar for a wurk agent:
    it absorbs noisy context the orchestrator should not carry, or it
