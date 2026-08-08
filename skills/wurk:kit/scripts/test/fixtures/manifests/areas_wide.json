@@ -1,0 +1,45 @@
+{
+  "wurk": 1,
+  "beads": {
+    "prefix": "zz",
+    "areas": {
+      "labels": [
+        "area:alpha",
+        "area:beta",
+        "area:gamma",
+        "area:delta",
+        "area:epsilon",
+        "area:build"
+      ],
+      "lands_alone": [
+        "area:build"
+      ],
+      "always_batchable": [
+        "upstream"
+      ]
+    }
+  },
+  "forge": {
+    "kind": "github"
+  },
+  "gate": {
+    "full": [
+      "make",
+      "check"
+    ],
+    "loop": [
+      "make",
+      "quick"
+    ]
+  },
+  "parallelism": {
+    "model": "worktree-per-issue"
+  },
+  "artifacts": {
+    "plans": "docs/plans",
+    "research": "docs/research"
+  },
+  "changelog": {
+    "mode": "none"
+  }
+}

@@ -1,0 +1,3 @@
+  Ran mix test - 42 examples, 0 failures
+
+❯ half a draft

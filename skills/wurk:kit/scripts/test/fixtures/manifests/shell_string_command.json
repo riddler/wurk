@@ -1,0 +1,26 @@
+{
+  "wurk": 1,
+  "beads": {
+    "prefix": "zz"
+  },
+  "forge": {
+    "kind": "github"
+  },
+  "gate": {
+    "full": "make check",
+    "loop": [
+      "make",
+      "quick"
+    ]
+  },
+  "parallelism": {
+    "model": "worktree-per-issue"
+  },
+  "artifacts": {
+    "plans": "docs/plans",
+    "research": "docs/research"
+  },
+  "changelog": {
+    "mode": "none"
+  }
+}

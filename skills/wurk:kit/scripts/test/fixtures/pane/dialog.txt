@@ -1,0 +1,5 @@
+● Bash(rm -rf tmp/scratch)
+  ⎿  Running…
+
+ ❯ 1. Yes
+   2. No

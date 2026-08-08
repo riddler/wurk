@@ -1,0 +1,38 @@
+{
+  "wurk": 1,
+  "beads": {
+    "prefix": "zz"
+  },
+  "forge": {
+    "kind": "github"
+  },
+  "gate": {
+    "full": [
+      "make",
+      "check"
+    ],
+    "loop": [
+      "make",
+      "quick"
+    ]
+  },
+  "parallelism": {
+    "model": "worktree-per-issue"
+  },
+  "artifacts": {
+    "plans": "docs/plans",
+    "research": "docs/research"
+  },
+  "commits": {
+    "style": "conventional",
+    "subject_under": 30,
+    "body_line_max": 60,
+    "total_lines_max": 12,
+    "trailer": {
+      "key": "Closes"
+    }
+  },
+  "changelog": {
+    "mode": "none"
+  }
+}

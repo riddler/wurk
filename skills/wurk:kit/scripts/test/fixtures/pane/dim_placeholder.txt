@@ -1,0 +1,6 @@
+  Wrote lib/foo.ex
+
+❯ discard the model change
+  write tests for the new parser
+
+❯ [2mdiscard the model change[0m

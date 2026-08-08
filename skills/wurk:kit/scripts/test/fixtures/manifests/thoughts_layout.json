@@ -1,0 +1,29 @@
+{
+  "wurk": 1,
+  "beads": {
+    "prefix": "zz"
+  },
+  "forge": {
+    "kind": "github"
+  },
+  "gate": {
+    "full": [
+      "make",
+      "check"
+    ],
+    "loop": [
+      "make",
+      "quick"
+    ]
+  },
+  "parallelism": {
+    "model": "worktree-per-issue"
+  },
+  "artifacts": {
+    "plans": "thoughts/shared/plans",
+    "research": "thoughts/shared/research"
+  },
+  "changelog": {
+    "mode": "none"
+  }
+}

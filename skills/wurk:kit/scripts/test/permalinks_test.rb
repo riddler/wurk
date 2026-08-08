@@ -1,0 +1,225 @@
+# frozen_string_literal: true
+
+require "minitest/autorun"
+require "json"
+require "stringio"
+require "tmpdir"
+require "fileutils"
+require_relative "../permalinks"
+require_relative "support/manifest_helper"
+require_relative "support/fake_sh"
+
+# Permalinks (pure text transform).
+class PermalinksLibTest < Minitest::Test
+  # --- build_url ------------------------------------------------------
+
+  def test_build_url_single_line
+    url = Permalinks.build_url(owner: "riddler", repo: "statifier-ex", commit: "abc1234",
+                                file: "lib/statifier/interpreter.ex", line: "123")
+
+    assert_equal "https://github.com/riddler/statifier-ex/blob/abc1234/lib/statifier/interpreter.ex#L123", url
+  end
+
+  # sabotage: let Forge.blob_url fall through to the GitHub format for any
+  # kind instead of raising -> red. A guessed URL 404s silently inside a
+  # document nobody re-reads, which is worse than not writing one.
+  def test_build_url_refuses_a_forge_it_has_no_format_for
+    assert_raises(ArgumentError) do
+      Permalinks.build_url(owner: "o", repo: "r", commit: "abc1234",
+                           file: "lib/foo.rb", line: "1", kind: "gitlab")
+    end
+  end
+
+  def test_build_url_line_range
+    url = Permalinks.build_url(owner: "riddler", repo: "statifier-ex", commit: "abc1234",
+                                file: "lib/statifier/interpreter.ex", line: "123", end_line: "145")
+
+    assert_equal "https://github.com/riddler/statifier-ex/blob/abc1234/lib/statifier/interpreter.ex#L123-L145", url
+  end
+
+  # --- rewrite ----------------------------------------------------------
+
+  def test_rewrite_replaces_a_single_line_reference
+    text = "See `lib/statifier/interpreter.ex:123` for details."
+
+    rewritten, subs = Permalinks.rewrite(text, owner: "o", repo: "r", commit: "c")
+
+    assert_equal(
+      "See [`lib/statifier/interpreter.ex:123`](https://github.com/o/r/blob/c/lib/statifier/interpreter.ex#L123) for details.",
+      rewritten
+    )
+    assert_equal 1, subs.length
+    assert_equal "`lib/statifier/interpreter.ex:123`", subs.first[:original]
+  end
+
+  def test_rewrite_replaces_a_line_range_reference
+    text = "`docs/workflow.md:147-191` names the rule."
+
+    rewritten, = Permalinks.rewrite(text, owner: "o", repo: "r", commit: "c")
+
+    assert_includes rewritten, "#L147-L191"
+  end
+
+  def test_rewrite_leaves_non_file_line_text_alone
+    text = "Plain prose with no backtick references, and a `bare code span`, " \
+           "and a version number 2.1.220, and a `zz-a42` bead id."
+
+    rewritten, subs = Permalinks.rewrite(text, owner: "o", repo: "r", commit: "c")
+
+    assert_equal text, rewritten
+    assert_equal [], subs
+  end
+
+  def test_rewrite_multiple_references_in_document_order
+    text = "First `a/b.ex:1`, then `c/d.ex:2-3`."
+
+    _rewritten, subs = Permalinks.rewrite(text, owner: "o", repo: "r", commit: "c")
+
+    assert_equal ["`a/b.ex:1`", "`c/d.ex:2-3`"], subs.map { |s| s[:original] }
+  end
+
+  def test_rewrite_is_idempotent
+    text = "See `lib/statifier/interpreter.ex:123` and `docs/workflow.md:1-2` for details."
+
+    once, first_subs = Permalinks.rewrite(text, owner: "o", repo: "r", commit: "c")
+    twice, second_subs = Permalinks.rewrite(once, owner: "o", repo: "r", commit: "c")
+
+    assert_equal once, twice
+    assert_equal 2, first_subs.length
+    assert_equal [], second_subs
+  end
+end
+
+# PermalinksCli, driven through FakeSh (gh/git) and tmpdir documents.
+class PermalinksCliTest < Minitest::Test
+  include ManifestHelper
+
+  FIXTURE = "worktree"
+
+  def setup
+    @fake = FakeSh.new
+    Sh.runner = @fake
+  end
+
+  def teardown
+    Sh.runner = nil
+    Manifest.reset!
+  end
+
+  def run_cli(argv, fixture: FIXTURE)
+    io = StringIO.new
+    code = nil
+    with_manifest(fixture) { code = PermalinksCli.run(argv, io: io) }
+    [code, JSON.parse(io.string)]
+  end
+
+  # sabotage: drop the Forge.guard! call from permalinks.rb -> the CLI
+  # shells out to `gh repo view` and FakeSh raises UnexpectedCommand -> red
+  def test_a_gitlab_repo_blocks_before_touching_the_document
+    Dir.mktmpdir do |tmp|
+      path = File.join(tmp, "doc.md")
+      original = "see `lib/foo.rb:12`\n"
+      File.write(path, original)
+
+      code, env = run_cli([path], fixture: "forge_gitlab")
+
+      assert_equal 1, code
+      assert_equal "unsupported_forge", env["blocked"].first["code"]
+      assert_equal original, File.read(path)
+      assert_empty @fake.calls
+    end
+  end
+
+  def gh_repo_view_json
+    JSON.generate({ "owner" => { "login" => "riddler" }, "name" => "statifier-ex" })
+  end
+
+  def test_rewrites_and_writes_the_file_by_default
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "doc.md")
+      File.write(path, "See `lib/statifier/interpreter.ex:42` please.\n")
+
+      @fake.expect(%w[gh repo view --json owner,name], out: gh_repo_view_json)
+      @fake.expect(%w[git rev-parse HEAD], out: "deadbee1234\n")
+
+      code, env = run_cli([path])
+
+      assert_equal 0, code
+      assert_equal "riddler", env["data"]["owner"]
+      assert_equal "statifier-ex", env["data"]["repo"]
+      assert_equal "deadbee1234", env["data"]["commit"]
+      assert_equal 1, env["data"]["count"]
+
+      updated = File.read(path)
+      assert_includes updated, "https://github.com/riddler/statifier-ex/blob/deadbee1234/lib/statifier/interpreter.ex#L42"
+    end
+  end
+
+  def test_dry_run_reports_substitutions_but_does_not_write
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "doc.md")
+      original = "See `lib/statifier/interpreter.ex:42` please.\n"
+      File.write(path, original)
+
+      @fake.expect(%w[gh repo view --json owner,name], out: gh_repo_view_json)
+      @fake.expect(%w[git rev-parse HEAD], out: "deadbee1234\n")
+
+      code, env = run_cli([path, "--dry-run"])
+
+      assert_equal 0, code
+      assert_equal 1, env["data"]["count"]
+      assert_equal original, File.read(path)
+    end
+  end
+
+  def test_explicit_commit_skips_the_git_rev_parse_call
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "doc.md")
+      File.write(path, "See `lib/statifier/interpreter.ex:42` please.\n")
+
+      @fake.expect(%w[gh repo view --json owner,name], out: gh_repo_view_json)
+
+      _code, env = run_cli([path, "--commit", "custom-sha", "--dry-run"])
+
+      assert_equal "custom-sha", env["data"]["commit"]
+    end
+  end
+
+  def test_gh_failure_blocks_needs_human_never_falls_back
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "doc.md")
+      File.write(path, "no references here\n")
+
+      @fake.expect(%w[gh repo view --json owner,name], exitstatus: 1, err: "not authenticated\n")
+
+      code, env = run_cli([path])
+
+      assert_equal 1, code
+      assert_equal "gh_repo_view_failed", env["blocked"].first["code"]
+      assert_equal "human", env["blocked"].first["needs"]
+    end
+  end
+
+  def test_missing_file_blocks
+    _code, env = run_cli(["/no/such/file.md"])
+
+    assert_equal "file_not_found", env["blocked"].first["code"]
+  end
+
+  def test_no_references_writes_nothing_and_reports_zero
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "doc.md")
+      original = "nothing to rewrite here\n"
+      File.write(path, original)
+
+      @fake.expect(%w[gh repo view --json owner,name], out: gh_repo_view_json)
+      @fake.expect(%w[git rev-parse HEAD], out: "deadbee1234\n")
+
+      code, env = run_cli([path])
+
+      assert_equal 0, code
+      assert_equal 0, env["data"]["count"]
+      assert_equal original, File.read(path)
+    end
+  end
+end
