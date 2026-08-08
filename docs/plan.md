@@ -617,8 +617,9 @@ State as of 2026-08-08:
 | Step 1 | Done - `308e36b` (the lift), `ea60279` (SKILL.md + REFERENCE.md) |
 | Step 2, first half | Done - wurk:commit, wurk:mr, wurk:research, wurk:plan, wurk:iterate, wurk:implement. See "Step 2 outcome notes" below |
 | Step 2, second half | Done - wurk:branch, wurk:refresh, wurk:cleanup, wurk:work, wurk:next, wurk:issue, wurk:release. See "Step 2 outcome notes (second half)" |
-| Step 3 | **Next.** The six agents move to `agents/`, renamed `wurk-*`, plus the two new ones |
-| Steps 4-5 | Not started |
+| Step 3 | Done - all eight agents in `agents/`. See "Step 3 outcome notes" |
+| Step 4 | **Next.** `install.rb` |
+| Step 5 | Not started |
 | Steps 6-10 | **Blocked** until `st-urc` merges (item 5) |
 | Phase 1 smoke | **Owed** the moment `st-urc` merges |
 
@@ -932,6 +933,47 @@ Steps, wurk side:
    skill that names a subagent (research, plan, iterate, work) must use
    the `wurk-` names, and the consumer repos' old agent files are deleted
    at their adoption phase so the unprefixed names stop resolving.
+
+   **Step 3 outcome notes (2026-08-08).** All eight agents live in
+   `agents/`, named and colored exactly per the table above. Every
+   `wurk-*` name referenced anywhere under `skills/` resolves to a file,
+   and no old agent name survives there. Kit suite still green (364 runs,
+   1172 assertions). Three notes:
+
+   - **"Four agents port otherwise verbatim" was wrong.** Only
+     wurk-web-search-researcher was close (one `site:` example naming a
+     consumer's spec host and package docs). The other three codebase
+     agents each carried a substantial project-specific block - a
+     "Project Layout" section, a "Project Context" section naming the
+     pipeline and its invariants, and pattern categories written in one
+     consumer's domain vocabulary. The hard rule forbids all of it in
+     generic prose, so each gained an **Orienting** section instead:
+     prompt-supplied context first, then the repo's own `CLAUDE.md` /
+     `README.md` / architecture docs, then a directory listing. Same
+     layered shape as item 9's resolution for the docs pair, and the same
+     reasoning - an agent that must guess should say it guessed. The
+     project vocabulary these sections used to hardcode is already slated
+     for the consumers' `wurk/research.md` and `wurk/plan.md` extensions
+     (step 2's extraction table), which the invoking skill reads and
+     passes down. Illustrative code in the output-format blocks was
+     replaced with `<file>:<line>` placeholders rather than a different
+     project's real code.
+   - **wurk-gate-reader's Bash tool is fenced in prose**, since the tool
+     list cannot express "the gate command only". It names the permitted
+     invocations (the kit's `gate.rb`, the manifest's `gate.*` commands,
+     read-only git and `cat`) and bans the rest, with an explicit refusal
+     to re-run the gate scoped/quick/profiled to get a cleaner signal -
+     that would manufacture exactly the false green the gate contract's
+     "a scoped green is not a green" rule exists to prevent. It also
+     restates that it is a leaf and spawns nothing (the three-layer spawn
+     budget), and that a red gate guard is reported, never worked around.
+   - **wurk-plan-critic explicitly does not re-check the nine sections** -
+     `plan_state.rb validate` has already run by the time it is spawned,
+     and a critic that spends its review re-reporting a validator's output
+     trains the author to skim it. Its seven checks are the ones a
+     validator cannot make. It records nothing anywhere, per the settled
+     open question: findings are conversational, and the bead stays the
+     loop's state channel.
 4. Write `install.rb` (stdlib-only): symlink each `skills/wurk:*` dir and
    each `agents/*.md` into `~/.claude/`; idempotent; `--dry-run`; refuses
    to overwrite non-symlink entries; `--uninstall` removes only symlinks
