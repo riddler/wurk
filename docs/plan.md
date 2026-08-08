@@ -223,6 +223,15 @@ From fixative:
 
 Numbered so phases can reference them. Each item names the phase that owns it.
 
+Settled by phase 1 (see that section for what shipped): **3** (the two path
+lists), **7** (loop-note grammar is name-free), **8** (forge kind, via the new
+`lib/forge.rb` - GitLab blocks rather than half-works), **11** (beads#5358
+re-verified, still broken, workaround stays), **12** (commit limits and the
+trailer *scheme*), **13** (doc dirs and the derived repository name), **19**
+(work_state artifacts), **22** (machine-boundness - the absolute
+`/Users/johnnyt` path is derived from git at runtime now). The rest are still
+open and still owned by the phase each names.
+
 1. **The `Script tests` gate stage** (phase 2). Statifier's `.quality.exs`
    runs the Ruby suite as a `mix quality` stage. When the scripts move out,
    that stage must be removed or retargeted - and `.quality.exs` is a
@@ -362,6 +371,23 @@ Numbered so phases can reference them. Each item names the phase that owns it.
 
 ### Phase 1: parameterize in place (statifier-ex)
 
+**Status: LANDED on branch `st-urc` (2026-08-08), not yet merged.** Bead
+`st-urc` in statifier-ex carries the full session-by-session record. Three
+commits, each on a full attested green (`mix gate.verify`):
+
+    ff49909 Adds the wurk manifest and its loader
+    d87acca Reads bead, area, gate and doc paths from the manifest
+    effcb32 Reads worktree and forge behavior from the manifest
+    6aacda7 Finishes the manifest conversion of the scripts
+
+plus `7a85d28 Settles the manifest schema against the loader` here, which is
+where `docs/manifest.md` caught up to what the loader actually implements.
+
+The steps below are kept as written, with outcome notes where reality
+diverged; the conversion table is corrected to the field names that shipped.
+Read them together with `docs/manifest.md` (the schema is authority) before
+starting phase 2.
+
 No behavior change; statifier keeps working exactly as today, but reads its
 constants from a manifest. All work happens in statifier-ex on a normal
 issue branch (create a bead for it), gated by its own `mix quality`.
@@ -372,8 +398,13 @@ Steps:
    `docs/manifest.md`). Validate it against the schema doc by hand; the
    loader (step 2) becomes the mechanical check.
 2. Add `lib/manifest.rb` to `.claude/scripts/lib/`: locate the manifest by
-   walking up from `git rev-parse --git-common-dir` (decision: record the
-   final rule in docs/manifest.md), parse with stdlib JSON, validate
+   walking up from the working directory, falling back to
+   `git rev-parse --git-common-dir` (**settled the other way round from the
+   lean here** - a worktree is a full checkout and carries its own
+   `wurk.json`, so walking up finds the manifest on the branch being worked,
+   which is what makes a schema change testable on the branch that makes it;
+   recorded under "Resolution" in docs/manifest.md), parse with stdlib JSON,
+   validate
    (unknown keys warn, missing required keys block naming the field, enum
    fields reject unknown values), expose typed accessors, provide a
    `manifest.rb check` CLI subcommand emitting the standard envelope. Tests
@@ -381,46 +412,154 @@ Steps:
 3. Convert scripts one at a time, each with its test updates in the same
    commit. Conversion table (script -> manifest fields consumed):
 
+   Conversion table **as shipped** (the field names differ from the first
+   draft in a few places; see "Schema changes made while converting" below):
+
    | Script | Fields | Notes |
    |---|---|---|
-   | `lib/refs.rb` | `beads.prefix` | regex built from prefix; trailer key from `commits` (item 12) |
+   | `lib/refs.rb` | `beads.prefix`, `commits.trailer.key` | `Refs::BEAD_ID` became `Refs.bead_id`, a method - the manifest is not loaded at require time (item 12) |
    | `lib/areas.rb` | `beads.areas.*` | vocabulary, lands_alone, always_batchable |
-   | `lib/touches_elixir.rb` | `gate.paths` | rename to `gate_paths.rb`; keep a deprecation note; item 3 |
-   | `lib/beads.rb` | (none new) | confirm loop-note grammar is name-free (item 7) |
-   | `lib/summary.rb` | (none) | generic |
-   | `gate.rb` | `gate.full/loop/report/attest` | tier detection per docs/gate-contract.md; absent report/attest -> degraded, not error |
-   | `rebase_onto.rb` | `parallelism.repair_when/repair` | Elixir repair becomes data |
-   | `repo_state.rb` | via gate_paths, refs | |
-   | `worktree_create.rb` | `parallelism.worktrees_dir/warm_clone/warm`, `gate.loop` | |
-   | `worktree_refresh.rb` | `gate.moving_files`, `gate.loop` | add `coveralls.json` to statifier's value (best-of-both) |
-   | `worktree_cleanup.rb` | via refs, worktrees_dir | |
-   | `worktree_survey.rb` | `forge.kind` (gh only) | item 8 |
-   | `pr_state.rb` | `forge.kind` | gitlab value errors clearly until phase 4 |
-   | `permalinks.rb` | `forge.kind` | URL format per forge |
-   | `tmux_window.rb` | `tmux.session/model` | derive main repo path from git-common-dir (item 22); templates still name old skills until phase 2 (item 4) |
-   | `select_batch.rb` | via areas, refs | re-verify beads#5358 (item 11) |
+   | `lib/touches_elixir.rb` | `gate.build_paths`, `gate.also_gated_paths` | renamed `gate_paths.rb` and `git rm`'d; `any?` -> `touches_build?`, `gate_applicable?` unions both lists (item 3) |
+   | `lib/beads.rb` | (none new) | loop-note grammar confirmed name-free (item 7); carries the beads#5358 re-verification note |
+   | `lib/summary.rb` | (none) | generic already |
+   | `lib/forge.rb` | `forge.kind` | **new file.** One place answering "is this forge implemented?", plus the blob-permalink shape (item 8) |
+   | `gate.rb` | `gate.full/loop/report/report_loop/attest/guard_ledger` | tier detection per docs/gate-contract.md; emits `data.tier` |
+   | `rebase_onto.rb` | `parallelism.repair_when/repair/warm_globs` | `perform()` takes a manifest; copied caches keep their repo-relative path |
+   | `repo_state.rb` | via gate_paths, refs; `artifacts.plans`, `changelog.dir` | |
+   | `worktree_create.rb` | `parallelism.model/worktrees_dir/trust/warm_clone/warm_globs/warm`, `gate.loop` | blocks on a `parallelism.model` it does not implement and on an unset `worktrees_dir`; `data.plt_present` -> `data.warm_caches_present` |
+   | `worktree_refresh.rb` | `gate.loop`, and `parallelism.*` through `rebase_onto` | `gate.moving_files` **has no consumer** - see the open item below |
+   | `worktree_cleanup.rb` | `forge.kind` | guards in its own voice rather than relaying a nested `survey_failed` - it is the script that deletes branches |
+   | `worktree_survey.rb` | `forge.kind`, via refs | item 8 |
+   | `pr_state.rb` | `forge.kind` | gitlab blocks `unsupported_forge` before any `gh` call, never half-works |
+   | `permalinks.rb` | `forge.kind` | URL shape moved to `lib/forge.rb`; a forge with no format raises rather than guessing a URL that 404s inside a document nobody re-reads |
+   | `tmux_window.rb` | `tmux.session/model` | main repo derived from `git rev-parse --git-common-dir` at runtime (item 22 - the `/Users/johnnyt` constant is gone); no `tmux` section blocks rather than inventing a session name; templates still name old skills until phase 2 (item 4) |
+   | `select_batch.rb` | via areas, refs | beads#5358 re-verified (item 11) - see below |
    | `bead.rb` | via refs | |
-   | `commit_message.rb` | `commits.*` | item 12 |
-   | `doc_meta.rb` | `artifacts.*` | item 13 |
-   | `plan_state.rb` | (none) | template grammar is wurk-defined |
+   | `commit_message.rb` | `commits.subject_under/body_line_max/total_lines_max/trailer.key` | `subject_under` is exclusive, so the inclusive bound is spelled once; `ATTRIBUTION_PATTERNS` stays **hardcoded** - universal, not project data (item 12) |
+   | `doc_meta.rb` | `artifacts.plans/research/repository` | `VALID_DIRS` gone; repository derived from origin's URL when the manifest does not override (item 13) |
+   | `plan_state.rb` | via refs | `BEADS_ISSUE_RE` became a method; template grammar is wurk-defined |
    | `work_state.rb` | `artifacts.*` | item 19 |
    | `envelope.rb`/`cli.rb`/`sh.rb` | (none) | untouched |
 
+   **beads#5358 (item 11) re-verified 2026-08-08 on bd 1.1.2: still broken.**
+   `bd ready --json --label-any area:skills` returned all 14 ready beads while
+   `bd ready --json -l area:skills` returned 0 - the silent-ignore symptom
+   exactly. `Beads.union_by_id` and `select_batch.rb`'s `unverified_filter`
+   guard both stay, with the issue link. Re-check at the next bd upgrade, not
+   before.
+
 4. Update `.claude/scripts/README.md`: the manifest is now a documented
-   input to the contract; fixture-manifest testing convention.
+   input to the contract; fixture-manifest testing convention. **Done** - a
+   "The manifest is an input to the contract" section (schema, resolution
+   order, asymmetric validation, the `Manifest.require!` entry point, and
+   the rule that an unconfigured capability is reported rather than guessed)
+   and a "Fixture manifests" subsection.
 5. Skill prose: replace hardcoded command strings the skills tell the agent
    to run only where they duplicate what scripts now read from the manifest;
-   do NOT restructure skills in this phase (that is phase 2's job).
+   do NOT restructure skills in this phase (that is phase 2's job). **Done,
+   minimally** - `new-worktree/SKILL.md` stopped restating
+   `worktree_create.rb`'s commands and now names the current envelope codes
+   (`trust_failed`, `warm_failed`, `warm_cache_missing`,
+   `wrong_parallelism_model`, `missing_worktrees_dir`);
+   `refresh-worktree/SKILL.md` names `gate.loop` and
+   `parallelism.repair_when` instead of literal commands.
+
+Schema changes made while converting (all already in `docs/manifest.md`,
+committed as 7a85d28 - do not re-derive them from this table):
+
+- `gate.paths` split into `gate.build_paths` + `gate.also_gated_paths`. They
+  answer different questions, and conflating them once let statifier report
+  "no gate applicable" for an 8k-line Ruby branch (item 3).
+- `gate.report_loop` added. Composing "report command + loop profile" in the
+  kit would mean knowing one gate tool's flag surface, which is what the gate
+  contract exists to avoid. Absent, a loop run degrades to tier 0.
+- `commits.subject_max` renamed `subject_under` (the bound is exclusive),
+  joined by `body_line_max`, `total_lines_max`, and `trailer: {key: "Refs"}` -
+  modelling the trailer *scheme*, not a number, because fixative uses
+  `Closes #NN` (item 12).
+- `parallelism.trust` added: the one command run *about* a worktree rather
+  than in it (`mise trust`). Its argv may contain the literal token `{path}`.
+  Nothing else templates.
+- `parallelism.warm_globs` added: caches worth reporting and repairing (the
+  dialyzer PLT, in statifier).
+- `artifacts.repository` added, optional, derived from the git remote when
+  absent (item 13).
 
 Definition of done:
 - Full `mix quality` green in statifier-ex (script suite included), via
-  `mix gate.verify`.
+  `mix gate.verify`. **Met** - 14 stages, 850 tests, 95.5% coverage, plus
+  the 363-test Ruby script suite as the `Script tests` stage.
 - `git grep -nE 'st-|statifier-ex-worktrees|/Users/johnnyt' -- .claude/scripts`
   returns only `wurk.json`, fixtures, and deliberate deprecation comments.
+  **Partly met, and the criterion itself needs a decision.** The pattern
+  matches itself: `list-panes`, `list-windows` and `Best-effort` all contain
+  `st-`. Narrowed to a bead-id shape -
+  `git grep -nE '(^|[^a-z])st-[a-z0-9]{3}|statifier-ex-worktrees|/Users/johnnyt'` -
+  about 45 lines remain and **every one is a comment**: plan-document path
+  citations in script headers, bead-id provenance (`st-hzf`, `st-biu`,
+  `st-sdv`, `st-byl`, `st-zgf`) recording why a rule exists, and `st-` used
+  as the illustrative example when explaining the prefix mechanism. Plus one
+  deliberate negative assertion (`manifest_test.rb` asserts `"st-abc"` does
+  *not* match a `zz` pattern) and `plan_state_test.rb`, which parses
+  statifier's real plan document as its fixture because a synthetic copy
+  cannot go stale against the real grammar. **No executable code carries a
+  project constant.** Rewriting a citation would break a real file reference
+  or turn a provenance note into a lie, so they were left; phase 2 moves the
+  files anyway and is the natural place to settle it.
 - `manifest.rb check` passes against the real manifest and fails usefully
-  against a broken fixture.
+  against a broken fixture. **Met** - exit 0 on the real one, exit 1 naming
+  `missing required key beads.prefix` on the `missing_required` fixture.
 - One end-to-end smoke: create a scratch worktree via `/new-worktree` on a
   trivial bead, confirm seed, gate, and cleanup still work, remove it.
+  **Deferred, with a substitute run.** It cannot be done from the branch:
+  `worktree_create.rb` refuses to run outside the main checkout, and
+  `~/repos/github/statifier-ex` is on `main`, which has neither these scripts
+  nor a `wurk.json`. **Re-run it for real once this branch lands - that is
+  the actual confirmation, and it is the only thing that catches a
+  `tmux_window.rb` mistake.** What was run instead (2026-08-08): a scratch
+  git repo whose every manifest value differs from statifier's (prefix `zz`,
+  gate `["true"]`, `worktrees_dir ../myrepo-worktrees`, trust
+  `["true","trust","{path}"]`, `tmux.session wurk-smoke`, `tmux.model
+  haiku`). Verified live: manifest check green; `worktree_create.rb` dry-run
+  then for real, creating the worktree at the manifest's path with `{path}`
+  substituted and `warm_caches_present` true; `tmux_window.rb ensure-session`
+  opening a session whose working directory is the *derived* main checkout;
+  `open --dry-run` rendering `--model haiku`, not `opus`; `find`/`classify`/
+  `close` against a real window; `worktree_survey.rb` decomposing branch
+  `zz-smk-scratch-thing` to bead `zz-smk`; and `pr_state`,
+  `worktree_survey`, `worktree_cleanup` all blocking `unsupported_forge`
+  once `forge.kind` was flipped to `gitlab`. Torn down afterwards.
+  `tmux_window.rb open` was not run for real - it launches a live claude
+  session; its send-keys argv is asserted byte-for-byte in the tests.
+
+Open item carried into phase 2:
+
+- **`gate.moving_files` has no consumer.** The table above assigned it to
+  `worktree_refresh.rb`, which turns out to have no "this file's change
+  invalidates green" logic at all. The nearest thing is statifier's
+  `test/contract_test.rb` `GUARDED_WRITE_TARGETS`, which is drift-checked
+  against ADR-0015's own text and so cannot simply be pointed at the
+  manifest. The field is in the schema and in statifier's `wurk.json`
+  (including the best-of-both `coveralls.json`); decide in phase 2 whether it
+  gains a consumer or leaves the schema.
+
+Testing convention established here, and expected to carry into the kit:
+
+`test/support/manifest_helper.rb` plus fixtures under
+`test/fixtures/manifests/*.json`. **A test never reads the consumer repo's
+real `wurk.json`** - asserting a bead id starts with `st-` passes for the
+wrong reason (that repo happens to be statifier) and proves nothing about
+the value having been read at all. Fixtures use prefix `zz`, `make` gate
+commands, and names like `faketool` so nothing in them can be confused with
+a real value. Helpers: `with_manifest`, `manifest_with` (one field
+different), `fixture_manifest`, and `in_tmp_repo` (a tmpdir carrying
+`.claude/wurk.json`, needed by any script that locates its own manifest by
+walking up - a bare `mktmpdir` falls through to `git rev-parse`, which
+`FakeSh` correctly refuses). Fixtures as of phase 1: `valid`, `areas`,
+`areas_wide`, `repo_layout`, `thoughts_layout`, `gate_tier0`, `gate_tier1`,
+`worktree`, `forge_gitlab`, `tmux`, `commits`, `bad_enum`,
+`missing_required`, `unknown_key`, `wrong_version`, `shell_string_command`,
+`malformed`.
 
 ### Phase 2: lift into this repo as wurk
 
