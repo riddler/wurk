@@ -605,6 +605,37 @@ may proceed against the `st-urc` worktree as the source of truth. Accept the
 small drift risk knowingly: if the merge changes a script, the copy here must
 be re-synced.
 
+#### Where a fresh session picks up
+
+**Start in the wurk repo, on `main`.** Step 1 landed there; step 2 is the
+next work and is entirely wurk-side.
+
+State as of 2026-08-08:
+
+| | |
+|---|---|
+| Step 1 | Done - `308e36b` (the lift), `ea60279` (SKILL.md + REFERENCE.md) |
+| Steps 2-5 | Not started. Step 2 is the large one: 13 skills |
+| Steps 6-10 | **Blocked** until `st-urc` merges (item 5) |
+| Phase 1 smoke | **Owed** the moment `st-urc` merges |
+
+Read `docs/architecture.md`, `docs/manifest.md`, and
+`skills/wurk:kit/REFERENCE.md` first. The gate is
+`ruby skills/wurk:kit/scripts/test/run.rb` - green at 364 runs.
+
+Source material for step 2 lives in the `st-urc` worktree at
+`~/repos/github/statifier-ex-worktrees/st-urc/.claude/skills/`, with
+predicator-ex and fixative as the best-of-both donors named per skill below.
+Do not delete anything on the statifier side yet; that is step 7.
+
+Two carry-forwards not otherwise recorded in a step:
+
+- `.sobelow-conf` is declared in the `gate_tier1` fixture but missing from
+  statifier's real `wurk.json`. Add it at step 8.
+- Merging `st-urc` is cheap and unblocks both the smoke and steps 6-10. It
+  needs a human (the kit may not push or open a PR), so it is worth doing
+  whenever convenient rather than waiting for step 2 to finish.
+
 Steps, wurk side:
 
 1. **DONE (2026-08-08, commits `308e36b` + `ea60279`).** Suite green
