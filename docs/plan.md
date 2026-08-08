@@ -491,7 +491,7 @@ Definition of done:
   the 363-test Ruby script suite as the `Script tests` stage.
 - `git grep -nE 'st-|statifier-ex-worktrees|/Users/johnnyt' -- .claude/scripts`
   returns only `wurk.json`, fixtures, and deliberate deprecation comments.
-  **Partly met, and the criterion itself needs a decision.** The pattern
+  **Met, under the settled reading of the criterion (2026-08-08).** The pattern
   matches itself: `list-panes`, `list-windows` and `Best-effort` all contain
   `st-`. Narrowed to a bead-id shape -
   `git grep -nE '(^|[^a-z])st-[a-z0-9]{3}|statifier-ex-worktrees|/Users/johnnyt'` -
@@ -503,9 +503,27 @@ Definition of done:
   *not* match a `zz` pattern) and `plan_state_test.rb`, which parses
   statifier's real plan document as its fixture because a synthetic copy
   cannot go stale against the real grammar. **No executable code carries a
-  project constant.** Rewriting a citation would break a real file reference
-  or turn a provenance note into a lie, so they were left; phase 2 moves the
-  files anyway and is the natural place to settle it.
+  project constant.**
+
+  **Decision: the criterion scopes to executable code; comments are exempt.**
+  Rewriting a citation would break a real file reference or turn a provenance
+  note into a lie, and neither is a project constant in the sense the hard
+  rule means (nothing reads them at runtime). Re-running the grep after any
+  future phase, judge the hits by whether code or a comment carries them.
+
+  That exemption is not a licence to leave the comments untouched at the
+  move, because a fifth of them stop being true when the files change repos.
+  A re-grep on the `st-urc` worktree (51 hits) sorts them four ways:
+
+  | Kind | Hits | Fate at the phase 2 move |
+  |---|---|---|
+  | `docs/plans/260806-st-hzf-...md Phase N` header citations | ~20 | **Dangle** - a relative path into a repo the file no longer lives in |
+  | Bead-id provenance (`st-biu`, `st-sdv`, `st-zgf`, `st-byl`) | ~12 | Still true, but unresolvable from wurk |
+  | `st-abc` / `st-00p.3` as illustrative examples | ~5 | Harmless; they explain the prefix mechanism |
+  | Test fixtures (tmux panes, plan fixtures, `plan_state_test`) | ~14 | Data, not constants |
+
+  Only the first row is a defect, and it is a broken cross-repo reference
+  rather than a leaked constant. Phase 2 step 1 owns fixing it.
 - `manifest.rb check` passes against the real manifest and fails usefully
   against a broken fixture. **Met** - exit 0 on the real one, exit 1 naming
   `missing required key beads.prefix` on the `missing_required` fixture.
@@ -566,6 +584,24 @@ walking up - a bare `mktmpdir` falls through to `git rev-parse`, which
 Work happens in BOTH repos: wurk gains its content; statifier slims down.
 Sequencing constraint: item 5 (no live worktrees at cutover).
 
+**Precondition, outstanding as of 2026-08-08: `st-urc` is still unmerged and
+its worktree is still live.** Two things follow, and they gate different
+halves of this phase:
+
+- Steps 6-10 (the statifier side) cannot start. Item 5 forbids cutting over
+  with an active worktree, and `st-urc` is one.
+- Phase 1's real end-to-end `/new-worktree` smoke is still owed. It could not
+  run from the branch (`worktree_create.rb` refuses to run outside the main
+  checkout, and statifier's main has neither the scripts nor a `wurk.json`).
+  Run it from main immediately after `st-urc` merges. It is the only check
+  that catches a `tmux_window.rb` mistake, and a mistake there breaks every
+  seeded session silently.
+
+Steps 1-5 (the wurk side) are additive and do not depend on the merge; they
+may proceed against the `st-urc` worktree as the source of truth. Accept the
+small drift risk knowingly: if the merge changes a script, the copy here must
+be re-synced.
+
 Steps, wurk side:
 
 1. Create `skills/wurk:kit/`: move the scripts + tests; suite runnable as
@@ -574,6 +610,24 @@ Steps, wurk side:
    REFERENCE.md (envelope contract, manifest consumption, recommended
    settings blocks: `bd prime` hook, ADR-0008-style deny rules with their
    documented limits, `/fewer-permission-prompts` note).
+
+   Two things break on the way across the repo boundary, both inherited from
+   phase 1's comment-exemption decision (see that phase's grep bullet):
+
+   - **Header citations dangle.** ~20 files open with
+     `docs/plans/260806-st-hzf-skill-mechanics-scripts.md Phase N` - a
+     relative path that resolves in statifier and nowhere else. Rewrite each
+     to name the repo (`statifier-ex docs/plans/260806-st-hzf-...`) or, where
+     the citation carries no rationale the comment does not already state,
+     drop it. Bead-id provenance comments stay untouched.
+   - **`plan_state_test.rb` reads a file that will not exist.** Its
+     `REAL_PLAN` constant walks `../../../docs/plans/` to parse statifier's
+     live plan document, deliberately, so the grammar cannot go stale against
+     a synthetic copy. That path has no meaning in wurk. Decide at move time;
+     leaning: snapshot the document into `test/fixtures/plans/` as a frozen
+     real-grammar fixture and say in a comment that it is a snapshot, which
+     keeps the coverage and loses only the staleness alarm. Do not silently
+     delete the two tests.
 2. Port each skill under its wurk name. Per-skill porting notes - for each,
    the split is [generic core] / [to statifier extension `.claude/wurk/*`] /
    [best-of-both fold-in]:
