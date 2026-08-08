@@ -174,6 +174,9 @@ update ALL of these in the same commit:
       skills (ADR-0010 worktrees, ADR-0015 scripts); predicator equivalents.
 - [ ] Bead notes grammar: the loop-note strings (`loop: Phase N complete,
       commit <sha>`) do NOT contain skill names - confirm, don't assume.
+- [ ] Agent names: skills that spawn subagents (research, plan, iterate,
+      work) reference agents by name (`codebase-locator`, ...); the ported
+      skills must use the `wurk-` prefixed names (phase 2 step 3).
 
 ## Best-of-both checklist (fold in while porting, not after)
 
@@ -339,9 +342,12 @@ Numbered so phases can reference them. Each item names the phase that owns it.
     `/fewer-permission-prompts` after adoption.
 21. **Six agents are triplicated** (phase 2). Identical files in all three
     repos. One copy moves to wurk's `agents/`, installed to
-    `~/.claude/agents/`; consumer copies are deleted in each repo's
-    adoption phase. Watch statifier's `thoughts-*` naming vs paths
-    (item 9).
+    `~/.claude/agents/`, renamed `wurk-*` (hyphen; colons are illegal in
+    agent names) and colored per the phase 2 step 3 table; consumer copies
+    are deleted in each repo's adoption phase, at which point the
+    unprefixed names stop resolving - the same commit must update any
+    remaining prose that names them. Watch statifier's `thoughts-*`
+    naming vs paths (item 9).
 22. **Machine-boundness** (phase 1). `MAIN_REPO` absolute path must derive
     from `git rev-parse --git-common-dir` at runtime (works from any
     checkout on any machine); tmux session name stays manifest data. Wurk
@@ -480,10 +486,30 @@ Steps, wurk side:
      `null` -> the skill refuses with "this project has no release recipe".
      Port predicator's skill as the hex recipe shape now; fixative's
      xcode-app recipe lands in phase 4.
-3. Move the six agents to `agents/`: four port verbatim; thoughts-locator
-   and thoughts-analyzer get the layered path resolution from item 9
-   (prompt-supplied roots > manifest read > conventional glob). Keep their
-   frontmatter model pins (sonnet) and read-only tool lists unchanged.
+3. Move the six agents to `agents/`, renamed with a `wurk-` prefix
+   (hyphen, not colon: agent names allow only lowercase letters and
+   hyphens; `:` is reserved for plugin identifiers and a name containing
+   one silently fails to load). Four port otherwise verbatim;
+   wurk-thoughts-locator and wurk-thoughts-analyzer get the layered path
+   resolution from item 9 (prompt-supplied roots > manifest read >
+   conventional glob). Keep their frontmatter model pins (sonnet) and
+   read-only tool lists unchanged. Add a `color` to each - the field
+   accepts only `red|blue|green|yellow|purple|orange|pink|cyan`; the
+   assignment below approximates the Embark theme palette:
+
+   | Agent | color | Embark hue it stands in for |
+   |---|---|---|
+   | wurk-codebase-locator | cyan | #91DDFF |
+   | wurk-codebase-analyzer | purple | #A37ACC |
+   | wurk-codebase-pattern-finder | green | #A1EFD3 |
+   | wurk-thoughts-locator | pink | #F48FB1 |
+   | wurk-thoughts-analyzer | orange | #F2B482 |
+   | wurk-web-search-researcher | yellow | #FFE6B3 |
+
+   The agent renames join the cross-reference checklist: every ported
+   skill that names a subagent (research, plan, iterate, work) must use
+   the `wurk-` names, and the consumer repos' old agent files are deleted
+   at their adoption phase so the unprefixed names stop resolving.
 4. Write `install.rb` (stdlib-only): symlink each `skills/wurk:*` dir and
    each `agents/*.md` into `~/.claude/`; idempotent; `--dry-run`; refuses
    to overwrite non-symlink entries; `--uninstall` removes only symlinks
