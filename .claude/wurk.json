@@ -1,0 +1,61 @@
+{
+  "wurk": 1,
+
+  "beads": {
+    "prefix": "wu",
+    "topology": "beads",
+    "areas": {
+      "labels": [
+        "area:kit",
+        "area:skills",
+        "area:agents",
+        "area:docs",
+        "area:install"
+      ],
+      "lands_alone": ["area:install"],
+      "always_batchable": []
+    }
+  },
+
+  "forge": {
+    "kind": "github",
+    "labels": {}
+  },
+
+  "gate": {
+    "full": ["ruby", "skills/wurk:kit/scripts/test/run.rb"],
+    "loop": ["ruby", "skills/wurk:kit/scripts/test/run.rb"],
+    "build_paths": ["skills/wurk:kit/scripts/"],
+    "also_gated_paths": [],
+    "moving_files": []
+  },
+
+  "parallelism": {
+    "model": "worktree-per-issue",
+    "worktrees_dir": "../wurk-worktrees",
+    "post_branch": []
+  },
+
+  "tmux": {
+    "session": "wurk",
+    "model": "opus"
+  },
+
+  "artifacts": {
+    "plans": "docs/plans",
+    "research": "docs/research"
+  },
+
+  "commits": {
+    "style": "s-form",
+    "trailer": {
+      "key": "Refs"
+    }
+  },
+
+  "changelog": {
+    "mode": "none"
+  },
+
+  "release": null
+}
