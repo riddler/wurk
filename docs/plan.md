@@ -552,14 +552,17 @@ Definition of done:
 
 Open item carried into phase 2:
 
-- **`gate.moving_files` has no consumer.** The table above assigned it to
-  `worktree_refresh.rb`, which turns out to have no "this file's change
-  invalidates green" logic at all. The nearest thing is statifier's
-  `test/contract_test.rb` `GUARDED_WRITE_TARGETS`, which is drift-checked
-  against ADR-0015's own text and so cannot simply be pointed at the
-  manifest. The field is in the schema and in statifier's `wurk.json`
-  (including the best-of-both `coveralls.json`); decide in phase 2 whether it
-  gains a consumer or leaves the schema.
+- ~~**`gate.moving_files` has no consumer.**~~ **Settled in phase 2 step 1:
+  it gained one.** The nearest thing was statifier's `test/contract_test.rb`
+  `GUARDED_WRITE_TARGETS`, ruled out at the time because it was drift-checked
+  against ADR-0015's own text. Moving the file made the guess wrong in a more
+  useful way: those five filenames became consumer constants sitting in kit
+  source, which the hard rule forbids outright. `Contract.guarded_writes` now
+  takes its targets as an argument, and the suite supplies the union of every
+  fixture manifest's `gate.moving_files` + `gate.guard_ledger`. The field
+  stays in the schema. `.sobelow-conf` was added to the `gate_tier1` fixture
+  so coverage did not narrow; statifier's own `wurk.json` should gain it too
+  at step 8.
 
 Testing convention established here, and expected to carry into the kit:
 
@@ -604,7 +607,11 @@ be re-synced.
 
 Steps, wurk side:
 
-1. Create `skills/wurk:kit/`: move the scripts + tests; suite runnable as
+1. **DONE (2026-08-08, commits `308e36b` + `ea60279`).** Suite green
+   standalone: 364 runs, 1171 assertions, 0 failures, on system Ruby, in
+   ~0.55s. Outcome notes after the step text below.
+
+   Create `skills/wurk:kit/`: move the scripts + tests; suite runnable as
    `ruby skills/wurk:kit/scripts/test/run.rb`; port the contract test
    unchanged (banned operations are project-independent policy); write
    REFERENCE.md (envelope contract, manifest consumption, recommended
@@ -628,6 +635,34 @@ Steps, wurk side:
      real-grammar fixture and say in a comment that it is a snapshot, which
      keeps the coverage and loses only the staleness alarm. Do not silently
      delete the two tests.
+
+   **What actually happened.** The snapshot lean was taken
+   (`test/fixtures/plans/real_grammar_snapshot.md`, bead ids rewritten to the
+   `zz` fixture prefix). The citations were qualified with the repo name
+   rather than dropped. Three things the step text did not anticipate:
+
+   - **The contract test's drift check had the same problem, one level up.**
+     It re-read statifier's ADR-0015 to prove its coverage matched the prose.
+     Re-anchored to wurk's ADR-0006, which gained an explicit
+     banned-operation constraint to be read. It found a real gap on its first
+     run: `glab mr create` was stated policy with no matching `Contract`
+     rule. Fixed.
+   - **`GUARDED_WRITE_TARGETS` was five statifier constants in kit source** -
+     see the resolved open item under phase 1.
+   - **Several tests passed only because the walk-up found statifier's real
+     `wurk.json`** (two `GateTest` path predicates, all of
+     `PlanStateLibTest`/`PlanStateCliTest`, one `work_state` case). Each now
+     drives a fixture explicitly. `ManifestCliTest#test_this_repos_manifest_is_valid`
+     had no wurk equivalent at all - wurk ships no manifest - and became
+     "every fixture that is not deliberately broken satisfies the schema",
+     which does the same job (a schema change invalidating shipped data fails
+     the suite) without a consumer repo. Sample paths like
+     `lib/statifier/interpreter.ex` in test bodies were neutralized to
+     `lib/acme/`.
+
+   REFERENCE.md was not written from scratch: `scripts/README.md` was already
+   that document, so it was `git mv`'d to the kit root, retargeted, and given
+   the recommended-settings sections. SKILL.md is new and deliberately thin.
 2. Port each skill under its wurk name. Per-skill porting notes - for each,
    the split is [generic core] / [to statifier extension `.claude/wurk/*`] /
    [best-of-both fold-in]:
