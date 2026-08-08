@@ -272,10 +272,12 @@ Numbered so phases can reference them. Each item names the phase that owns it.
    (glab equivalents: `glab mr list`, GL permalink format, `Closes #NN`).
    Until phase 4, a `gitlab` manifest value must error clearly, not
    half-work.
-9. **The thoughts agents' path split** (phase 2). Statifier's
+9. **The docs agents' path split** (phase 2). Statifier's
    thoughts-locator/analyzer target `docs/`; fixative's target `thoughts/`.
-   Agent .md files take no config at load time, but agents can read files
-   at runtime. Resolution, layered: (a) the INVOKING skill passes the
+   In wurk these become wurk-docs-locator/wurk-docs-analyzer (phase 2
+   step 3). Agent .md files take no config at load time, but agents can
+   read files at runtime. Resolution, layered: (a) the INVOKING skill
+   passes the
    project's artifact roots (from the manifest) in the agent prompt -
    deterministic fast path; (b) the agent's own instructions say that when
    no roots were given, read `.claude/wurk.json` and use `artifacts.*`;
@@ -346,8 +348,10 @@ Numbered so phases can reference them. Each item names the phase that owns it.
     agent names) and colored per the phase 2 step 3 table; consumer copies
     are deleted in each repo's adoption phase, at which point the
     unprefixed names stop resolving - the same commit must update any
-    remaining prose that names them. Watch statifier's `thoughts-*`
-    naming vs paths (item 9).
+    remaining prose that names them. Note the double rename on the
+    thoughts pair (`thoughts-locator` -> `wurk-docs-locator`): greps for
+    old names must cover both `thoughts-` and bare `docs-` forms
+    (item 9).
 22. **Machine-boundness** (phase 1). `MAIN_REPO` absolute path must derive
     from `git rev-parse --git-common-dir` at runtime (works from any
     checkout on any machine); tmux session name stays manifest data. Wurk
@@ -489,21 +493,28 @@ Steps, wurk side:
 3. Move the six agents to `agents/`, renamed with a `wurk-` prefix
    (hyphen, not colon: agent names allow only lowercase letters and
    hyphens; `:` is reserved for plugin identifiers and a name containing
-   one silently fails to load). Four port otherwise verbatim;
-   wurk-thoughts-locator and wurk-thoughts-analyzer get the layered path
-   resolution from item 9 (prompt-supplied roots > manifest read >
-   conventional glob). Keep their frontmatter model pins (sonnet) and
-   read-only tool lists unchanged. Add a `color` to each - the field
-   accepts only `red|blue|green|yellow|purple|orange|pink|cyan`; the
-   assignment below approximates the Embark theme palette:
+   one silently fails to load). The `thoughts-*` pair is additionally
+   renamed to `docs-*`: "thoughts" was upstream-lineage naming that only
+   fixative's directory layout still matches, while the agents' actual job
+   is locating/analyzing project documents (research, plans, ADRs)
+   wherever the manifest's `artifacts.*` points. Do not confuse them with
+   the end-user documentation skills (write-doc/audit-doc/diataxis) - the
+   descriptions should say "project research/plan/ADR documents"
+   explicitly. Four agents port otherwise verbatim; wurk-docs-locator and
+   wurk-docs-analyzer get the layered path resolution from item 9
+   (prompt-supplied roots > manifest read > conventional glob). Keep their
+   frontmatter model pins (sonnet) and read-only tool lists unchanged.
+   Add a `color` to each - the field accepts only
+   `red|blue|green|yellow|purple|orange|pink|cyan`; the assignment below
+   approximates the Embark theme palette:
 
    | Agent | color | Embark hue it stands in for |
    |---|---|---|
    | wurk-codebase-locator | cyan | #91DDFF |
    | wurk-codebase-analyzer | purple | #A37ACC |
    | wurk-codebase-pattern-finder | green | #A1EFD3 |
-   | wurk-thoughts-locator | pink | #F48FB1 |
-   | wurk-thoughts-analyzer | orange | #F2B482 |
+   | wurk-docs-locator | pink | #F48FB1 |
+   | wurk-docs-analyzer | orange | #F2B482 |
    | wurk-web-search-researcher | yellow | #FFE6B3 |
 
    The agent renames join the cross-reference checklist: every ported
