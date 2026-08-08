@@ -104,6 +104,7 @@ class ManifestAccessorTest < Minitest::Test
     assert_equal 50, @m.subject_under
     assert_equal 72, @m.body_line_max
     assert_equal 40, @m.total_lines_max
+    assert_equal "opus", @m.direction_model
   end
 
   def test_absent_tmux_section_reports_no_tmux_integration

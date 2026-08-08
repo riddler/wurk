@@ -63,13 +63,14 @@ class Manifest
   # The known key surface, for the unknown-key warning. Nested sections list
   # their own keys; a section absent from this map is not validated further.
   KNOWN = {
-    nil => %w[wurk beads forge gate parallelism tmux artifacts commits changelog release],
+    nil => %w[wurk beads forge gate parallelism tmux models artifacts commits changelog release],
     "beads" => %w[prefix topology areas],
     "beads.areas" => %w[labels lands_alone always_batchable],
     "forge" => %w[kind labels],
     "gate" => %w[full loop report report_loop attest guard_ledger build_paths also_gated_paths moving_files],
     "parallelism" => %w[model worktrees_dir trust warm_clone warm_globs warm repair_when repair post_branch],
     "tmux" => %w[session model],
+    "models" => %w[direction],
     "artifacts" => %w[plans research filename repository],
     "commits" => %w[style package_map subject_under body_line_max total_lines_max trailer],
     "commits.trailer" => %w[key],
@@ -83,6 +84,7 @@ class Manifest
     "commits.body_line_max" => 72,
     "commits.total_lines_max" => 40,
     "commits.trailer.key" => "Refs",
+    "models.direction" => "opus",
     "artifacts.filename" => "YYMMDD-[id-]kebab"
   }.freeze
 
@@ -306,6 +308,15 @@ class Manifest
 
   def tmux_model
     fetch("tmux.model")
+  end
+
+  # The one stage model that genuinely differs between projects: the
+  # direction/ADR tier wurk:work dispatches. Every other stage model is
+  # workflow policy stated in the skill itself. Read by wurk:work from the
+  # manifest directly; the accessor exists so a script that needs it later
+  # goes through the same typed path as everything else.
+  def direction_model
+    fetch("models.direction")
   end
 
   def plans_dir

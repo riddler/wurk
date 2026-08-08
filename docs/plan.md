@@ -616,8 +616,9 @@ State as of 2026-08-08:
 |---|---|
 | Step 1 | Done - `308e36b` (the lift), `ea60279` (SKILL.md + REFERENCE.md) |
 | Step 2, first half | Done - wurk:commit, wurk:mr, wurk:research, wurk:plan, wurk:iterate, wurk:implement. See "Step 2 outcome notes" below |
-| Step 2, second half | **Next.** wurk:work, wurk:next, wurk:branch, wurk:refresh, wurk:cleanup, wurk:issue, wurk:release |
-| Steps 3-5 | Not started |
+| Step 2, second half | Done - wurk:branch, wurk:refresh, wurk:cleanup, wurk:work, wurk:next, wurk:issue, wurk:release. See "Step 2 outcome notes (second half)" |
+| Step 3 | **Next.** The six agents move to `agents/`, renamed `wurk-*`, plus the two new ones |
+| Steps 4-5 | Not started |
 | Steps 6-10 | **Blocked** until `st-urc` merges (item 5) |
 | Phase 1 smoke | **Owed** the moment `st-urc` merges |
 
@@ -809,6 +810,55 @@ Steps, wurk side:
    - **wurk:iterate does not restate the plan template or the phase sizing
      rule**; it links to `/wurk:plan` by name. Two copies of a template drift,
      which is the failure this whole repo exists to end.
+
+   **Step 2 outcome notes (second half, 2026-08-08).** The remaining seven
+   landed: wurk:branch, wurk:refresh, wurk:cleanup, wurk:work, wurk:next,
+   wurk:issue, wurk:release. Kit suite green at 364 runs, 1172 assertions. The
+   phase-1 grep pattern plus `statifier`/`predicator`/`fixative`/`mix `/`glab`/
+   consumer ADR numbers comes back empty over all seven, and no old skill name
+   survives anywhere under `skills/`. Notes:
+
+   - **The schema gained `models.direction`** (item 10), the one stage model
+     projects genuinely disagree about (statifier Fable, predicator Opus).
+     Default `opus`. `lib/manifest.rb`, its defaults test, and
+     `docs/manifest.md` moved together, per the hard rule. Every other stage
+     model stays stated in wurk:work's table, because they do not vary.
+   - **The `null` release recipe is the refusal path, and an unimplemented
+     `kind` takes the same one.** `docs/manifest.md` gained a Release recipes
+     section naming the `hex` fields the skill reads. The kit does not validate
+     below `release` - only the skill consumes it - and the doc says so.
+   - **Not-applicable guards are skill-side reads of `parallelism.model`.**
+     `worktree_create.rb` blocks `wrong_parallelism_model` itself, but
+     `worktree_refresh.rb`/`worktree_cleanup.rb` have no such guard, so
+     wurk:refresh and wurk:cleanup read the manifest and stop before sweeping.
+     This follows wurk:commit's existing precedent of reading `changelog.mode`
+     from the manifest directly rather than through a script.
+   - **`beads-with-forge-projection` refuses rather than half-working**, in
+     both wurk:next (promotion at work-start) and wurk:issue (mirroring a
+     promoted bead's forge-owned fields). Same stance as `forge.kind: gitlab`
+     in the kit: a pickup with no promotion leaves the forge with no issue for
+     work that has started, which is the state the topology exists to prevent.
+   - **wurk:next is next-issue and next-issues collapsed**, with `n` defaulting
+     to 1. The picker, the mandatory title/summary columns, the `n > 4`
+     refusal, and the live-workspace collision surface all survived intact; the
+     only structural change is that a single-bead pickup is the `n=1` case of
+     one document rather than a second one.
+   - **The atomic-claim fold-in did not land - see the carried item below.**
+   - **`bd close` still appears in exactly one skill** (wurk:cleanup, step 4),
+     as a literal instruction, with the banned-operation reasoning intact.
+
+   Carried forward out of step 2:
+
+   - **Atomic claim in auto mode is still owed** (the predicator fold-in).
+     `bd ready --claim --json` cannot simply be passed through
+     `select_batch.rb`: candidates are listed, surveyed for collisions, and
+     given verdicts *before* the greedy walk picks any, so claiming at listing
+     time would claim beads the walk then skips. Closing the read-then-claim
+     window properly is a kit change with a design question in it (claim
+     inside the walk, or claim-then-release the losers), not a prose fold-in.
+     wurk:next currently keeps the select-then-claim path with the
+     `bd_claim_failed` fallback - which is correct behavior, just one race
+     window wider than predicator's. Do it as its own bead.
 
    **Material extracted for statifier's extension files** (step 7 writes
    them; the source is still live in `st-urc` until then):

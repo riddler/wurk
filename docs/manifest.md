@@ -57,6 +57,11 @@ defaults are listed under "Defaults" below.
     "model": "opus"                   // model for seeded worktree sessions
   },
 
+  "models": {                         // (opt) stage models that differ per project
+    "direction": "fable"              // (opt) the ADR/direction tier wurk:work
+                                      // dispatches; default "opus"
+  },
+
   "artifacts": {
     "plans": "docs/plans",            // fixative: thoughts/shared/plans
     "research": "docs/research",
@@ -85,6 +90,24 @@ defaults are listed under "Defaults" below.
                                       // fixative: {"kind": "xcode-app", ...}
 }
 ```
+
+## Release recipes
+
+`release` is read by `/wurk:release` and by nothing in the kit, so
+`lib/manifest.rb` does not validate below the section. `null` (or absent) means
+the project cuts no releases through this workflow, and the skill refuses
+rather than guessing which file holds the version.
+
+`release.kind` selects the recipe. Implemented today:
+
+| kind | fields | what the skill edits |
+|---|---|---|
+| `hex` | `version_file`, `readme_pin` (bool), `changelog` | the version attribute, the README install pin, the changelog's unreleased heading |
+
+`xcode-app` (fixative: `MARKETING_VERSION`, xcodegen regeneration, per-package
+changelogs) is phase-4 work. Any unimplemented kind is refused by name - a
+half-performed release recipe is indistinguishable from a finished one by
+looking.
 
 ## Two path lists, not one
 
@@ -121,6 +144,7 @@ with the new worktree's absolute path. No other field templates.
 | gate.attest | mix gate.verify | none | none |
 | parallelism.model | worktree-per-issue | worktree-per-issue | branch-in-place |
 | tmux.session | statifier-ex | predicator-ex | (renames current window) |
+| models.direction | fable | opus (default) | opus (default) |
 | artifacts.plans | docs/plans | docs/plans | thoughts/shared/plans |
 | commits.style | s-form | s-form | conventional + package map |
 | changelog.mode | fragments | keep-a-changelog (direct) | keep-a-changelog per package |
@@ -154,6 +178,7 @@ Required: `wurk`, `beads.prefix`, `forge.kind`, `gate.full`, `gate.loop`,
 Defaults applied when a key is absent: `beads.topology` = `beads`,
 `commits.style` = `s-form`, `commits.subject_under` = 50,
 `commits.body_line_max` = 72, `commits.total_lines_max` = 40,
+`commits.trailer.key` = `Refs`, `models.direction` = `opus`,
 `artifacts.filename` = `YYMMDD-[id-]kebab`.
 
 Everything else absent means the capability is off, and the scripts say so
