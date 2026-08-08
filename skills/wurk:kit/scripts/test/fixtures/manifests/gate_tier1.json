@@ -48,7 +48,12 @@
     "project_level_skips": [
       "not installed",
       "disabled in \\.quality\\.exs"
-    ]
+    ],
+    "sabotage": {
+      "test_roots": ["test/"],
+      "test_pattern": "\\btest\\s+\"",
+      "exempt_prefixes": ["test/scion_tests/", "test/scxml_tests/"]
+    }
   },
   "parallelism": {
     "model": "worktree-per-issue"

@@ -50,31 +50,25 @@ require_relative "lib/manifest"
 #    narrows what the gate command runs beyond that one case.
 # 3. `data.sabotage.missing` and `data.gate_guard` are reports. Neither ever
 #    flips `ok`, and there is no code path anywhere in this file that writes
-#    docs/quality-gate-changes.md - see test/contract_test.rb.
+#    docs/quality-gate-changes.md - see test/contract_test.rb. The sabotage
+#    scan itself only runs when the manifest declares `gate.sabotage`; a
+#    project that does not is reported as `enabled: false`, not silently
+#    skipped.
 module Gate
-  SABOTAGE_DIFF_ARGS = %w[
-    git diff main...HEAD -U0 -- test/ :!test/scion_tests :!test/scxml_tests
-  ].freeze
-
   # Matches both accepted note forms - a real mutation
   # (`# sabotage: <what> -> red`) and a stated exemption
   # (`# sabotage: n/a - <why>`) - because both start with the same prefix.
   # Presence is all this checks: docs/testing.md and /commit's Step 0 own the
-  # judgment call about whether the mutation was actually run.
+  # judgment call about whether the mutation was actually run. This is
+  # wurk's own comment-shape grammar, not consumer data - it stays a
+  # constant.
   SABOTAGE_NOTE_RE = /#\s*sabotage:/.freeze
-  TEST_LINE_RE = /\btest\s+"/.freeze
 
   # Any comment line, used to walk the contiguous comment block above a test
   # line - a `# sabotage:` note may wrap across several `#`-prefixed lines,
   # and every line in that block has to keep matching this for the walk to
   # continue (a blank line or code line stops it, same as a missing note).
   COMMENT_LINE_RE = /\A\s*#/.freeze
-
-  # Defense in depth: the pathspec on SABOTAGE_DIFF_ARGS already keeps these
-  # out of the diff at the git level. Filtering them again here means the
-  # scan is still correct even if this method is ever handed diff text from
-  # somewhere else.
-  EXEMPT_TEST_DIR_PREFIXES = ["test/scion_tests/", "test/scxml_tests/"].freeze
 
   class << self
     def parse_status_porcelain(out)
@@ -108,10 +102,11 @@ module Gate
       GatePaths.gate_applicable?((diff_files + dirty_files).uniq, manifest: manifest)
     end
 
-    # Parses a -U0 unified diff for added `test "..."` lines with no
-    # `# sabotage:` note anywhere in the contiguous comment block directly
-    # above them within the same hunk. Report-only - see the module doc.
-    def scan_sabotage(diff_text)
+    # Parses a -U0 unified diff for added test-declaration lines (matching
+    # `test_re`, manifest data) with no `# sabotage:` note anywhere in the
+    # contiguous comment block directly above them within the same hunk.
+    # Report-only - see the module doc.
+    def scan_sabotage(diff_text, test_re:, exempt_prefixes: [])
       missing = []
       current_file = nil
       added_lines = []
@@ -133,9 +128,9 @@ module Gate
         next unless line.start_with?("+")
 
         content = line[1..-1].to_s
-        exempt = EXEMPT_TEST_DIR_PREFIXES.any? { |prefix| current_file.to_s.start_with?(prefix) }
+        exempt = exempt_prefixes.any? { |prefix| current_file.to_s.start_with?(prefix) }
 
-        if !exempt && content =~ TEST_LINE_RE && !sabotage_note_above?(added_lines)
+        if !exempt && content =~ test_re && !sabotage_note_above?(added_lines)
           missing << { file: current_file, text: content.strip }
         end
 
@@ -162,11 +157,28 @@ module Gate
       false
     end
 
-    def sabotage_missing(env)
-      diff_res = Sh.run(SABOTAGE_DIFF_ARGS, envelope: env)
+    # One definition site for the corpus exemptions: the pathspec keeps them
+    # out of the diff at the git level, and scan_sabotage filters them again
+    # in case it is ever handed diff text from elsewhere. Both read the same
+    # manifest list.
+    def sabotage_diff_args(manifest)
+      %w[git diff main...HEAD -U0 --] +
+        manifest.sabotage_test_roots +
+        manifest.sabotage_exempt_prefixes.map { |prefix| ":!#{prefix}" }
+    end
+
+    # The scan is a manifest capability (gate.sabotage, see docs/manifest.md):
+    # a project that never declares it gets no `git diff` shelled out for it
+    # at all, and an empty [] rather than a false "nothing found".
+    def sabotage_missing(env, manifest)
+      return [] unless manifest.sabotage?
+
+      diff_res = Sh.run(sabotage_diff_args(manifest), envelope: env)
       return [] unless diff_res.success?
 
-      scan_sabotage(diff_res.out)
+      scan_sabotage(diff_res.out,
+                    test_re: manifest.sabotage_test_pattern,
+                    exempt_prefixes: manifest.sabotage_exempt_prefixes)
     end
 
     def skipped_from(stages, project_level_re)
@@ -254,7 +266,9 @@ module Gate
         opts.separator ""
         opts.separator "data.sabotage.missing is a report, not a gate: it never blocks and never"
         opts.separator "flips ok. A present '# sabotage:' note is not evidence the mutation was"
-        opts.separator "actually run against broken code - see docs/testing.md."
+        opts.separator "actually run against broken code - see docs/testing.md. The scan only runs"
+        opts.separator "when the manifest declares gate.sabotage; otherwise data.sabotage.enabled"
+        opts.separator "is false and no diff is shelled out for it."
         opts.on("--profile PROFILE", "only 'loop' is accepted") do |v|
           raise OptionParser::InvalidArgument, "profile must be 'loop' (got #{v.inspect})" if v != "loop"
 
@@ -277,8 +291,12 @@ module Gate
       ledger_path = manifest.gate_guard_ledger
       applicable = gate_applicable?(env, manifest)
 
-      missing = sabotage_missing(env)
-      env.data[:sabotage] = { missing: missing }
+      missing = sabotage_missing(env, manifest)
+      env.data[:sabotage] = {
+        enabled: manifest.sabotage?,
+        reason: manifest.sabotage? ? nil : "no gate.sabotage section in the manifest; the scan is off",
+        missing: missing
+      }
       missing.each do |m|
         env.warn(
           code: "sabotage_note_missing",

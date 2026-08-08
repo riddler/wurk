@@ -41,7 +41,12 @@ defaults are listed under "Defaults" below.
     "project_level_skips": [         // (opt) tier 1
       "not\\s+installed",
       "disabled in \\.quality\\.exs"
-    ]
+    ],
+    "sabotage": {                    // (opt) report-only mutation-testing scan
+      "test_roots": ["test/"],
+      "test_pattern": "\\btest\\s+\"",
+      "exempt_prefixes": ["test/scion_tests/", "test/scxml_tests/"]
+    }
   },
 
   "parallelism": {
@@ -128,6 +133,40 @@ for why the strict direction is deliberate. statifier-ex's values above
 (`not installed`, `disabled in .quality.exs`) are that project's own
 taxonomy, not a default any other consumer inherits.
 
+## `gate.sabotage`
+
+`gate.rb`'s sabotage scan is a grep for a comment shape above an added test
+declaration: it flags new test declarations in the diff with no `# sabotage:`
+note in the comment block directly above them. It is report-only -
+`data.sabotage.missing` never flips `ok`, and a present note is not evidence
+the mutation was actually run, only that a comment with the right shape
+exists.
+
+This whole section is optional, and present-or-absent rather than
+partly-on: `test_roots` and `test_pattern` must both be given together, or
+neither. Absent means the scan is off - `data.sabotage.enabled` is `false`
+with a stated `reason`, `data.sabotage.missing` is always `[]`, and `gate.rb`
+shells out to `git diff` zero times for it. An empty `missing` on an enabled
+scan means nothing was flagged; an empty `missing` with `enabled: false`
+means the scan never ran - the two are not the same claim, and a reader must
+not collapse them.
+
+- **test_roots** - directory prefixes passed to `git diff main...HEAD -U0 --`
+  as the pathspec, i.e. where the scan looks for new test declarations.
+- **test_pattern** - a regex source matched against each added line to
+  decide whether it declares a test. statifier's ExUnit shape
+  (`\btest\s+"`) is one project's syntax, not a default - a project with a
+  different test framework supplies its own.
+- **exempt_prefixes** - (opt) path prefixes exempted from the scan, for
+  generated test corpora that should never need a hand-written note. This
+  one list feeds both the `git diff` pathspec (as `:!prefix` exclusions) and
+  the in-scan filter, so there is exactly one definition site for what is
+  exempt.
+
+statifier-ex is the only consumer that declares this section today;
+predicator-ex and fixative have no sabotage-discipline corpus and get the
+off state, honestly.
+
 ## Two path lists, not one
 
 `gate.build_paths` and `gate.also_gated_paths` answer different questions,
@@ -161,6 +200,7 @@ with the new worktree's absolute path. No other field templates.
 | gate.loop | mix quality --profile loop | mix quality --profile loop | mise run quality:quick |
 | gate.report | yes (ex_quality JSON) | yes | no (tier 0; tier 1 later) |
 | gate.attest | mix gate.verify | none | none |
+| gate.sabotage | yes | none | none |
 | parallelism.model | worktree-per-issue | worktree-per-issue | branch-in-place |
 | tmux.session | statifier-ex | predicator-ex | (renames current window) |
 | models.direction | fable | opus (default) | opus (default) |
@@ -203,7 +243,9 @@ Defaults applied when a key is absent: `beads.topology` = `beads`,
 Everything else absent means the capability is off, and the scripts say so
 rather than guessing: no `tmux` section means no tmux integration, no
 `gate.report` means tier 0, no `gate.attest` means `attested: false`, no
-`gate.project_level_skips` means every skipped stage blocks.
+`gate.project_level_skips` means every skipped stage blocks, no
+`gate.sabotage` means the sabotage scan is off (`data.sabotage.enabled`
+false, `missing` always `[]`, no `git diff` shelled out for it).
 
 ## Validation
 

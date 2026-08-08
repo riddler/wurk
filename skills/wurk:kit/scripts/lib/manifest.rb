@@ -68,7 +68,8 @@ class Manifest
     "beads.areas" => %w[labels lands_alone always_batchable],
     "forge" => %w[kind labels],
     "gate" => %w[full loop report report_loop attest guard_ledger build_paths also_gated_paths moving_files
-                 project_level_skips],
+                 project_level_skips sabotage],
+    "gate.sabotage" => %w[test_roots test_pattern exempt_prefixes],
     "parallelism" => %w[model worktrees_dir trust warm_clone warm_globs warm repair_when repair post_branch],
     "tmux" => %w[session model],
     "models" => %w[direction],
@@ -273,6 +274,26 @@ class Manifest
     Regexp.union(sources.map { |s| Regexp.new(s) })
   end
 
+  # Whether the sabotage scan is configured at all. A section absent means
+  # the scan is off, not that it found nothing - see gate.rb and
+  # docs/manifest.md for the distinction the envelope has to preserve.
+  def sabotage?
+    !fetch("gate.sabotage").nil?
+  end
+
+  def sabotage_test_roots
+    Array(fetch("gate.sabotage.test_roots"))
+  end
+
+  def sabotage_test_pattern
+    source = fetch("gate.sabotage.test_pattern")
+    source && Regexp.new(source)
+  end
+
+  def sabotage_exempt_prefixes
+    Array(fetch("gate.sabotage.exempt_prefixes"))
+  end
+
   def parallelism_model
     fetch("parallelism.model")
   end
@@ -426,7 +447,41 @@ class Manifest
     validate_enums
     validate_commands
     validate_regex_lists
+    validate_sabotage
     collect_unknown_keys(raw, nil)
+  end
+
+  # Present-or-absent, never half-present: a section that declares roots but
+  # no pattern (or vice versa) is a schema error, not a partly-on scan.
+  def validate_sabotage
+    section = fetch("gate.sabotage")
+    return if section.nil?
+
+    unless section.is_a?(Hash)
+      errors << "#{path}: gate.sabotage must be an object (see wurk docs/manifest.md)"
+      return
+    end
+
+    roots = section["test_roots"]
+    unless roots.is_a?(Array) && !roots.empty? && roots.all? { |r| r.is_a?(String) }
+      errors << "#{path}: gate.sabotage.test_roots must be a non-empty list of path prefixes"
+    end
+
+    pattern = section["test_pattern"]
+    if !pattern.is_a?(String) || pattern.empty?
+      errors << "#{path}: gate.sabotage.test_pattern must be a regex source string"
+    else
+      begin
+        Regexp.new(pattern)
+      rescue RegexpError => e
+        errors << "#{path}: gate.sabotage.test_pattern is not a valid regular expression (#{e.message})"
+      end
+    end
+
+    exempt = section["exempt_prefixes"]
+    unless exempt.nil? || (exempt.is_a?(Array) && exempt.all? { |p| p.is_a?(String) })
+      errors << "#{path}: gate.sabotage.exempt_prefixes must be a list of path prefixes"
+    end
   end
 
   def validate_regex_lists

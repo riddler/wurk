@@ -98,6 +98,63 @@ class ManifestValidationTest < Minitest::Test
     refute m.valid?
     assert_match(/gate\.project_level_skips entry "\[" is not a valid regular expression/, m.errors.join("\n"))
   end
+
+  # sabotage: drop the roots check in validate_sabotage -> red
+  def test_sabotage_missing_test_roots_blocks
+    m = ManifestFixtures.load_with(
+      "valid",
+      "gate" => { "sabotage" => { "test_pattern" => "\\btest\\s+\"" } }
+    )
+    refute m.valid?
+    assert_match(/gate\.sabotage\.test_roots must be a non-empty list of path prefixes/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the pattern check in validate_sabotage -> red
+  def test_sabotage_missing_test_pattern_blocks
+    m = ManifestFixtures.load_with(
+      "valid",
+      "gate" => { "sabotage" => { "test_roots" => ["test/"] } }
+    )
+    refute m.valid?
+    assert_match(/gate\.sabotage\.test_pattern must be a regex source string/, m.errors.join("\n"))
+  end
+
+  # sabotage: stop rescuing RegexpError for test_pattern in validate_sabotage
+  # -> red
+  def test_sabotage_uncompilable_test_pattern_blocks
+    m = ManifestFixtures.load_with(
+      "valid",
+      "gate" => { "sabotage" => { "test_roots" => ["test/"], "test_pattern" => "[" } }
+    )
+    refute m.valid?
+    assert_match(/gate\.sabotage\.test_pattern is not a valid regular expression/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the is_a?(Array) check on exempt_prefixes -> red
+  def test_sabotage_non_array_exempt_prefixes_blocks
+    m = ManifestFixtures.load_with(
+      "valid",
+      "gate" => {
+        "sabotage" => { "test_roots" => ["test/"], "test_pattern" => "\\btest\\s+\"", "exempt_prefixes" => "test/scion_tests/" }
+      }
+    )
+    refute m.valid?
+    assert_match(/gate\.sabotage\.exempt_prefixes must be a list of path prefixes/, m.errors.join("\n"))
+  end
+
+  def test_sabotage_fully_declared_section_validates
+    m = ManifestFixtures.load_with(
+      "valid",
+      "gate" => {
+        "sabotage" => {
+          "test_roots" => ["test/"],
+          "test_pattern" => "\\btest\\s+\"",
+          "exempt_prefixes" => ["test/scion_tests/"]
+        }
+      }
+    )
+    assert m.valid?, "expected a fully-declared gate.sabotage section to validate: #{m.errors.inspect}"
+  end
 end
 
 class ManifestAccessorTest < Minitest::Test
@@ -143,6 +200,14 @@ class ManifestAccessorTest < Minitest::Test
   # absent -> red
   def test_project_level_skip_re_is_nil_when_absent
     assert_nil @m.project_level_skip_re
+  end
+
+  # sabotage: make sabotage? return true when the section is absent -> red
+  def test_sabotage_defaults_to_off_with_empty_prefixes
+    refute @m.sabotage?
+    assert_equal [], @m.sabotage_test_roots
+    assert_nil @m.sabotage_test_pattern
+    assert_equal [], @m.sabotage_exempt_prefixes
   end
 end
 
