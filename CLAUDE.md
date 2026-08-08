@@ -26,6 +26,12 @@ settled decisions - cite ADR numbers instead of re-arguing them.
 - Keep `docs/manifest.md` and `lib/manifest.rb` in sync; the code is
   authority, the doc must follow in the same commit.
 
+## Issue tracking
+
+Work is tracked in beads (`bd`), prefix `wu`. See `AGENTS.md` for the stub and
+`bd prime` for the command reference. Do not open markdown TODO lists or use
+TodoWrite for this repo's work.
+
 ## Build and test
 
 No toolchain beyond system Ruby. The gate is the kit test suite:
