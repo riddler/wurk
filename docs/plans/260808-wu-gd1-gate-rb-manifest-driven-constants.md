@@ -635,13 +635,13 @@ others.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] The guard is not vacuous: temporarily add
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] The guard is not vacuous: temporarily add
       `X = ["test/scion_tests/"]` to `skills/wurk:kit/scripts/gate.rb`, confirm
       `ruby skills/wurk:kit/scripts/test/run.rb` goes red naming that line, then
       revert. (The planted-violation meta-test asserts the same thing
       permanently.)
-- [ ] The guard really runs over the real files, not just its synthetic unit
+- [x] The guard really runs over the real files, not just its synthetic unit
       cases:
       `ruby skills/wurk:kit/scripts/test/run.rb --name test_no_consumer_vocabulary_in_kit_source`
       reports `1 runs, 0 failures` (a `0 runs` result means the test was named
@@ -754,6 +754,25 @@ blocking here.
       reader cannot mistake an empty `missing` for a clean bill of health
 - [ ] `docs/manifest.md`'s new subsection is comprehensible to someone
       onboarding a project that has never heard of the sabotage protocol
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution, pause
+here for the human to confirm the manual testing before moving to the next
+phase. In looped (`--loop`) execution, this phase's Automated Verification
+gates advancement automatically (via `/wurk:commit --auto`), and Manual
+Verification items are deferred and surfaced once at the end instead of
+blocking here.
+
+---
+
+### Phase 3
+
+- [ ] The vocabulary list is neither so wide it fires on legitimate generic
+      words nor so narrow it only re-catches the five leaks this plan already
+      fixed - read each pattern and ask what a false positive would look like
+- [ ] The failure message tells a future implementer what to do, not just that
+      something is wrong
+- [ ] The rewritten `beads.rb` message still tells a user what happened
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution, pause
