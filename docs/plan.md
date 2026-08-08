@@ -607,17 +607,30 @@ be re-synced.
 
 #### Where a fresh session picks up
 
-**Start in the wurk repo, on `main`.** Step 1 landed there; step 2 is the
-next work and is entirely wurk-side.
+**Start in the wurk repo, on `main`.** Step 2 is half done; the next work is
+the second half of it, and is entirely wurk-side.
 
 State as of 2026-08-08:
 
 | | |
 |---|---|
 | Step 1 | Done - `308e36b` (the lift), `ea60279` (SKILL.md + REFERENCE.md) |
-| Steps 2-5 | Not started. Step 2 is the large one: 13 skills |
+| Step 2, first half | Done - wurk:commit, wurk:mr, wurk:research, wurk:plan, wurk:iterate, wurk:implement. See "Step 2 outcome notes" below |
+| Step 2, second half | **Next.** wurk:work, wurk:next, wurk:branch, wurk:refresh, wurk:cleanup, wurk:issue, wurk:release |
+| Steps 3-5 | Not started |
 | Steps 6-10 | **Blocked** until `st-urc` merges (item 5) |
 | Phase 1 smoke | **Owed** the moment `st-urc` merges |
+
+The second half is the orchestration chain, and it is where the manifest's
+structural switches actually bite: `parallelism.model` (wurk:branch, and the
+not-applicable guards in refresh/cleanup), `beads.topology` (wurk:issue,
+wurk:next), and `release` (wurk:release refuses on `null`). Read the first
+half's skills before writing them - they establish the conventions the second
+half should match: an installed-path script invocation
+(`ruby ~/.claude/skills/wurk:kit/scripts/<script>.rb`), a "## Project
+extension" section naming `.claude/wurk/<skill>.md` and where in the flow it
+is read, manifest fields named rather than their values, and the kit
+REFERENCE.md pointer as the last line of the preamble.
 
 Read `docs/architecture.md`, `docs/manifest.md`, and
 `skills/wurk:kit/REFERENCE.md` first. The gate is
@@ -756,6 +769,58 @@ Steps, wurk side:
      `null` -> the skill refuses with "this project has no release recipe".
      Port predicator's skill as the hex recipe shape now; fixative's
      xcode-app recipe lands in phase 4.
+
+   **Step 2 outcome notes (first half, 2026-08-08).** Six skills landed:
+   wurk:commit, wurk:mr, wurk:research, wurk:plan, wurk:iterate,
+   wurk:implement - the authoring chain. The split was chosen so the half
+   that depends on the structural manifest switches stays together in the
+   second half. Kit suite still green (364 runs). Notes:
+
+   - **The `st-urc` grep pattern was re-run over the six new files and comes
+     back empty**, along with `mix `, `Appendix D`, `changelog.d`,
+     `ex_quality`, and consumer ADR numbers. The generic skills name manifest
+     fields (`gate.build_paths`, `changelog.mode`, `commits.trailer`,
+     `artifacts.plans`, `parallelism.repair_when`) instead of values.
+   - **The changelog step is three mutually exclusive branches**, keyed on
+     `changelog.mode`, with the fragment and direct-edit instructions
+     physically separated and each carrying its own "do not do the other one"
+     line (item 17). `/wurk:mr` step 5 defers to `/wurk:commit` Step 1.6
+     rather than restating the modes.
+   - **The sabotage protocol did not survive into generic prose** (item 16).
+     What generic wurk:commit says is that `gate.rb`'s `data.sabotage.missing`
+     is a report, and that what to do about a missing note is project policy
+     stated in `.claude/wurk/commit.md`. wurk:implement says the same in its
+     verification section. The kit's scan stays - it is a grep for a comment
+     shape, and a project with no discipline just gets an empty list.
+   - **Forge wording comes from `forge.kind`** and wurk:mr says "the request"
+     wherever PR/MR does not matter, naming the CLI only at the create step
+     (item 8). Nothing in it assumes GitHub.
+   - **The plan-critic open question is settled**: findings stay
+     conversational, and a finding the author *declines* gets written into
+     the plan document (in "What We're NOT Doing" or the phase it concerns),
+     not onto the bead. Bead notes are the `--loop` state channel that
+     `work_state.rb` reads; review chatter there dilutes a channel with one
+     job. The plan document is also what the implementer actually reads.
+   - **The spawn budget is stated as three layers** in wurk:implement
+     (orchestrator, phase subagent, one leaf) with `wurk-gate-reader`
+     explicitly a leaf, so handing it a red gate in `--loop` mode does not
+     silently become a fourth layer.
+   - **First-commit-is-.gitignore did not port** (item 18), as planned.
+   - **wurk:iterate does not restate the plan template or the phase sizing
+     rule**; it links to `/wurk:plan` by name. Two copies of a template drift,
+     which is the failure this whole repo exists to end.
+
+   **Material extracted for statifier's extension files** (step 7 writes
+   them; the source is still live in `st-urc` until then):
+
+   | Extension file | What goes in it |
+   |---|---|
+   | `wurk/commit.md` | the sabotage protocol and its commit-refusal condition; the changelog-fragment detail beyond the mode (the "v2 differs from v1" narrowing, the generated-corpus exemption); ratchet notes; the `2.0.0-dev` no-bump rule; ADR-0011 ledger citations |
+   | `wurk/mr.md` | the ADR judge step (`mix quality --profile merge`, skip is pushable, a finding is a hard refuse); the rebase-merge-only note if it is not already CLAUDE.md's |
+   | `wurk/plan.md`, `wurk/iterate.md` | corpus/ratchet success criteria; the Appendix D pseudocode rule; the `## Corpus/Ratchet Notes` optional section; the SCXML-element / interpreter-feature / refactoring common patterns |
+   | `wurk/implement.md` | the sabotage protocol in full (mutation kinds, the exemption note grammar, the corpus exemption); the "diff against Appendix D first" debugging move; errors-as-events and effects-out rules |
+   | `wurk/research.md` | the pipeline-layer vocabulary; the `../statifier` v1 reference-checkout guidance |
+
 3. Move the six agents to `agents/`, renamed with a `wurk-` prefix
    (hyphen, not colon: agent names allow only lowercase letters and
    hyphens; `:` is reserved for plugin identifiers and a name containing
@@ -976,6 +1041,6 @@ where such a thing goes when a project wants it.
 - Fixative bead prefix and whether its `update-issue` survives as a
   fixative-only extension of wurk:issue or disappears into topology mode
   (phase 4 steps 1, 5).
-- Whether wurk-plan-critic findings should be recorded on the bead (a
-  `bd note` audit trail of what the critic flagged and how the author
-  resolved it) or stay conversational. Decide during phase 2 step 2.
+- ~~Whether wurk-plan-critic findings should be recorded on the bead~~
+  **Settled in phase 2 step 2: conversational, with declined findings written
+  into the plan document.** See the step 2 outcome notes.
