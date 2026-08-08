@@ -23,11 +23,18 @@ module TmuxWindow
   SHELL_COMMANDS = %w[fish zsh bash sh].freeze
 
   # The convergence point every caller relies on: editing this one template
-  # reaches every seeded session without touching the calling skills. `%s`
-  # is the bead id, substituted per call.
-  FINISH_TEMPLATE = " When the work is complete, finish with /commit --auto " \
-                     "- it writes the Refs trailer and refuses if the tree " \
-                     "carries changes unrelated to %s. Do not run git commit directly."
+  # reaches every seeded session without touching the calling skills.
+  # `%{id}` is the bead id and `%{trailer}` the manifest's
+  # commits.trailer.key, both substituted per call.
+  #
+  # Both substitutions exist because both were once literals here, and a
+  # literal in this template fails silently: the session launches, works,
+  # and only the last instruction is wrong, with nobody watching the window.
+  # `/commit` survived the phase 2 rename this way (wu-bls), and "the Refs
+  # trailer" is statifier's key, not every project's.
+  FINISH_TEMPLATE = " When the work is complete, finish with /wurk:commit --auto " \
+                     "- it writes the %{trailer} trailer and refuses if the tree " \
+                     "carries changes unrelated to %{id}. Do not run git commit directly."
 
   # Spinner match: the timer chunk or the literal "esc to interrupt" -
   # *never* the verb ("Cooking…", "Forging…", ...), which is randomized per
@@ -143,8 +150,9 @@ module TmuxWindow
     # skill's invocation once a session is already running, and does not
     # govern the CLI session itself being launched here. The value is
     # `tmux.model` from the manifest; the flag must not be "simplified" away.
-    def claude_command(model, seed, id)
-      "claude --permission-mode auto --model #{model} '#{seed}.#{FINISH_TEMPLATE % id}'"
+    def claude_command(model, seed, id, trailer_key)
+      finish = format(FINISH_TEMPLATE, id: id, trailer: trailer_key)
+      "claude --permission-mode auto --model #{model} '#{seed}.#{finish}'"
     end
 
     # --- classify helpers ------------------------------------------------
@@ -270,7 +278,7 @@ module TmuxWindow
         return env.emit(io)
       end
 
-      keys = claude_command(model, seed, id)
+      keys = claude_command(model, seed, id, manifest.trailer_key)
       new_argv = ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "#{session_target(session)}:", "-n", name, "-c", path]
 
       if dry_run

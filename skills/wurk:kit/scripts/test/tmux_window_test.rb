@@ -219,7 +219,7 @@ class TmuxWindowTest < Minitest::Test
 
     code, env = run_tmux([
                             "open", "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing",
-                            "zz-abc", "/work zz-abc --auto"
+                            "zz-abc", "/wurk:work zz-abc --auto"
                           ])
 
     assert_equal 0, code
@@ -231,10 +231,56 @@ class TmuxWindowTest < Minitest::Test
     assert_equal "@42", send_call.argv[3]
     keys = send_call.argv[4]
     assert_includes keys, "claude --permission-mode auto --model fakemodel"
-    assert_includes keys, "/work zz-abc --auto"
-    assert_includes keys, "/commit --auto"
+    assert_includes keys, "/wurk:work zz-abc --auto"
+    assert_includes keys, "/wurk:commit --auto"
     assert_includes keys, "unrelated to zz-abc"
     assert_equal "Enter", send_call.argv[5]
+  end
+
+  # The finishing clause names an installed skill, and the name it named went
+  # stale through the phase 2 rename without a single test noticing (wu-bls):
+  # the old assertion asserted the old string. A seeded session is the one
+  # caller nobody is watching, so the name is pinned here in its installed
+  # form, and the bare pre-rename spelling is asserted absent.
+  def test_seeded_finishing_clause_names_the_installed_skill
+    @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=zz-session:", "-n", "zz-abc-thing",
+       "-c", "/repos/zz-worktrees/zz-abc-thing"],
+      out: "@42\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@42"], out: "")
+
+    run_tmux(["open", "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing", "zz-abc", "/wurk:work zz-abc --auto"])
+
+    keys = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }.argv[4]
+
+    assert_includes keys, "finish with /wurk:commit --auto"
+    refute_match(%r{(?<!wurk:)/commit --auto}, keys)
+  end
+
+  # The trailer key is manifest data (fixative writes `Closes #NN`, not
+  # `Refs`), and it was a literal in the template until wu-bls. The tmux
+  # fixture declares no commits section, so it takes the default "Refs" -
+  # asserting that would pass whether or not the manifest was ever read.
+  # Overriding to "Closes" is what proves the read.
+  def test_seeded_finishing_clause_takes_the_trailer_key_from_the_manifest
+    @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=zz-session:", "-n", "zz-abc-thing",
+       "-c", "/repos/zz-worktrees/zz-abc-thing"],
+      out: "@42\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@42"], out: "")
+
+    fixture = manifest_with("tmux", "commits" => { "trailer" => { "key" => "Closes" } })
+    run_tmux(["open", "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing", "zz-abc", "/wurk:work zz-abc --auto"],
+             fixture: fixture)
+
+    keys = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }.argv[4]
+
+    assert_includes keys, "it writes the Closes trailer"
+    refute_includes keys, "Refs trailer"
   end
 
   def test_open_skips_when_window_name_already_exists
@@ -242,7 +288,7 @@ class TmuxWindowTest < Minitest::Test
     # No new-window or send-keys expectation - a name hit must not create a
     # second window.
 
-    code, env = run_tmux(["open", "zz-abc-thing", "/some/path", "zz-abc", "/work zz-abc --auto"])
+    code, env = run_tmux(["open", "zz-abc-thing", "/some/path", "zz-abc", "/wurk:work zz-abc --auto"])
 
     assert_equal 0, code
     assert_equal true, env["data"]["skipped"]
@@ -255,7 +301,7 @@ class TmuxWindowTest < Minitest::Test
     # tries. An empty -t "" resolves to the *current* window in real tmux,
     # which cost a live window on 2026-08-02.
 
-    code, env = run_tmux(["open", "zz-abc-thing", "/some/path", "zz-abc", "/work zz-abc --auto"])
+    code, env = run_tmux(["open", "zz-abc-thing", "/some/path", "zz-abc", "/wurk:work zz-abc --auto"])
 
     assert_equal 1, code
     assert_equal "window_id_empty", env["blocked"].first["code"]
@@ -267,7 +313,7 @@ class TmuxWindowTest < Minitest::Test
     code, env = run_tmux([
                             "open", "--dry-run", "zz-abc-thing",
                             "/repos/zz-worktrees/zz-abc-thing",
-                            "zz-abc", "/work zz-abc --auto"
+                            "zz-abc", "/wurk:work zz-abc --auto"
                           ])
 
     assert_equal 0, code
