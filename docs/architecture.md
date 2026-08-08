@@ -81,6 +81,11 @@ Extensions add; they do not override. A project needing to change generic
 behavior (not just extend it) is a signal the manifest schema is missing a
 field - fix the schema, do not fork the skill.
 
+The same split applies to agents: wurk ships the shared roster (the
+`wurk-*` agents), and a consumer repo's `.claude/agents/` holds domain
+agents that would never generalize (a sabotage auditor, an ISA-drift
+checker). Wurk skills tolerate project agents but never depend on one.
+
 ## Authority model
 
 Unchanged from the consumer repos: each repo's CLAUDE.md carries the

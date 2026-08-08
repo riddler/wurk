@@ -440,7 +440,9 @@ Steps, wurk side:
    [best-of-both fold-in]:
    - **wurk:commit** - generic: gate-run, diff analysis, 5-strategy bead
      ladder, message draft + `commit_message.rb check`, post-commit
-     attribution re-verify, `--auto` refusal list. Extension (statifier
+     attribution re-verify, `--auto` refusal list; on a non-trivially-red
+     gate, delegate the full output to wurk-gate-reader. Extension
+     (statifier
      `wurk/commit.md`): sabotage-note refusal (item 16), changelog-fragment
      step details, ratchet notes, ledger citations, 2.0.0-dev no-bump rule.
      Fold-in: changelog step driven by manifest mode (item 17).
@@ -453,15 +455,20 @@ Steps, wurk side:
    - **wurk:plan / wurk:iterate** - generic: research flow, nine-section
      template, `plan_state.rb validate` before presenting, phases sized for
      the implement loop, ADR-deference rule ("flag, never silently
-     contradict an accepted ADR"). Extensions: statifier corpus/ratchet
-     success criteria + Appendix D; predicator ISA Impact. Fold-ins: modern
-     agent menu, pre-write checklist items, drop the stale `Task(...)`
-     example. Skills pass `artifacts.*` paths to agents (item 9).
+     contradict an accepted ADR"), and a wurk-plan-critic pass before
+     presentation (iterate: after substantive edits). Extensions:
+     statifier corpus/ratchet success criteria + Appendix D; predicator
+     ISA Impact. Fold-ins: modern agent menu, pre-write checklist items
+     (now largely absorbed by the critic - keep only what the critic's
+     prompt does not cover), drop the stale `Task(...)` example. Skills
+     pass `artifacts.*` paths to agents (item 9).
    - **wurk:implement** - generic: phase-by-phase, `--loop` orchestration
      (subagent per phase, `/wurk:commit --auto` as advancement gate,
      deferred-manual-verification section, loop-note grammar via
-     `bead.rb note`), resume from unchecked boxes, 3-layer spawn budget.
-     Extension: sabotage protocol. Fold-in: setup points at wurk:branch.
+     `bead.rb note`), resume from unchecked boxes, 3-layer spawn budget,
+     wurk-gate-reader on red gates (mind the spawn budget in `--loop`
+     mode - the gate-reader is a leaf, never a spawner). Extension:
+     sabotage protocol. Fold-in: setup points at wurk:branch.
    - **wurk:research** - generic: documentarian rules, subagent fan-out,
      `doc_meta.rb` frontmatter/filename, `permalinks.rb`, record on bead,
      follow-up mode. Extensions: statifier pipeline vocabulary +
@@ -516,6 +523,36 @@ Steps, wurk side:
    | wurk-docs-locator | pink | #F48FB1 |
    | wurk-docs-analyzer | orange | #F2B482 |
    | wurk-web-search-researcher | yellow | #FFE6B3 |
+   | wurk-gate-reader (new) | red | - |
+   | wurk-plan-critic (new) | blue | - |
+
+   Two NEW agents join the six ported ones. The bar for a wurk agent:
+   it absorbs noisy context the orchestrator should not carry, or it
+   provides independent judgment that must not share context with the
+   author. Deterministic work goes to kit scripts instead - never create
+   an agent for something a script does reliably.
+
+   - **wurk-gate-reader** (read-only: Read, Grep, Glob, Bash for the gate
+     command only). Ingests COMPLETE failing-gate output - honoring the
+     never-truncate rule without spending the working session's context -
+     and returns: failing stages, root cause per failure, which failures
+     share a cause, and what to look at first. At gate-contract tier 1 it
+     reads the report JSON; at tier 0 it works from raw log (where it
+     earns its keep most - that is all fixative will have). Invoked by
+     wurk:commit, wurk:implement, and wurk:mr whenever a gate run comes
+     back red and the output is more than trivially small.
+   - **wurk-plan-critic** (read-only: Read, Grep, Glob). Adversarial
+     review of a drafted plan BEFORE presentation, spawned by wurk:plan
+     (and wurk:iterate after substantive edits) with fresh context -
+     deliberate blindness to the authoring conversation is the point.
+     Checks what `plan_state.rb validate` cannot: phases genuinely
+     independently committable and gate-verifiable, success criteria
+     actually verifiable, no contradiction with accepted ADRs, no
+     unresolved open questions, extension-file requirements present
+     (e.g. corpus/ratchet steps where the project's wurk/plan.md demands
+     them). Reports findings; the authoring session judges them. This
+     generalizes the ADR judge's adversarial insight upstream from merge
+     time to plan time.
 
    The agent renames join the cross-reference checklist: every ported
    skill that names a subagent (research, plan, iterate, work) must use
@@ -619,6 +656,39 @@ Definition of done:
   manifest absorbed it all) - grep for "xcodegen", "UniFFI", "glab" in
   `skills/` generic prose.
 
+## Per-project agents are part of the extension story
+
+The manifest/extension split (ADR-0004) applies to agents too: a consumer
+repo's `.claude/agents/` remains the home for domain agents that would
+never generalize - e.g. a statifier sabotage auditor (verify every new
+test carries its mutation note), a predicator ISA-drift checker, a
+fixative privacy-modifier auditor. Wurk skills must tolerate their
+presence (they are additive) but never depend on any of them. The same
+bar applies as for wurk's own agents: noisy-context absorption or
+independent judgment; scripts for anything deterministic. None of these
+example agents is scheduled work - they are the documented pattern for
+where such a thing goes when a project wants it.
+
+## Backlog (after phase 4; not scheduled)
+
+- **wurk-conflict-scout** (agent): when refresh/mr abort on a rebase
+  conflict, a read-only agent examines the captured conflict and reports
+  scope and likely difficulty ("both sides touched the exit-set logic;
+  theirs is a rename, yours is behavioral; ~10-minute manual merge") so
+  the human gate is an informed one. Authority unchanged: it never
+  resolves anything.
+- **wurk:init** (skill): onboarding for future projects - survey a repo
+  (toolchain, forge, test commands, doc layout, tracker state), draft its
+  `.claude/wurk.json` and extension stubs, then walk the user through the
+  structural choices (parallelism model, changelog mode, topology). This
+  is the "future projects" half of the original goal; nothing else in the
+  plan owns it.
+- Tier-1 gate report emitter for fixative (docs/gate-contract.md).
+- A one-line human summary on stderr from kit scripts (presentational;
+  stdout contract unchanged).
+- A wurk-side ADR judge over this repo's ADRs (explicitly out of scope
+  for phases 1-4).
+
 ## Risks and rollback
 
 - Every consumer keeps its full pre-adoption skill set in git history;
@@ -647,6 +717,6 @@ Definition of done:
 - Fixative bead prefix and whether its `update-issue` survives as a
   fixative-only extension of wurk:issue or disappears into topology mode
   (phase 4 steps 1, 5).
-- Whether the kit later emits a one-line human summary on stderr alongside
-  the JSON envelope (purely presentational; stdout contract unchanged; both
-  streams reach the agent). Not scheduled; revisit after phase 3 usage.
+- Whether wurk-plan-critic findings should be recorded on the bead (a
+  `bd note` audit trail of what the critic flagged and how the author
+  resolved it) or stay conversational. Decide during phase 2 step 2.
