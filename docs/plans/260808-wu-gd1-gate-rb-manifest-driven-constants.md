@@ -329,12 +329,12 @@ one asserting `project_level_skip_re` is `nil` when the key is absent.
       `git show --stat` on the phase commit)
 
 #### Manual Verification:
-- [ ] `ruby skills/wurk:kit/scripts/gate.rb --help` reads as instructions for
+- [x] `ruby skills/wurk:kit/scripts/gate.rb --help` reads as instructions for
       any project, not for an Elixir one, names no gate tool, and still says
       everything a caller needs about `--profile loop`
-- [ ] The rewritten module-doc paragraph still makes the run-level vs
+- [x] The rewritten module-doc paragraph still makes the run-level vs
       project-level argument as forcefully as gate.rb:17-43 did
-- [ ] No regressions in `/wurk:commit` Step 0 reading of the gate envelope
+- [x] No regressions in `/wurk:commit` Step 0 reading of the gate envelope
       (field names unchanged: `data.skipped_stages[].project_level`)
 
 **Implementation Note**: Use the project's loop gate between edits while
@@ -551,12 +551,12 @@ and one asserting `sabotage?` is false with no section and that
       `lib/manifest.rb` change
 
 #### Manual Verification:
-- [ ] With statifier-shaped fixture data, the scan still flags exactly what it
+- [x] With statifier-shaped fixture data, the scan still flags exactly what it
       flagged before (spot-check the diff of `gate_test.rb` assertions: the
       expected findings should be unchanged, only their inputs moved)
-- [ ] The `/wurk:commit` Step 0 wording makes the off state unmistakable - a
+- [x] The `/wurk:commit` Step 0 wording makes the off state unmistakable - a
       reader cannot mistake an empty `missing` for a clean bill of health
-- [ ] `docs/manifest.md`'s new subsection is comprehensible to someone
+- [x] `docs/manifest.md`'s new subsection is comprehensible to someone
       onboarding a project that has never heard of the sabotage protocol
 
 **Implementation Note**: Use the project's loop gate between edits while
@@ -648,12 +648,12 @@ others.
       differently and this criterion proved nothing)
 
 #### Manual Verification:
-- [ ] The vocabulary list is neither so wide it fires on legitimate generic
+- [x] The vocabulary list is neither so wide it fires on legitimate generic
       words nor so narrow it only re-catches the five leaks this plan already
       fixed - read each pattern and ask what a false positive would look like
-- [ ] The failure message tells a future implementer what to do, not just that
+- [x] The failure message tells a future implementer what to do, not just that
       something is wrong
-- [ ] The rewritten `beads.rb` message still tells a user what happened
+- [x] The rewritten `beads.rb` message still tells a user what happened
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution, pause
@@ -725,15 +725,24 @@ Manual verification items are deferred during looped (--loop) execution and
 surfaced here once, rather than blocking after each phase. Confirm these
 before considering the plan fully landed.
 
+All items below were walked and confirmed on 2026-08-08, after the three
+phase commits landed. Two findings came out of the walk and are recorded
+inline; one was fixed in the same pass, the other filed as wu-p82.
+
 ### Phase 1
 
-- [ ] `ruby skills/wurk:kit/scripts/gate.rb --help` reads as instructions for
+- [x] `ruby skills/wurk:kit/scripts/gate.rb --help` reads as instructions for
       any project, not for an Elixir one, names no gate tool, and still says
       everything a caller needs about `--profile loop`
-- [ ] The rewritten module-doc paragraph still makes the run-level vs
-      project-level argument as forcefully as gate.rb:17-43 did
-- [ ] No regressions in `/wurk:commit` Step 0 reading of the gate envelope
-      (field names unchanged: `data.skipped_stages[].project_level`)
+- [x] The rewritten module-doc paragraph still makes the run-level vs
+      project-level argument as forcefully as gate.rb:17-43 did - the
+      load-bearing sentence about an always-red check survives verbatim, and
+      the paragraph gains a clause placing the review decision in the
+      consumer's manifest rather than in this script
+- [x] No regressions in `/wurk:commit` Step 0 reading of the gate envelope
+      (field names unchanged: `data.skipped_stages[].project_level`) -
+      checked every consumer: `commit/SKILL.md:114-117`, `mr/SKILL.md:137`,
+      `kit/REFERENCE.md:257-270`
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution, pause
@@ -747,13 +756,25 @@ blocking here.
 
 ### Phase 2
 
-- [ ] With statifier-shaped fixture data, the scan still flags exactly what it
+- [x] With statifier-shaped fixture data, the scan still flags exactly what it
       flagged before (spot-check the diff of `gate_test.rb` assertions: the
       expected findings should be unchanged, only their inputs moved)
-- [ ] The `/wurk:commit` Step 0 wording makes the off state unmistakable - a
+- [x] The `/wurk:commit` Step 0 wording makes the off state unmistakable - a
       reader cannot mistake an empty `missing` for a clean bill of health
-- [ ] `docs/manifest.md`'s new subsection is comprehensible to someone
+- [x] `docs/manifest.md`'s new subsection is comprehensible to someone
       onboarding a project that has never heard of the sabotage protocol
+
+The one behavioral change in the `gate_test.rb` diff is intended, not a
+regression: `expect_no_sabotage_diff` is gone from the four `gate_tier0`
+tests, because that fixture declares no `gate.sabotage` and the script now
+shells no diff at all. The docs' present-or-absent claim was checked against
+the code rather than taken on faith - `lib/manifest.rb:456-484` validates the
+section, compiles `test_pattern`, and errors on an invalid regex.
+
+Also re-ran the bug this bead was filed for. `gate.rb --dry-run` against
+wurk's own manifest now reports `sabotage.enabled: false` with a stated
+reason, and the emitted `commands` list carries no `test/` pathspec and no
+corpus exclusions.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution, pause
@@ -767,12 +788,38 @@ blocking here.
 
 ### Phase 3
 
-- [ ] The vocabulary list is neither so wide it fires on legitimate generic
+- [x] The vocabulary list is neither so wide it fires on legitimate generic
       words nor so narrow it only re-catches the five leaks this plan already
       fixed - read each pattern and ask what a false positive would look like
-- [ ] The failure message tells a future implementer what to do, not just that
+- [x] The failure message tells a future implementer what to do, not just that
       something is wrong
-- [ ] The rewritten `beads.rb` message still tells a user what happened
+- [x] The rewritten `beads.rb` message still tells a user what happened
+
+The width review produced the walk's two findings.
+
+**Fixed in this pass.** The `elixir gate config` pattern matched bare stems
+(`/\.(quality|credo|sobelow-conf)\b/`), so it fired on `report.quality` and
+`res.quality.positive?` - Ruby's spelling for a method call on a `quality`
+attribute, and no rule violation at all. Every value the rule exists to catch
+is a file a consumer names in `gate.moving_files`, and those are always
+spelled in full, so the pattern now requires the whole filename
+(`/\.(?:quality|credo)\.exs\b|\.sobelow-conf\b|\bcoveralls\.json\b/`), with a
+test pinning both directions. The other four patterns survived the probe:
+`scion|scxml` has no English false friends, `\btest\s+"` does not fire on a
+`raise` whose message escapes its inner quotes, and the mix-command and
+repo-name patterns are exact.
+
+**Filed as wu-p82** (`area:kit`, `discovered-from` wu-gd1). The guard is not
+too narrow in the obvious sense - it caught the `beads.rb` violation, which
+was an independent find rather than one of this plan's five - but its *scope*
+is: it runs over `**/*.rb` under `scripts/`, excluding `test/`, and over no
+markdown at all. A consumer constant landing in a `skills/wurk:*/SKILL.md`
+would break CLAUDE.md's hard rule with nothing to catch it. Deliberately not
+fixed here: markdown legitimately cites consumers as provenance
+(`kit/REFERENCE.md:11-12`, `:208`) and `docs/manifest.md`'s starting-values
+table is nothing but consumer values, so the prose rule cannot be the code
+rule with a wider glob. That distinction needs settling before the check is
+written.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution, pause

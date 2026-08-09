@@ -143,9 +143,16 @@ module Contract
   #
   # This list is allowed to name consumer values precisely because it is the
   # enforcement site, the same way BANNED_CALLS names the operations it bans.
+  #
+  # "elixir gate config" matches whole filenames, not bare stems: `.quality`
+  # without its extension is also how Ruby spells a method call on a `quality`
+  # attribute, and a guard that fires on `report.quality` costs a future
+  # implementer a rename for no rule violation. Every value this rule exists
+  # to catch is a file the consumer names in gate.moving_files, and those are
+  # always spelled in full.
   CONSUMER_VOCABULARY = {
     "statifier corpus dirs" => /scion|scxml/i,
-    "elixir gate config" => /\.(quality|credo|sobelow-conf)\b|coveralls\.json/,
+    "elixir gate config" => /\.(?:quality|credo)\.exs\b|\.sobelow-conf\b|\bcoveralls\.json\b/,
     "mix gate commands" => /\bmix\s+(quality|gate\.\w+)\b/,
     "exunit test macro" => /\btest\s+"/,
     "consumer repo names" => /statifier|predicator|fixative/i
@@ -230,6 +237,20 @@ class ContractRulesTest < Minitest::Test
                  Contract.consumer_vocabulary(%(test "some description" do\n))
     assert_equal [[1, "consumer repo names"]],
                  Contract.consumer_vocabulary(%(repo = "statifier-ex"\n))
+  end
+
+  # The gate-config rule keys off whole filenames. A bare `.quality` is also
+  # how Ruby spells a method call, and firing on that would make the guard a
+  # tax on naming rather than a rule about consumer constants.
+  # sabotage: drop the `\.exs` from the quality/credo alternation -> red
+  def test_consumer_vocabulary_gate_config_needs_the_whole_filename
+    assert_equal [[1, "elixir gate config"]],
+                 Contract.consumer_vocabulary(%(File.write(".quality.exs", weakened)\n))
+    assert_equal [[1, "elixir gate config"]],
+                 Contract.consumer_vocabulary(%(moving = [".credo.exs", "coveralls.json"]\n))
+
+    assert_empty Contract.consumer_vocabulary(%(score = report.quality\n))
+    assert_empty Contract.consumer_vocabulary(%(return unless res.quality.positive?\n))
   end
 
   def test_consumer_vocabulary_ignores_comments
