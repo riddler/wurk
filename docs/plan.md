@@ -647,7 +647,9 @@ constants still in `gate.rb` - blocks the slim-down, since the extensions
 those constants should come from are written there), `wu-z6n` (the
 atomic-claim fold-in carried out of step 2), `wu-mkm` (how host-project
 orientation reaches the codebase agents, opened by step 3), and `wu-upg`
-(wurk dogfooding its own workflow, blocked on `install.rb`).
+(wurk dogfooding its own workflow - both named blockers, `install.rb` and a
+git remote, are cleared; the beads tracker, `.claude/wurk.json` manifest,
+and `bd prime` hook are live and verified end to end against this repo).
 
 The second half is the orchestration chain, and it is where the manifest's
 structural switches actually bite: `parallelism.model` (wurk:branch, and the
