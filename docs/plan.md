@@ -620,10 +620,11 @@ step means and why. Two rules keep them from drifting apart:
 
 #### Where a fresh session picks up
 
-**Start in the wurk repo, on `main`.** Steps 1-4 are done; step 5 is next and
-is entirely wurk-side.
+**Phase 2 is done; `wu-902`'s definition-of-done checks are what remains, and
+a fresh session should move on to phase 3 (`wu-4tq`) in predicator-ex once
+this bead closes.**
 
-State as of 2026-08-08:
+State as of 2026-08-09:
 
 | | Bead | |
 |---|---|---|
@@ -632,24 +633,29 @@ State as of 2026-08-08:
 | Step 2, second half | - | Done - wurk:branch, wurk:refresh, wurk:cleanup, wurk:work, wurk:next, wurk:issue, wurk:release. See "Step 2 outcome notes (second half)" |
 | Step 3 | - | Done - all eight agents in `agents/`. See "Step 3 outcome notes" |
 | Step 4 | `wu-k9j` | Done - `install.rb`. See "Step 4 outcome notes" |
-| Step 5 | `wu-em8` | **Next.** Wurk repo hygiene |
-| Steps 6-7 | `wu-off` | **Blocked** until `st-urc` merges (item 5) |
-| Step 8 | `wu-s36` | Blocked; HUMAN-GATED |
-| Step 9 | `wu-1oo` | Blocked |
-| Step 10 | `wu-cgw` | Blocked |
-| Phase 2 done | `wu-902` | The definition-of-done checks, once all of the above land |
-| st-urc merge + phase 1 smoke | `wu-b1p` | **Owed.** Needs a human; unblocks steps 6-10 |
-| Phase 3 | `wu-4tq` | Blocked on `wu-902` |
-| Phase 4 | `wu-4wl` | Blocked on `wu-4tq` |
+| Step 5 | `wu-em8` | Done - wurk repo hygiene, PR riddler/wurk#2 |
+| Steps 6-7 | `wu-off` | Done - executed in statifier-ex as `st-cex`, PR riddler/statifier-ex#81. See "Steps 6-7 outcome notes" |
+| Step 8 | `wu-s36` | Done - executed in statifier-ex as `st-6yb`, PR riddler/statifier-ex#82. See "Step 8 outcome notes" |
+| Step 9 | `wu-1oo` | Done - executed in statifier-ex as `st-gh9`, PR riddler/statifier-ex#83, together with step 10. See "Steps 9-10 outcome notes" |
+| Step 10 | `wu-cgw` | Done - executed in statifier-ex as `st-gh9`, PR riddler/statifier-ex#83, together with step 9. See "Steps 9-10 outcome notes" |
+| Phase 2 done | `wu-902` | **In progress.** The definition-of-done checks; this document's update is one of them |
+| st-urc merge + phase 1 smoke | `wu-b1p` | Done |
+| Phase 3 | `wu-4tq` | Open - **next up**, in predicator-ex |
+| Phase 4 | `wu-4wl` | Open, blocked on `wu-4tq` |
 
 Not attached to a step, but in the same backlog: `wu-gd1` (statifier
-constants still in `gate.rb` - blocks the slim-down, since the extensions
-those constants should come from are written there), `wu-z6n` (the
-atomic-claim fold-in carried out of step 2), `wu-mkm` (how host-project
-orientation reaches the codebase agents, opened by step 3), and `wu-upg`
-(wurk dogfooding its own workflow - both named blockers, `install.rb` and a
+constants that were in `gate.rb` - done, closed via three loop phases,
+PR riddler/wurk#1), `wu-z6n` (the atomic-claim fold-in carried out of
+step 2 - still open), `wu-mkm` (how host-project orientation reaches the
+codebase agents, opened by step 3 - still open), and `wu-upg` (wurk
+dogfooding its own workflow - both named blockers, `install.rb` and a
 git remote, are cleared; the beads tracker, `.claude/wurk.json` manifest,
 and `bd prime` hook are live and verified end to end against this repo).
+`wu-xoq` (gate.rb misclassifying not-installed stages as blocking, found
+while running step 8 in statifier-ex) is also done, closed as already
+delivered by `wu-gd1`'s manifest-driven skip taxonomy (`196ce55`) - no
+further wurk-side change was needed, but a consumer must still declare
+`gate.project_level_skips` in its manifest to benefit.
 
 The second half is the orchestration chain, and it is where the manifest's
 structural switches actually bite: `parallelism.model` (wurk:branch, and the
@@ -1046,25 +1052,65 @@ Steps, wurk side:
      `../../../install.rb` is the exact coupling step 1 removed from
      `plan_state_test.rb`, and a second root-level suite would fork the gate
      command. Left as a knowing gap - the verification above is manual.
-5. **`wu-em8`.** Wurk repo hygiene: update README status, CLAUDE.md gate command, and
-   docs/manifest.md (loader is now authority).
+5. **DONE (`wu-em8`, PR riddler/wurk#2).** Wurk repo hygiene: update README status,
+   CLAUDE.md gate command, and docs/manifest.md (loader is now authority).
 
 Steps, statifier side (a bead + branch there):
 
-6. **`wu-off`.** Confirm no live worktrees (item 5).
-7. **`wu-off`.** Delete ported skills, scripts, and agent files; keep `wurk.json`,
-   `.claude/wurk/*.md` extensions (write them in this step from the
-   material extracted in step 2), and settings.json.
-8. **`wu-s36`.** Gate rewiring - HUMAN-GATED (items 1-3): remove/retarget the
-   `Script tests` stage in `.quality.exs`; narrow the ADR judge scope to
-   `.claude/wurk/**`; adjust `gate.paths` in wurk.json. Present the
-   `.quality.exs` diff and the ledger entry draft to the user; the ledger
-   entry in `docs/quality-gate-changes.md` is the human's to write.
-9. **`wu-1oo`.** Write the statifier ADR recording the move (skills/scripts now live in
-   wurk; gate scope narrowed; extension surface is what remains judged).
-10. **`wu-cgw`.** Update statifier CLAUDE.md (skill names in the authority table and
-    loop paragraph), docs/workflow.md, docs/skill-automation.md, and any
-    ADR text naming old paths (cross-reference checklist).
+6. **DONE (`wu-off`, executed as `st-cex`).** Confirm no live worktrees (item 5).
+7. **DONE (`wu-off`, executed as `st-cex`, PR riddler/statifier-ex#81).** Delete
+   ported skills and agent files; keep `wurk.json`, `.claude/wurk/*.md`
+   extensions (write them in this step from the material extracted in
+   step 2), and settings.json.
+
+   **Steps 6-7 outcome notes.** `st-cex` deliberately stopped one step short
+   of the text above: it deleted the 13 ported skills and the 6 ported agent
+   files but did *not* delete `.claude/scripts/`. The plan's own phase-4
+   subagent staged that deletion, then a DMV pass found and fixed an unrelated
+   doc-citation defect (`.claude/wurk/mr.md` pointed at the wrong
+   `docs/workflow.md` line range) and needed a green gate to land the fix on -
+   but `.claude/scripts/` gone with no replacement stage makes `Script tests`
+   hard red. Rather than commit a knowingly red gate, the human chose to hand
+   the deletion to `st-6yb` (step 8) so it travels with the `.quality.exs`
+   fix and its ADR-0011 ledger entry in one commit. `st-cex` therefore closes
+   with `.claude/scripts/` still present at HEAD, by design.
+8. **DONE (`wu-s36`, executed as `st-6yb`, PR riddler/statifier-ex#82).** Gate
+   rewiring - HUMAN-GATED (items 1-3): delete `.claude/scripts/` (carried
+   over from steps 6-7, see above); remove the `Script tests` stage in
+   `.quality.exs`; narrow the ADR judge scope to `.claude/wurk/**`; adjust
+   `gate.also_gated_paths` in wurk.json. The `.quality.exs` diff and ledger
+   entry were presented to the user, who wrote the entry in
+   `docs/quality-gate-changes.md`.
+
+   **Step 8 outcome notes.** Running the rewired gate in statifier-ex surfaced
+   a real wurk-side bug, filed as `wu-xoq`: `gate.rb` classified every skipped
+   stage (`:doctor not installed`, `:gettext not installed`, `ADR judge
+   disabled in .quality.exs`) as `project_level: false`, which sets `ok:
+   false` and blocks on standing project facts that can never change run to
+   run - contradicting the same envelope's own `attested: true`. `wu-xoq`
+   closed once verified already fixed on `main` by `wu-gd1`'s manifest-driven
+   skip taxonomy (`196ce55`): no further wurk-side change was needed, but a
+   consumer must declare `gate.project_level_skips` in its own manifest to
+   get the benefit.
+9. **DONE (`wu-1oo`, executed as `st-gh9`, PR riddler/statifier-ex#83).** Write
+   the statifier ADR recording the move (skills/scripts now live in wurk;
+   gate scope narrowed; extension surface is what remains judged).
+10. **DONE (`wu-cgw`, executed as `st-gh9`, PR riddler/statifier-ex#83).** Update
+    statifier CLAUDE.md (skill names in the authority table and loop
+    paragraph), docs/workflow.md, docs/skill-automation.md, and any ADR text
+    naming old paths (cross-reference checklist).
+
+    **Steps 9-10 outcome notes.** Both steps are doc-only and both are
+    `area:docs`, so they were executed together on one statifier-ex bead and
+    branch (`st-gh9`) rather than colliding as two worktrees. Step 10's scope
+    was narrower than the text above by the time it ran: `st-cex` had already
+    cleaned CLAUDE.md, docs/workflow.md, ADR-0010, and ADR-0011 (all grep
+    clean). Only `docs/skill-automation.md` (14 hits) and
+    `docs/adr/0015-skill-mechanics-in-scripts.md` (9 hits) still named old
+    skill names or the `.claude/scripts/` path, and those were the two files
+    actually rewritten. `docs/plans/`, `docs/research/`, and
+    `docs/quality-gate-changes.md` were deliberately left alone as historical
+    record, matching the phase's own git-grep exemption.
 
 Definition of done (**`wu-902`**):
 - Wurk suite green standalone on system Ruby.
