@@ -1,8 +1,9 @@
 # Manifest schema (`.claude/wurk.json`)
 
-Schema version 1. `lib/manifest.rb` is the authority; this document follows
-it in the same commit (see CLAUDE.md). JSON, not YAML: system-Ruby stdlib
-parses it with no surprises (ADR-0006).
+Schema version 1. `lib/manifest.rb` (`skills/wurk:kit/scripts/lib/manifest.rb`)
+is the authority; this document follows it in the same commit (see CLAUDE.md's
+hard rules). JSON, not YAML: system-Ruby stdlib parses it with no surprises
+(ADR-0006).
 
 Commands are argv arrays. Paths are relative to the repo root unless noted.
 Fields marked (opt) have a default or a documented degraded behavior; the
@@ -262,6 +263,6 @@ false, `missing` always `[]`, no `git diff` shelled out for it).
 - **Command fields must be argv arrays** of strings. A shell string is a
   schema error, never something to split on whitespace.
 
-`ruby .claude/scripts/lib/manifest.rb check [--file PATH]` is the standalone
-lint. It emits the usual envelope and exits 1 on an invalid manifest; an
-unknown-key warning does not fail it.
+`ruby skills/wurk:kit/scripts/lib/manifest.rb check [--file PATH]` is the
+standalone lint. It emits the usual envelope and exits 1 on an invalid
+manifest; an unknown-key warning does not fail it.

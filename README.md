@@ -16,15 +16,21 @@ land everywhere at once.
 
 ## Status
 
-Design phase. The plan an implementing agent should follow is
-`docs/plan.md`. Nothing is installed or ported yet.
+Phase 2 (lifting the workflow into this repo) is underway and most of it is
+done: the kit's Ruby scripts layer, all 13 generic `wurk:*` skills, and the
+eight read-only research agents are ported and pass their test suite, and
+`install.rb` symlinks them into `~/.claude`. Phase 1 (parameterizing
+statifier-ex in place) landed on a statifier-ex branch but is not yet merged,
+which blocks the remaining phase 2 steps (slimming statifier-ex back down).
+Phases 3 (predicator-ex adoption) and 4 (fixative) have not started. See
+`docs/plan.md` for the phase-by-phase state.
 
-## Layout (target)
+## Layout
 
 ```
 skills/wurk:*/       generic skills (wurk:work, wurk:plan, wurk:commit, ...)
 skills/wurk:kit/     shared foundation: REFERENCE.md + the Ruby scripts layer
-agents/              the six read-only research agents
+agents/              the eight read-only research agents
 install.rb           symlinks skills + agents into ~/.claude
 docs/                plan, architecture, manifest schema, gate contract
 docs/adr/            settled decisions; cite numbers instead of re-arguing
@@ -55,5 +61,4 @@ agents are linked, not copied, so an edit in this clone is live immediately.
 ## Testing
 
 The kit's minitest suite is this repo's quality gate, standalone on system
-Ruby: `ruby skills/wurk:kit/scripts/test/run.rb` (once the kit lands in
-phase 2).
+Ruby: `ruby skills/wurk:kit/scripts/test/run.rb`.

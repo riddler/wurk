@@ -12,7 +12,7 @@ optional extension files; they do not copy skills.
 ~/repos/github/wurk (this repo, installed by symlink into ~/.claude)
   skills/wurk:*/SKILL.md      generic skills: judgment, sequencing, reporting
   skills/wurk:kit/            shared foundation: REFERENCE.md + scripts/
-  agents/*.md                 the six read-only research agents
+  agents/*.md                 the eight read-only research agents
 
 <consumer repo>/.claude/
   wurk.json                   the manifest: every project-specific constant

@@ -37,7 +37,7 @@ TodoWrite for this repo's work.
 No toolchain beyond system Ruby. The gate is the kit test suite:
 
 ```bash
-ruby skills/wurk:kit/scripts/test/run.rb   # once the kit lands (plan phase 2)
+ruby skills/wurk:kit/scripts/test/run.rb
 ```
 
 Run it before any commit that touches scripts. Doc-only changes have no gate;
