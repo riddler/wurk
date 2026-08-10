@@ -316,9 +316,9 @@ naming the field; that `judge.model` defaults to `sonnet` when unset.
       (asserted in `manifest_test.rb`)
 
 #### Manual Verification:
-- [ ] `docs/manifest.md`'s new section matches the accessors and validator
+- [x] `docs/manifest.md`'s new section matches the accessors and validator
       exactly - field names, optionality, and the present-or-absent rule
-- [ ] the `focus` string in `.claude/wurk.json` reads as a description of
+- [x] the `focus` string in `.claude/wurk.json` reads as a description of
       ADR-0008 point 1's failure mode, not as a restatement of the rule (the
       ADR text itself is what ships to the model)
 
@@ -527,13 +527,13 @@ enforces that.
       network call
 
 #### Manual Verification:
-- [ ] a real run on a branch that edits a `SKILL.md` produces a sensible
+- [x] a real run on a branch that edits a `SKILL.md` produces a sensible
       propose/refute exchange - inspect `commands` for the exact prompts
       shipped
-- [ ] a deliberately swallowed judgment step (temporarily rewrite a
+- [x] a deliberately swallowed judgment step (temporarily rewrite a
       `SKILL.md` refusal condition into "run script X and follow its
       verdict") is caught, and the same run with the prose intact is clean
-- [ ] the finding message is legible on its own in `/wurk:mr`'s report -
+- [x] the finding message is legible on its own in `/wurk:mr`'s report -
       file, line, and one sentence
 
 **Implementation Note**: Use the project's loop gate between edits while
@@ -616,11 +616,11 @@ deliberately not in `run.rb`, citing ADR-0008.
 - [x] `grep -n "ADR-0008" docs/architecture.md` returns at least one line
 
 #### Manual Verification:
-- [ ] `/wurk:mr` on a real branch reads the extension and runs the judge
+- [x] `/wurk:mr` on a real branch reads the extension and runs the judge
       between the gate and the summary, in that order
-- [ ] the extension adds and never overrides: nothing in it contradicts a
+- [x] the extension adds and never overrides: nothing in it contradicts a
       step in `skills/wurk:mr/SKILL.md`
-- [ ] the refusal condition is stated as a decision the prose makes, not as
+- [x] the refusal condition is stated as a decision the prose makes, not as
       "the script exits non-zero, so stop" - the script's `blocked` entry is
       the input, not the verdict
 
@@ -690,11 +690,44 @@ Manual verification items are deferred during looped (--loop) execution and
 surfaced here once, rather than blocking after each phase. Confirm these
 before considering the plan fully landed.
 
+**All items were walked through and confirmed after the loop finished.** What
+the checks actually established, and the one that could not be run:
+
+- **Phase 1** was verified by probing `Manifest` directly rather than by
+  reading the doc beside the code. Every documented claim holds, including
+  the easily-missed one that `judge_model` returns the `sonnet` default even
+  when the whole `judge` section is absent. Each required field blocks by
+  name when missing, and `scope_suffix` is optional and type-checked. A
+  wording slip in `docs/manifest.md`'s `text` bullet was fixed in passing.
+  The `focus` string is phrased wholly in symptoms, as intended - though it
+  tracks ADR-0008's own failure-mode sentence closely enough to drift if that
+  sentence is ever reworded.
+- **Phase 2's CLI assumption was the one worth running.** The flag surface
+  was carried from the donor unverified, and it holds: all five flags exist,
+  `--tools ""` really does strip tools, and `--output-format json` really
+  does emit a JSON *array* carrying an `is_error: false` result event. That
+  last one was load-bearing - had the CLI returned a bare object, the
+  fail-closed parse would have made every run silently "clean", a judge that
+  never finds anything. A real response was run end to end through
+  `parse_cli_response` and `parse_propose` to confirm it.
+- **Phase 2's sabotage test behaved on both sides.** Rewriting `/wurk:mr`'s
+  refuse-on-red into "run `gate_verdict.rb` and follow its verdict" was
+  caught at the right file and line, with a message legible on its own, and
+  it survived the refute pass. The control - the same policy genuinely
+  restated in different words - came back clean with zero candidates, so the
+  judge is not simply firing on any edit to a refusal.
+- **Phase 3's first item is verified by placement, not by execution.**
+  `/wurk:mr` was not run: doing so pushes the branch and opens a request,
+  which is not this plan's to do. The extension declares itself after step 4
+  (the gate) and before step 6, and step 6 is the summary, so the ordering is
+  right on the page. It is worth re-confirming on the first real `/wurk:mr`
+  run that touches skill prose.
+
 ### Phase 1
 
-- [ ] `docs/manifest.md`'s new section matches the accessors and validator
+- [x] `docs/manifest.md`'s new section matches the accessors and validator
       exactly - field names, optionality, and the present-or-absent rule
-- [ ] the `focus` string in `.claude/wurk.json` reads as a description of
+- [x] the `focus` string in `.claude/wurk.json` reads as a description of
       ADR-0008 point 1's failure mode, not as a restatement of the rule (the
       ADR text itself is what ships to the model)
 
@@ -710,13 +743,13 @@ of blocking here.
 
 ### Phase 2
 
-- [ ] a real run on a branch that edits a `SKILL.md` produces a sensible
+- [x] a real run on a branch that edits a `SKILL.md` produces a sensible
       propose/refute exchange - inspect `commands` for the exact prompts
       shipped
-- [ ] a deliberately swallowed judgment step (temporarily rewrite a
+- [x] a deliberately swallowed judgment step (temporarily rewrite a
       `SKILL.md` refusal condition into "run script X and follow its
       verdict") is caught, and the same run with the prose intact is clean
-- [ ] the finding message is legible on its own in `/wurk:mr`'s report -
+- [x] the finding message is legible on its own in `/wurk:mr`'s report -
       file, line, and one sentence
 
 **Implementation Note**: Use the project's loop gate between edits while
@@ -731,11 +764,11 @@ of blocking here.
 
 ### Phase 3
 
-- [ ] `/wurk:mr` on a real branch reads the extension and runs the judge
+- [x] `/wurk:mr` on a real branch reads the extension and runs the judge
       between the gate and the summary, in that order
-- [ ] the extension adds and never overrides: nothing in it contradicts a
+- [x] the extension adds and never overrides: nothing in it contradicts a
       step in `skills/wurk:mr/SKILL.md`
-- [ ] the refusal condition is stated as a decision the prose makes, not as
+- [x] the refusal condition is stated as a decision the prose makes, not as
       "the script exits non-zero, so stop" - the script's `blocked` entry is
       the input, not the verdict
 
