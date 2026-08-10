@@ -99,6 +99,20 @@ class ManifestValidationTest < Minitest::Test
     assert_match(/gate\.project_level_skips entry "\[" is not a valid regular expression/, m.errors.join("\n"))
   end
 
+  # sabotage: drop gate.not_applicable_skips from REGEX_LIST_FIELDS -> red
+  def test_non_array_not_applicable_skips_blocks_naming_the_field
+    m = ManifestFixtures.load_with("valid", "gate" => { "not_applicable_skips" => "no .po files" })
+    refute m.valid?
+    assert_match(/gate\.not_applicable_skips must be a list of regex source strings/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop gate.not_applicable_skips from REGEX_LIST_FIELDS -> red
+  def test_uncompilable_not_applicable_skip_blocks_naming_the_entry
+    m = ManifestFixtures.load_with("valid", "gate" => { "not_applicable_skips" => ["no .po files", "["] })
+    refute m.valid?
+    assert_match(/gate\.not_applicable_skips entry "\[" is not a valid regular expression/, m.errors.join("\n"))
+  end
+
   # sabotage: drop the roots check in validate_sabotage -> red
   def test_sabotage_missing_test_roots_blocks
     m = ManifestFixtures.load_with(
@@ -318,6 +332,19 @@ class ManifestAccessorTest < Minitest::Test
   # absent -> red
   def test_project_level_skip_re_is_nil_when_absent
     assert_nil @m.project_level_skip_re
+  end
+
+  # sabotage: return a match-anything regex instead of nil when the key is
+  # absent -> red
+  def test_not_applicable_skip_re_is_nil_when_absent
+    assert_nil @m.not_applicable_skip_re
+  end
+
+  # sabotage: drop gate.not_applicable_skips from REGEX_LIST_FIELDS -> red
+  def test_not_applicable_skip_re_matches_a_declared_source_when_present
+    m = ManifestFixtures.load_with("valid", "gate" => { "not_applicable_skips" => ["no \\.po files"] })
+    assert_instance_of Regexp, m.not_applicable_skip_re
+    assert_match m.not_applicable_skip_re, "no .po files found"
   end
 
   # sabotage: make sabotage? return true when the section is absent -> red
