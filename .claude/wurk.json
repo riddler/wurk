@@ -41,6 +41,10 @@
     "model": "opus"
   },
 
+  "models": {
+    "direction": "fable"
+  },
+
   "artifacts": {
     "plans": "docs/plans",
     "research": "docs/research"
