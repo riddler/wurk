@@ -290,6 +290,53 @@ surface; every command is manifest data. The most constrained script here.
   `gate.rb` that writes `docs/quality-gate-changes.md` - `test/contract_test.rb`
   asserts that mechanically over every file under `scripts/`.
 
+## `judge.rb`: the merge-time prose judge
+
+The mechanism ADR-0008 decided on: a merge-time model judge over
+judgment-bearing prose, run at the merge seam (a consumer's own extension
+file, never inside `run.rb`) rather than in the required gate. **The
+registry is manifest data** - `judge.model` and `judge.registry` (see
+`docs/manifest.md`) - so `judge.rb` itself names no scope, no judged text,
+and no violation rule; a consumer that declares nothing simply never runs
+it. Each registry entry states a `scope_prefix` (and optional
+`scope_suffix`), a judged `text` path, and a `focus` string describing what
+the propose pass should look for.
+
+- **Collection, in order:** the registry check comes first, before any
+  shell-out at all - a consumer with no `judge` section reaches its
+  `no_registry` skip without spawning a process. Then CLI presence
+  (`which claude`), base-ref resolution (`--base`, `origin/main`, `main`,
+  first to resolve wins), `git merge-base`, and a `-U0` diff against it,
+  split into per-file chunks and scoped per registry entry.
+- **One propose call, one independent refute call, per candidate.** The
+  propose pass proposes violations from the scoped hunks and the judged
+  text; the refute pass sees the identical hunks (rendered once, shared by
+  both prompts) and is asked to independently try to refute each candidate,
+  grounded only in the judged text, the claim, or the hunks - "something
+  elsewhere in the codebase might compensate" is a hypothesis, not grounds.
+  Only survivors are reported.
+- **Fail-closed parsing throughout.** An unparseable or wrongly-shaped
+  propose response yields no candidates; an unparseable or ambiguous refute
+  response yields "not a violation" - never an exception. A CLI response is
+  read only from a `"type": "result", "is_error": false` stream event;
+  anything else is `nil`.
+- **A surviving finding is `blocked` with `needs: "human"`, never a
+  warning.** The script cannot resolve it - `blocked` is the envelope's way
+  of saying so. What to *do* about a finding (refuse the request, report it,
+  stop) is stated in the skill prose that runs this script, not decided
+  here.
+- **A skip is reported with a named reason, never a silent pass or fail:**
+  `no_cli`, `no_base_ref`, `no_scoped_changes`, `no_registry`. A registry
+  entry whose judged `text` file does not exist is a configuration error,
+  not a skip - it `block!`s as `judge_text_missing`.
+- **No test in this suite makes a real model call.** The `claude` CLI is
+  invoked only through `Sh.run`, exactly so `FakeSh`'s unauthorized-command
+  exception is the backstop: a test that forgot to register a `["claude"]`
+  expectation fails loudly rather than spending. `test/judge_test.rb` drives
+  every case - scoping, prompt assembly, the survivor and refuted paths, every
+  fail-closed parse branch, every skip reason - against the `judge` fixture
+  manifest, never against a repo's real `.claude/wurk.json`.
+
 ## Writing a new script
 
 1. Require `lib/envelope`, `lib/sh`, and `lib/cli` - plus `lib/manifest` if

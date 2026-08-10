@@ -510,19 +510,19 @@ enforces that.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `ruby skills/wurk:kit/scripts/test/run.rb` passes
-- [ ] the contract test's shebang/executable-bit check covers `judge.rb`
+- [x] `ruby skills/wurk:kit/scripts/test/run.rb` passes
+- [x] the contract test's shebang/executable-bit check covers `judge.rb`
       (it globs `scripts/*.rb`; verify by `test -x skills/wurk:kit/scripts/judge.rb`)
-- [ ] `ruby skills/wurk:kit/scripts/judge.rb --dry-run` exits 0, emits a
+- [x] `ruby skills/wurk:kit/scripts/judge.rb --dry-run` exits 0, emits a
       single JSON envelope with `data.status: "dry_run"`, and lists a
       `claude` command in `commands`
-- [ ] `grep -c Open3 skills/wurk:kit/scripts/judge.rb` returns 0
-- [ ] `claude --help` lists `-p`, `--output-format`, `--model`, `--tools`,
+- [x] `grep -c Open3 skills/wurk:kit/scripts/judge.rb` returns 0
+- [x] `claude --help` lists `-p`, `--output-format`, `--model`, `--tools`,
       and `--strict-mcp-config` - the flag surface above is taken from the
       donor implementation and must be checked against the installed CLI
       before the argv is fixed; if a flag has been renamed, the replacement
       goes in the same commit
-- [ ] `time ruby skills/wurk:kit/scripts/test/run.rb` reports a real time
+- [x] `time ruby skills/wurk:kit/scripts/test/run.rb` reports a real time
       under 5 seconds - the mechanical evidence that no test waits on a
       network call
 
@@ -697,6 +697,27 @@ before considering the plan fully landed.
 - [ ] the `focus` string in `.claude/wurk.json` reads as a description of
       ADR-0008 point 1's failure mode, not as a restatement of the rule (the
       ADR text itself is what ships to the model)
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 2
+
+- [ ] a real run on a branch that edits a `SKILL.md` produces a sensible
+      propose/refute exchange - inspect `commands` for the exact prompts
+      shipped
+- [ ] a deliberately swallowed judgment step (temporarily rewrite a
+      `SKILL.md` refusal condition into "run script X and follow its
+      verdict") is caught, and the same run with the prose intact is clean
+- [ ] the finding message is legible on its own in `/wurk:mr`'s report -
+      file, line, and one sentence
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
