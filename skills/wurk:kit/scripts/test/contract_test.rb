@@ -167,6 +167,32 @@ module Contract
     end
     hits
   end
+
+  # A branch name spliced into a git ref on a code line. The branch every
+  # comparison is made against is manifest data (repo.default_branch, ADR-0004);
+  # a script that spells it is a constant that belongs in the manifest.
+  #
+  # Ref-shaped spellings only, deliberately. "main" as a bare word is also
+  # git-worktree vocabulary for the primary working tree - repo_state.rb's
+  # `checkout` field is literally the string "main" meaning "not a worktree",
+  # and Manifest.main_checkout has nothing to do with branches. A guard that
+  # fired on those would cost a rename for no rule violation, the same trap
+  # the "elixir gate config" pattern above was tightened to avoid.
+  HARDCODED_REFS = {
+    "three-dot diff base" => %r{\b(?:main|master|trunk|develop)\.\.\.?HEAD},
+    "remote default branch" => %r{\borigin/(?:main|master|trunk|develop)\b},
+    "refs/heads default branch" => %r{\brefs/heads/(?:main|master|trunk|develop)\b}
+  }.freeze
+
+  # Returns [[lineno, label], ...] for every ref-shaped hardcoded default
+  # branch found in content.
+  def hardcoded_default_branch(content)
+    hits = []
+    each_code_line(content) do |code, lineno|
+      HARDCODED_REFS.each { |label, re| hits << [lineno, label] if code =~ re }
+    end
+    hits
+  end
 end
 
 class ContractRulesTest < Minitest::Test
@@ -257,6 +283,27 @@ class ContractRulesTest < Minitest::Test
     hits = Contract.consumer_vocabulary(%(# statifier's scion/scxml corpora and mix quality are exempt here\n))
     assert_empty hits
   end
+
+  def test_hardcoded_default_branch_ignores_comments
+    hits = Contract.hardcoded_default_branch(%(# this mentions origin/main only in prose\n))
+    assert_empty hits
+  end
+
+  def test_hardcoded_default_branch_detected_on_code_line
+    assert_equal [[1, "remote default branch"]],
+                 Contract.hardcoded_default_branch(%(upstream = "origin/main"\n))
+    assert_equal [[1, "three-dot diff base"]],
+                 Contract.hardcoded_default_branch(%(Sh.run(["git", "diff", "main...HEAD"])\n))
+    assert_equal [[1, "refs/heads default branch"]],
+                 Contract.hardcoded_default_branch(%(ref = "refs/heads/main"\n))
+  end
+
+  # Bare "main" as worktree vocabulary is not a branch reference and must
+  # not be flagged - firing on it would cost a rename for no rule violation.
+  def test_hardcoded_default_branch_ignores_worktree_vocabulary
+    assert_empty Contract.hardcoded_default_branch(%(Manifest.main_checkout\n))
+    assert_empty Contract.hardcoded_default_branch(%(checkout = is_main ? "main" : "worktree"\n))
+  end
 end
 
 # Applies the Contract rules to the real files under .claude/scripts/, so a
@@ -342,6 +389,18 @@ class ContractTest < Minitest::Test
                  "move the value into the manifest (lib/manifest.rb) and document it in docs/manifest.md"
   end
 
+  def test_no_hardcoded_default_branch_in_kit_source
+    offenders = []
+    non_test_files.each do |file|
+      Contract.hardcoded_default_branch(File.read(file)).each do |(lineno, label)|
+        offenders << "#{file}:#{lineno} (#{label})"
+      end
+    end
+    assert_empty offenders,
+                 "hardcoded default-branch ref found outside comments: #{offenders.join(', ')} - " \
+                 "build the ref from Manifest#default_branch / #remote_default_branch instead"
+  end
+
   # A meta-check on the guardrail itself: prove the scan is not vacuously
   # green just because no scripts exist yet in Phase 1. A fixture file with a
   # violation, dropped into a temp copy of the tree shape, must be caught.
@@ -351,6 +410,7 @@ class ContractTest < Minitest::Test
       File.write(planted,
                  %(Sh.run(["git", "push", "origin", "main"])\nFile.write(".credo.exs", weakened)\n) \
                  "EXEMPT = [\"test/scion_tests/\"]\n")
+      File.write(planted, %(Sh.run(["git", "diff", "main...HEAD"])\n), mode: "a")
 
       content = File.read(planted)
 
@@ -359,6 +419,8 @@ class ContractTest < Minitest::Test
                    "the contract scan failed to catch a planted gate-config write"
       refute_empty Contract.consumer_vocabulary(content),
                    "the contract scan failed to catch a planted consumer-vocabulary constant"
+      refute_empty Contract.hardcoded_default_branch(content),
+                   "the contract scan failed to catch a planted hardcoded default-branch ref"
     end
   end
 
