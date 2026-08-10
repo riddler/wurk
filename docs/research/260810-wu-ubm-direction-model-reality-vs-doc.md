@@ -35,9 +35,9 @@ intent from phase 2 step 2 of the migration, not something either manifest
 ever carried. `docs/manifest.md` has been corrected to describe what the two
 repos' manifests actually contain today (wu-ubm).
 
-Whether statifier-ex *should* set `fable` explicitly is a separate, open
-question that this note exists to record - it is not something this repo can
-decide on statifier-ex's behalf.
+Whether statifier-ex *should* set `fable` explicitly is now settled: yes.
+The change is filed in statifier-ex's own tracker as st-4i0 - it is not
+something this repo makes true on statifier-ex's behalf.
 
 ## Historical Context
 
@@ -57,9 +57,10 @@ statifier.
 
 ## Open Questions
 
-Does statifier-ex want `models.direction = fable` set explicitly in its own
-`.claude/wurk.json`, or has that intent lapsed since phase 2 step 2 and
-`opus` (the default it has been running on the whole time) is in fact fine?
-If the answer is that `fable` is still wanted, a follow-up bead belongs in
-statifier-ex's own tracker to add the one-line manifest field - not in wurk,
-and not filed by this session.
+Resolved: yes, statifier-ex still wants `models.direction = fable` set
+explicitly in its own `.claude/wurk.json` - the phase 2 step 2 intent did
+not lapse. The change is filed in statifier-ex's own tracker as st-4i0
+("Sets models.direction to fable in wurk.json"); wurk does not make it
+true, statifier-ex's own commit does. Once st-4i0 lands, `docs/manifest.md`'s
+per-repo table needs a follow-up edit to change the statifier-ex column from
+`opus (default)` back to `fable`.
