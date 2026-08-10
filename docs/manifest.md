@@ -69,7 +69,10 @@ defaults are listed under "Defaults" below.
 
   "models": {                         // (opt) stage models that differ per project
     "direction": "fable"              // (opt) the ADR/direction tier wurk:work
-                                      // dispatches; default "opus"
+                                      // dispatches; default "opus". Illustrative
+                                      // here - statifier-ex's own manifest omits
+                                      // this section and runs on the default; see
+                                      // "Per-repo starting values" below.
   },
 
   "artifacts": {
@@ -236,6 +239,12 @@ with the new worktree's absolute path. No other field templates.
 
 ## Per-repo starting values
 
+This table is about downstream consumers of the kit, not wurk itself - wurk
+develops the kit rather than consuming it for a separate codebase, so it does
+not get a column here. Its own `models.direction` and `judge` values are
+called out in the paragraph after the table instead, the same way `judge`
+is already handled there.
+
 | Field | statifier-ex | predicator-ex | fixative |
 |---|---|---|---|
 | beads.prefix | `st` | `px` | (uses GL-NN branch tags; bead prefix TBD) |
@@ -248,15 +257,25 @@ with the new worktree's absolute path. No other field templates.
 | gate.sabotage | yes | none | none |
 | parallelism.model | worktree-per-issue | worktree-per-issue | branch-in-place |
 | tmux.session | statifier-ex | predicator-ex | (renames current window) |
-| models.direction | fable | opus (default) | opus (default) |
+| models.direction | opus (default) | opus (default) | opus (default) |
 | artifacts.plans | docs/plans | docs/plans | thoughts/shared/plans |
 | commits.style | s-form | s-form | conventional + package map |
 | changelog.mode | fragments | keep-a-changelog (direct) | keep-a-changelog per package |
 | release | null (2.0.0-dev) | hex recipe | xcode-app recipe |
 
+`models.direction` was added to the schema because statifier-ex and
+predicator-ex were observed to disagree on it (statifier wanted Fable,
+predicator Opus). That was the intent; neither manifest has ever set the
+field, so both run on the loader's `opus` default today. Whether statifier-ex
+should still set `fable` explicitly is an open question, tracked in
+`docs/research/260810-wu-ubm-direction-model-reality-vs-doc.md` (wu-ubm) -
+this table records what the manifests actually contain, not the lapsed
+intent.
+
 None of the three downstream consumers configures `judge`; wurk itself is
 the only repo configuring it today, over its own `skills/**/SKILL.md`, per
-ADR-0008.
+ADR-0008. wurk's own `.claude/wurk.json` also sets `models.direction` to
+`fable` explicitly - the one manifest in this project that does.
 
 ## Resolution
 
