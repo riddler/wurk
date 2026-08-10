@@ -422,17 +422,17 @@ make it red, per the convention throughout `test/` (e.g. `gate_test.rb:126`).
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] `grep -nE 'main\.\.\.HEAD' skills/wurk:kit/scripts/gate.rb skills/wurk:kit/scripts/repo_state.rb skills/wurk:kit/scripts/bead.rb`
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] `grep -nE 'main\.\.\.HEAD' skills/wurk:kit/scripts/gate.rb skills/wurk:kit/scripts/repo_state.rb skills/wurk:kit/scripts/bead.rb`
       returns no matches
-- [ ] `grep -rn 'no_main_ref' skills/wurk:kit/scripts` returns no matches
-- [ ] `ruby skills/wurk:kit/scripts/lib/manifest.rb check` in this repo exits 0
+- [x] `grep -rn 'no_main_ref' skills/wurk:kit/scripts` returns no matches
+- [x] `ruby skills/wurk:kit/scripts/lib/manifest.rb check` in this repo exits 0
       with `data.valid` true and no `unknown_key` warning
-- [ ] A manifest declaring `"repo": {"default_branch": "-x"}` is rejected:
+- [x] A manifest declaring `"repo": {"default_branch": "-x"}` is rejected:
       write it to a scratch file and confirm
       `ruby skills/wurk:kit/scripts/lib/manifest.rb check --file <scratch>`
       exits 1 with a message naming `repo.default_branch`
-- [ ] `docs/manifest.md` documents `repo.default_branch` in the same commit as
+- [x] `docs/manifest.md` documents `repo.default_branch` in the same commit as
       the `lib/manifest.rb` change (`git show --stat` on the phase commit lists
       both)
 
@@ -831,3 +831,34 @@ in the loop, and what would change it.
    a hit. If a false positive does appear, drop the extra names and keep
    `main|master` - the guard's job is to catch a relapse, and a relapse will
    spell `main`.
+
+## Deferred Manual Verification
+
+Manual verification items are deferred during looped (--loop) execution and
+surfaced here once, rather than blocking after each phase. Confirm these
+before considering the plan fully landed.
+
+### Phase 1
+
+- [ ] `ruby skills/wurk:kit/scripts/repo_state.rb` in this worktree reports the
+      same `changed_files`, `touches_build` and `plan_docs` it did before the
+      change, and now also `data.default_branch: "main"`
+- [ ] The rewritten `repo_state.rb:114-116` comment still makes the "same rule
+      as /commit Step 0 and /wurk:mr" point, so the three sites stay
+      recognizably one rule
+- [ ] `docs/manifest.md`'s new subsection tells a consumer with a `master`
+      default branch exactly which behaviors change when they set the field
+- [ ] Before merging, grep the sibling consumer checkouts (statifier-ex,
+      predicator-ex) for `no_main_ref` - `grep -rn no_main_ref
+      <checkout>/.claude`. If any extension file keys on the old warning code,
+      revert the rename and change only the message text (Open Question 2).
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution, pause
+here for the human to confirm the manual testing before moving to the next
+phase. In looped (`--loop`) execution, this phase's Automated Verification
+gates advancement automatically (via `/wurk:commit --auto`), and Manual
+Verification items are deferred and surfaced once at the end instead of
+blocking here.
+
+---

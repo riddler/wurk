@@ -121,6 +121,81 @@ class GateTest < Minitest::Test
     end
   end
 
+  # sabotage: read a hardcoded "main...HEAD" in gate_applicable? instead of
+  # manifest.default_branch -> red (FakeSh::UnexpectedCommand: no stub is
+  # registered for "main...HEAD" here, only for "trunk...HEAD")
+  def test_gate_applicable_diff_uses_the_manifests_default_branch
+    other = manifest_with("gate_tier1", "repo" => { "default_branch" => "trunk" })
+
+    Manifest.reset!
+    with_manifest(other) do
+      Dir.mktmpdir do |dir|
+        Dir.chdir(dir) do
+          @fake.expect(%w[git diff --name-only trunk...HEAD], out: "lib/acme/foo.ex\n")
+          @fake.expect(%w[git status --porcelain], out: "")
+          @fake.expect(
+            %w[git diff trunk...HEAD -U0 -- test/ :!test/scion_tests/ :!test/scxml_tests/],
+            out: ""
+          )
+          @fake.expect(%w[make report], out: JSON.generate(GREEN_REPORT))
+          @fake.expect(%w[make attest], out: "Full gate green: scope all, no profile, 2 stages considered.\n")
+
+          code, env = run_gate
+
+          assert_equal 0, code
+          assert_equal true, env["ok"]
+          assert_equal true, env["data"]["applicable"]
+        end
+      end
+    end
+  end
+
+  # sabotage: read a hardcoded "main...HEAD" in sabotage_diff_args instead of
+  # manifest.default_branch -> red (FakeSh::UnexpectedCommand: no stub is
+  # registered for the "main...HEAD" pathspec)
+  def test_sabotage_pathspec_uses_the_manifests_default_branch
+    other = manifest_with("gate_tier1", "repo" => { "default_branch" => "trunk" })
+
+    Manifest.reset!
+    with_manifest(other) do
+      Dir.mktmpdir do |dir|
+        Dir.chdir(dir) do
+          @fake.expect(%w[git diff --name-only trunk...HEAD], out: "docs/plans/x.md\n")
+          @fake.expect(%w[git status --porcelain], out: "")
+          @fake.expect(
+            %w[git diff trunk...HEAD -U0 -- test/ :!test/scion_tests/ :!test/scxml_tests/],
+            out: "diff --git a/test/foo_test.exs b/test/foo_test.exs\n" \
+                 "--- a/test/foo_test.exs\n+++ b/test/foo_test.exs\n@@ -0,0 +1,1 @@\n" \
+                 "+  test \"missing its note\" do\n"
+          )
+
+          _code, env = run_gate
+
+          assert_equal true, env["data"]["sabotage"]["enabled"]
+          assert_equal 1, env["data"]["sabotage"]["missing"].length
+          assert_equal "sabotage_note_missing", env["warnings"].first["code"]
+        end
+      end
+    end
+  end
+
+  # sabotage: keep emitting the pre-rename warning code once the base branch
+  # became configurable -> red
+  def test_no_base_ref_warning_when_the_diff_fails
+    in_tmp_cwd do
+      @fake.expect(%w[git diff --name-only main...HEAD], exitstatus: 1, err: "fatal: bad revision\n")
+      @fake.expect(%w[git status --porcelain], out: "")
+      expect_no_sabotage_diff
+
+      code, env = run_gate
+
+      assert_equal 0, code
+      assert_equal true, env["ok"]
+      assert_equal false, env["data"]["applicable"]
+      assert env["warnings"].any? { |w| w["code"] == "no_base_ref" }
+    end
+  end
+
   # A skip the gate hit *on this run* blocks: it was asked to measure
   # something and could not. See gate.rb rule 1.
   # sabotage: make PROJECT_LEVEL_SKIP_RE match /./ -> red

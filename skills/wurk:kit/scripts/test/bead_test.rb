@@ -456,6 +456,27 @@ class BeadCliTest < Minitest::Test
     assert env["warnings"].any? { |w| w["code"] == "bead_unavailable" }
   end
 
+  # sabotage: read a hardcoded "main...HEAD" in resolve_plan_doc_bead instead
+  # of manifest.default_branch -> red (FakeSh::UnexpectedCommand: no stub for
+  # "main...HEAD" here, only "trunk...HEAD")
+  def test_resolve_with_trunk_override_diffs_against_trunk
+    other = manifest_with("valid", "repo" => { "default_branch" => "trunk" })
+
+    @fake.expect(%w[git diff trunk...HEAD --name-only], out: "docs/plans/260806-zz-hzf-skill-mechanics-scripts.md\n")
+    @fake.expect(%w[git branch --show-current], out: "zz-oth-some-other-branch\n")
+    @fake.expect(%w[bd show zz-hzf --json], out: JSON.generate([{ "id" => "zz-hzf", "status" => "in_progress" }]))
+    @fake.expect(%w[bd show zz-oth --json], out: JSON.generate([{ "id" => "zz-oth", "status" => "open" }]))
+
+    io = StringIO.new
+    code = nil
+    with_manifest(other) { code = Bead.run(%w[resolve], io: io) }
+    env = JSON.parse(io.string)
+
+    assert_equal 0, code
+    assert_equal "zz-hzf", env["data"]["resolved"]["id"]
+    assert_equal "plan_doc", env["data"]["resolved"]["strategy"]
+  end
+
   # --- no close subcommand ------------------------------------------------
 
   def test_close_is_not_a_reachable_subcommand

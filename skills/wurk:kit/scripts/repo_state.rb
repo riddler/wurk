@@ -111,15 +111,16 @@ module RepoState
         env.warn(code: "no_upstream", message: "branch #{branch.inspect} has no upstream tracking branch")
       end
 
-      # Three-dot diff against the merge base with local `main`, matching
-      # /commit Step 0 and /merge-request's gate step exactly - see
-      # lib/gate_paths.rb.
-      diff_res = Sh.run(%w[git diff --name-only main...HEAD], envelope: env)
+      # Three-dot diff against the merge base with the manifest's default
+      # branch, matching /commit Step 0 and /merge-request's gate step
+      # exactly - see lib/gate_paths.rb.
+      base = manifest.default_branch
+      diff_res = Sh.run(["git", "diff", "--name-only", "#{base}...HEAD"], envelope: env)
       diff_files =
         if diff_res.success?
           diff_res.out.to_s.each_line.map(&:strip).reject(&:empty?)
         else
-          env.warn(code: "no_main_ref", message: "could not diff against local main ref")
+          env.warn(code: "no_base_ref", message: "could not diff against local #{base}")
           []
         end
 
@@ -134,6 +135,7 @@ module RepoState
       env.data[:branch] = branch
       env.data[:branch_bead] = branch_bead
       env.data[:is_main] = is_main
+      env.data[:default_branch] = manifest.default_branch
       env.data[:dirty] = dirty
       env.data[:dirty_files] = dirty_files
       env.data[:upstream] = upstream

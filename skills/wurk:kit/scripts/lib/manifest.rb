@@ -63,7 +63,8 @@ class Manifest
   # The known key surface, for the unknown-key warning. Nested sections list
   # their own keys; a section absent from this map is not validated further.
   KNOWN = {
-    nil => %w[wurk beads forge gate parallelism tmux models artifacts commits changelog release judge],
+    nil => %w[wurk repo beads forge gate parallelism tmux models artifacts commits changelog release judge],
+    "repo" => %w[default_branch],
     "beads" => %w[prefix topology areas],
     "beads.areas" => %w[labels lands_alone always_batchable],
     "forge" => %w[kind labels],
@@ -81,6 +82,7 @@ class Manifest
   }.freeze
 
   DEFAULTS = {
+    "repo.default_branch" => "main",
     "beads.topology" => "beads",
     "commits.style" => "s-form",
     "commits.subject_under" => 50,
@@ -194,6 +196,19 @@ class Manifest
   end
 
   # --- typed accessors ----------------------------------------------------
+
+  # The branch every "what did this branch change" comparison is made
+  # against. Defaults to "main" - git's own convention, stated once here
+  # rather than spelled into each script's argv.
+  def default_branch
+    fetch("repo.default_branch")
+  end
+
+  # The same branch on the shared remote. The remote name is not configurable
+  # (see the plan's What We're NOT Doing); only the branch is.
+  def remote_default_branch
+    "origin/#{default_branch}"
+  end
 
   def bead_prefix
     fetch("beads.prefix")
@@ -466,9 +481,27 @@ class Manifest
     validate_enums
     validate_commands
     validate_regex_lists
+    validate_default_branch
     validate_sabotage
     validate_judge
     collect_unknown_keys(raw, nil)
+  end
+
+  # Git ref-name shape, deliberately narrower than git-check-ref-format(1):
+  # the value is spliced into an argv git already interprets positionally, so
+  # a leading "-" would become an option rather than a ref. Slashes are
+  # allowed (release/next is a legitimate default branch); whitespace, "..",
+  # "~", "^", ":" and a leading "-" are not.
+  DEFAULT_BRANCH_RE = %r{\A[A-Za-z0-9][A-Za-z0-9._/-]*\z}
+
+  # validate_default_branch needs no nil guard: fetch applies the default, so
+  # the value is only ever absent-and-defaulted or explicitly wrong.
+  def validate_default_branch
+    value = fetch("repo.default_branch")
+    return if value.is_a?(String) && value.match?(DEFAULT_BRANCH_RE) && !value.include?("..")
+
+    errors << "#{path}: repo.default_branch must be a git branch name " \
+              "(letters, digits, '.', '_', '/', '-'; no leading '-'), got #{value.inspect}"
   end
 
   # Present-or-absent, never half-present: a section that declares roots but

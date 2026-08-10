@@ -228,6 +228,51 @@ class ManifestValidationTest < Minitest::Test
     refute m.valid?
     assert_match(/judge\.model must be a non-empty string/, m.errors.join("\n"))
   end
+
+  # sabotage: drop the DEFAULT_BRANCH_RE type check, accept a non-string -> red
+  def test_default_branch_non_string_blocks
+    m = ManifestFixtures.load_with("valid", "repo" => { "default_branch" => 3 })
+    refute m.valid?
+    assert_match(/repo\.default_branch must be a git branch name/, m.errors.join("\n"))
+  end
+
+  # sabotage: let DEFAULT_BRANCH_RE match the empty string -> red
+  def test_default_branch_empty_string_blocks
+    m = ManifestFixtures.load_with("valid", "repo" => { "default_branch" => "" })
+    refute m.valid?
+    assert_match(/repo\.default_branch must be a git branch name/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the leading-character class from DEFAULT_BRANCH_RE, letting
+  # a leading "-" through -> red
+  def test_default_branch_leading_dash_blocks
+    m = ManifestFixtures.load_with("valid", "repo" => { "default_branch" => "--upload-pack=x" })
+    refute m.valid?
+    assert_match(/repo\.default_branch must be a git branch name/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the explicit ".." check in validate_default_branch -> red
+  def test_default_branch_double_dot_blocks
+    m = ManifestFixtures.load_with("valid", "repo" => { "default_branch" => "main..evil" })
+    refute m.valid?
+    assert_match(/repo\.default_branch must be a git branch name/, m.errors.join("\n"))
+  end
+
+  # sabotage: let DEFAULT_BRANCH_RE accept whitespace -> red
+  def test_default_branch_whitespace_blocks
+    m = ManifestFixtures.load_with("valid", "repo" => { "default_branch" => "ma in" })
+    refute m.valid?
+    assert_match(/repo\.default_branch must be a git branch name/, m.errors.join("\n"))
+  end
+
+  # sabotage: forget to add "repo" to KNOWN["repo"] (or KNOWN[nil]) -> red,
+  # since an unrecognized-section key would then be silently unvalidated
+  # rather than warned on
+  def test_unknown_key_under_repo_warns
+    m = ManifestFixtures.load_with("valid", "repo" => { "default_branch" => "main", "bogus" => 1 })
+    assert m.valid?, "an unknown key must not invalidate the manifest: #{m.errors.inspect}"
+    assert_match(/unknown key repo\.bogus/, m.warnings.join("\n"))
+  end
 end
 
 class ManifestAccessorTest < Minitest::Test
@@ -292,6 +337,30 @@ class ManifestAccessorTest < Minitest::Test
   # sabotage: drop the judge.model DEFAULTS entry -> red
   def test_judge_model_defaults_to_sonnet_when_unset
     assert_equal "sonnet", @m.judge_model
+  end
+
+  # sabotage: drop the "repo.default_branch" => "main" DEFAULTS entry -> red
+  def test_default_branch_defaults_to_main_when_section_absent
+    assert_equal "main", @m.default_branch
+  end
+
+  # sabotage: make fetch skip the DEFAULTS fallback for an explicit null -> red
+  def test_default_branch_defaults_to_main_when_explicitly_null
+    m = ManifestFixtures.load_with("valid", "repo" => { "default_branch" => nil })
+    assert_equal "main", m.default_branch
+  end
+
+  # sabotage: read "repo.branch" or some other key instead of
+  # "repo.default_branch" -> red
+  def test_default_branch_reads_the_declared_value
+    m = ManifestFixtures.load_with("valid", "repo" => { "default_branch" => "trunk" })
+    assert_equal "trunk", m.default_branch
+  end
+
+  # sabotage: hardcode "origin/main" instead of interpolating default_branch -> red
+  def test_remote_default_branch_composes_origin_and_the_default_branch
+    m = ManifestFixtures.load_with("valid", "repo" => { "default_branch" => "trunk" })
+    assert_equal "origin/trunk", m.remote_default_branch
   end
 
   def test_judge_fixture_exposes_typed_registry_values
