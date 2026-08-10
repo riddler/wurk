@@ -203,8 +203,8 @@ a consumer that registers nothing simply never runs it, and `judge?` reports
   - **scope_prefix** - path prefix a changed file must start with to be in
     scope.
   - **scope_suffix** - (opt) path suffix a changed file must also end with.
-  - **text** - path to the document judged text (e.g. an ADR) that the
-    propose pass is given verbatim.
+  - **text** - path to the judged document (e.g. an ADR) that the propose
+    pass is given verbatim.
   - **focus** - what the propose pass is asked to look for; a description
     of the failure mode, not a restatement of the rule the model already has
     in `text`.
