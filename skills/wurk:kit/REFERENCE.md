@@ -255,22 +255,31 @@ Runs the consumer's own gate commands - `gate.full`, `gate.loop`,
 surface; every command is manifest data. The most constrained script here.
 
 - `data.skipped_stages` always stays in the payload, for every skip. Whether
-  a skip *blocks* follows CLAUDE.md's own distinction - "the reason says
-  whether the gap is in this run or in what the project checks at all":
+  a skip *blocks*, and whether it belongs in what you report, follows a
+  three-way `classification`:
   - a gap **in this run** (Dialyzer skipped for a missing PLT, Tests skipped
-    because compilation failed) sets `ok` false;
+    because compilation failed) classifies `run_level`, sets `ok` false, and
+    warns with `stage_skipped` (blocking);
   - a gap in **what the project checks at all** (`:doctor not installed`,
-    `disabled in .quality.exs`) is reported with `project_level: true` and a
-    `stage_skipped_project_level` warning, and does not block.
+    `disabled in .quality.exs`) classifies `project_level`, does not block,
+    and warns with `stage_skipped_project_level`;
+  - a gap the project has declared **permanently inapplicable**
+    (`gate.not_applicable_skips`) classifies `not_applicable`, does not
+    block, and warns with `stage_skipped_not_applicable`.
 
-  The second case is not a softening. It is true on every run including the
-  green ones, so blocking on it would make `ok` false on every full gate run
-  forever - which deletes the signal rather than enforcing it. Either way a
-  skipped stage is never a passing one, and both kinds must appear in what
-  you report. The taxonomy comes from `gate.project_level_skips` in the
-  manifest: a project declaring none gets the strict reading, where an
-  unrecognized skip reason blocks, and widening it is an edit to the
-  consumer's own manifest, not to kit source.
+  The `project_level` case is not a softening. It is true on every run
+  including the green ones, so blocking on it would make `ok` false on every
+  full gate run forever - which deletes the signal rather than enforcing it.
+  Every skip stays in the payload regardless of classification; `run_level`
+  and `project_level` are named in what you report, and `not_applicable`
+  need not be - naming a stage that will never apply, forever, is exactly
+  the noise that trains readers to stop reading the skip lines at all.
+  The taxonomy comes from `gate.project_level_skips` and
+  `gate.not_applicable_skips` in the manifest, checked in that precedence
+  order (`not_applicable` first, since it is the narrower, explicitly
+  enumerated declaration): a project declaring neither gets the strict
+  reading, where an unrecognized skip reason blocks, and widening either
+  list is an edit to the consumer's own manifest, not to kit source.
 - Only one profile argument is accepted: `--profile loop`. It always sets
   `data.attested` to `false`. No `--skip`, `--quick`, or other `--profile`
   value is defined by this script's parser, so passing one is a usage error

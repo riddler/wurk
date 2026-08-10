@@ -198,7 +198,7 @@ class GateTest < Minitest::Test
 
   # A skip the gate hit *on this run* blocks: it was asked to measure
   # something and could not. See gate.rb rule 1.
-  # sabotage: make PROJECT_LEVEL_SKIP_RE match /./ -> red
+  # sabotage: make classify_skip return "project_level" unconditionally -> red
   def test_run_level_skipped_stage_forces_ok_false_even_though_status_is_ok
     report = {
       "status" => "ok",
@@ -221,7 +221,7 @@ class GateTest < Minitest::Test
       assert_equal false, env["ok"]
       assert_equal 1, env["data"]["skipped_stages"].length
       assert_equal "Dialyzer", env["data"]["skipped_stages"].first["name"]
-      assert_equal false, env["data"]["skipped_stages"].first["project_level"]
+      assert_equal "run_level", env["data"]["skipped_stages"].first["classification"]
       assert_equal 1, env["blocked"].length
       assert_equal "stage_skipped", env["blocked"].first["code"]
       # Skipped stages are a report, not evidence the run failed - so this
@@ -243,7 +243,6 @@ class GateTest < Minitest::Test
       "stages" => [
         { "name" => "Format", "status" => "ok", "summary" => "clean" },
         { "name" => "Doctor", "status" => "skipped", "summary" => ":doctor not installed" },
-        { "name" => "Gettext", "status" => "skipped", "summary" => ":gettext not installed" },
         { "name" => "ADR judge", "status" => "skipped", "summary" => "disabled in .quality.exs" }
       ]
     }
@@ -259,13 +258,127 @@ class GateTest < Minitest::Test
       assert_equal 0, code
       assert_equal true, env["ok"]
       assert_equal [], env["blocked"]
-      # Reported, not laundered: all three still surface, and each carries a
+      # Reported, not laundered: both still surface, and each carries a
       # warning a caller has to actively ignore.
-      assert_equal 3, env["data"]["skipped_stages"].length
-      assert(env["data"]["skipped_stages"].all? { |s| s["project_level"] })
+      assert_equal 2, env["data"]["skipped_stages"].length
+      assert(env["data"]["skipped_stages"].all? { |s| s["classification"] == "project_level" })
       codes = env["warnings"].map { |w| w["code"] }
-      assert_equal 3, codes.count("stage_skipped_project_level")
+      assert_equal 2, codes.count("stage_skipped_project_level")
     end
+  end
+
+  # A stage the project has declared permanently inapplicable (rather than a
+  # gap it means to close) does not block, and does not carry the "still not
+  # a passing stage, so say so when reporting" nag - it carries its own
+  # warning saying the opposite: not required in reports.
+  # sabotage: env.warn -> env.block! in the not_applicable branch -> red
+  def test_not_applicable_skip_is_reported_but_never_required
+    report = {
+      "status" => "ok",
+      "scope" => "all",
+      "stages" => [
+        { "name" => "Format", "status" => "ok", "summary" => "clean" },
+        { "name" => "Gettext", "status" => "skipped", "summary" => ":gettext not installed" }
+      ]
+    }
+
+    in_tmp_cwd do
+      expect_elixir_diff
+      expect_no_sabotage_diff
+      @fake.expect(%w[make report], out: JSON.generate(report))
+      @fake.expect(%w[make attest], out: "Full gate green...\n")
+
+      code, env = run_gate
+
+      assert_equal 0, code
+      assert_equal true, env["ok"]
+      assert_equal [], env["blocked"]
+      assert_equal 1, env["data"]["skipped_stages"].length
+      assert_equal "not_applicable", env["data"]["skipped_stages"].first["classification"]
+      codes = env["warnings"].map { |w| w["code"] }
+      assert_includes codes, "stage_skipped_not_applicable"
+      refute_includes codes, "stage_skipped_project_level"
+    end
+  end
+
+  # The fixture deliberately overlaps: gate_tier1's project_level_skips has
+  # an unanchored "not installed" that would also match the gettext summary,
+  # but not_applicable_skips names it explicitly, and the narrower,
+  # explicitly enumerated list wins.
+  # sabotage: swap the two `return` lines in classify_skip -> red
+  def test_not_applicable_takes_precedence_over_an_overlapping_project_level_pattern
+    report = {
+      "status" => "ok",
+      "scope" => "all",
+      "stages" => [
+        { "name" => "Doctor", "status" => "skipped", "summary" => ":doctor not installed" },
+        { "name" => "Gettext", "status" => "skipped", "summary" => ":gettext not installed" }
+      ]
+    }
+
+    in_tmp_cwd do
+      expect_elixir_diff
+      expect_no_sabotage_diff
+      @fake.expect(%w[make report], out: JSON.generate(report))
+      @fake.expect(%w[make attest], out: "Full gate green...\n")
+
+      code, env = run_gate
+
+      assert_equal 0, code
+      assert_equal true, env["ok"]
+      assert_equal [], env["blocked"]
+      by_name = env["data"]["skipped_stages"].each_with_object({}) { |s, h| h[s["name"]] = s["classification"] }
+      assert_equal "project_level", by_name["Doctor"]
+      assert_equal "not_applicable", by_name["Gettext"]
+    end
+  end
+
+  # With both lists absent, the strict default applies: even a
+  # gettext-shaped summary blocks, not just a doctor-shaped one.
+  # sabotage: make Gate.matches? return true when handed a nil regex -> red
+  def test_absent_both_skip_lists_blocks_even_a_not_applicable_shaped_reason
+    report = {
+      "status" => "ok",
+      "scope" => "all",
+      "stages" => [
+        { "name" => "Gettext", "status" => "skipped", "summary" => ":gettext not installed" }
+      ]
+    }
+
+    other = manifest_with("gate_tier1", "gate" => { "not_applicable_skips" => nil, "project_level_skips" => nil })
+
+    Manifest.reset!
+    with_manifest(other) do
+      Dir.mktmpdir do |dir|
+        Dir.chdir(dir) do
+          expect_elixir_diff
+          expect_no_sabotage_diff
+          @fake.expect(%w[make report], out: JSON.generate(report))
+          @fake.expect(%w[make attest], out: "Full gate green...\n")
+
+          code, env = run_gate
+
+          assert_equal 1, code
+          assert_equal false, env["ok"]
+          assert_equal ["stage_skipped"], env["blocked"].map { |b| b["code"] }
+          assert_equal "run_level", env["data"]["skipped_stages"].first["classification"]
+        end
+      end
+    end
+  end
+
+  # Direct unit test of the three-way classifier, independent of a full gate
+  # run - including the never-match nil/"" summary cases.
+  # sabotage: drop the not_applicable_re nil guard in matches? -> red
+  # (NoMethodError on nil =~ re, or a nil summary crashing the match)
+  def test_classify_skip_is_a_direct_three_way_unit
+    re = fixture_manifest("gate_tier1")
+
+    assert_equal "not_applicable", Gate.classify_skip(":gettext not installed", re.project_level_skip_re, re.not_applicable_skip_re)
+    assert_equal "project_level", Gate.classify_skip(":doctor not installed", re.project_level_skip_re, re.not_applicable_skip_re)
+    assert_equal "run_level", Gate.classify_skip("some new reason nobody anticipated", re.project_level_skip_re, re.not_applicable_skip_re)
+    assert_equal "run_level", Gate.classify_skip(nil, re.project_level_skip_re, re.not_applicable_skip_re)
+    assert_equal "run_level", Gate.classify_skip("", re.project_level_skip_re, re.not_applicable_skip_re)
   end
 
   # The mix of both: the project-level skips must not mask the run-level one.
@@ -297,13 +410,15 @@ class GateTest < Minitest::Test
 
   # sabotage: widen gate_tier1's project_level_skips with `|.` -> red
   def test_unrecognized_skip_reason_blocks_by_default
-    re = fixture_manifest("gate_tier1").project_level_skip_re
+    manifest = fixture_manifest("gate_tier1")
+    project_level_re = manifest.project_level_skip_re
+    not_applicable_re = manifest.not_applicable_skip_re
 
-    refute Gate.project_level_skip?("some new reason nobody anticipated", re)
-    refute Gate.project_level_skip?(nil, re)
-    refute Gate.project_level_skip?("", re)
-    assert Gate.project_level_skip?(":doctor not installed", re)
-    assert Gate.project_level_skip?("disabled in .quality.exs", re)
+    assert_equal "run_level", Gate.classify_skip("some new reason nobody anticipated", project_level_re, not_applicable_re)
+    assert_equal "run_level", Gate.classify_skip(nil, project_level_re, not_applicable_re)
+    assert_equal "run_level", Gate.classify_skip("", project_level_re, not_applicable_re)
+    assert_equal "project_level", Gate.classify_skip(":doctor not installed", project_level_re, not_applicable_re)
+    assert_equal "project_level", Gate.classify_skip("disabled in .quality.exs", project_level_re, not_applicable_re)
   end
 
   # With gate.project_level_skips absent, the strict default applies: even a
@@ -335,7 +450,7 @@ class GateTest < Minitest::Test
           assert_equal 1, code
           assert_equal false, env["ok"]
           assert_equal ["stage_skipped"], env["blocked"].map { |b| b["code"] }
-          assert_equal false, env["data"]["skipped_stages"].first["project_level"]
+          assert_equal "run_level", env["data"]["skipped_stages"].first["classification"]
         end
       end
     end
@@ -344,7 +459,7 @@ class GateTest < Minitest::Test
   # The mirror of the above: with the field declared (gate_tier1's fixture
   # value), the same summary is project-level and does not block. Proves the
   # field is actually read, not that the strictness is unconditional.
-  # sabotage: make project_level_skip? ignore project_level_re entirely -> red
+  # sabotage: make classify_skip ignore project_level_re entirely -> red
   def test_declared_project_level_skips_makes_the_same_reason_non_blocking
     report = {
       "status" => "ok",
@@ -365,7 +480,7 @@ class GateTest < Minitest::Test
       assert_equal 0, code
       assert_equal true, env["ok"]
       assert_equal [], env["blocked"]
-      assert_equal true, env["data"]["skipped_stages"].first["project_level"]
+      assert_equal "project_level", env["data"]["skipped_stages"].first["classification"]
     end
   end
 

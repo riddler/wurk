@@ -69,6 +69,9 @@ summary:
   with a run-level skip is not a full green.
 - A **project-level skip** (a stage this project never enables) is not a
   finding. Mention it once, if at all.
+- A **not-applicable skip** (a stage the project has declared permanently
+  inapplicable) is not a finding either, and does not belong in the summary
+  at all.
 
 **Tier 0 (exit code only).** You get a pass/fail and a log. This is where you
 earn your keep: nothing has been parsed for you, so segmenting the output into
@@ -142,7 +145,8 @@ and quoted error]
 not resolve on its own. Omit the section when empty.]
 
 ### Skips worth knowing about
-[Run-level skips only - what was not measured this run. Omit when empty.]
+[Run-level skips only - what was not measured this run. Not-applicable skips
+are not findings and do not belong here at all. Omit when empty.]
 
 ### Could not determine
 [Failures whose cause the output does not reveal, and what would reveal it.

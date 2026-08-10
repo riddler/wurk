@@ -36,7 +36,8 @@ ported):
   "stages": [
     {"name": "Format",   "status": "pass"},
     {"name": "Dialyzer", "status": "skip", "reason": "disabled in .quality.exs",
-     "level": "project"},          // "project" skip = warn; "run" skip = block
+     "level": "project"},          // "run" skip = block; "project" skip = warn;
+                                    // "not_applicable" skip = warn, not required in reports
     {"name": "Tests",    "status": "fail", "detail": "..."}
   ],
   "attested": false                 // tier 2 sets this true
@@ -51,9 +52,11 @@ Producers:
 - A bash/Ruby gate like fixative's assembles the same JSON from its per-stage
   results in a few dozen lines, invoked as a mise task.
 
-What tier 1 buys: the run-level vs project-level skip distinction (a stage
-skipped by this run blocks; a stage the project never enables warns), stage
-names in reports, and honest "what was actually measured" summaries.
+What tier 1 buys: the run-level vs project-level vs not-applicable skip
+distinction (a stage skipped by this run blocks; a stage the project never
+enables warns and is named in reports; a stage the project has declared
+permanently inapplicable warns but need not be named), stage names in
+reports, and honest "what was actually measured" summaries.
 
 ## Tier 2: attestation and the gate guard (optional)
 

@@ -111,17 +111,20 @@ Read the result:
 - **`ok: false` with `data.applicable: true`** is a real gate failure - see
   "If the gate fails" below, including the gate-guard case.
 
-- **`data.skipped_stages`** lists every skipped stage, and each entry says
-  which kind it is. An entry with `project_level: false` has already set `ok`
-  false for you - the gate could not measure that stage on this run. An entry
-  with `project_level: true` does not block: it is a standing gap in what
-  this project checks at all, identical on every run, and gating on it would
-  mean refusing every commit forever.
+- **`data.skipped_stages`** lists every skipped stage, and each entry's
+  `classification` says which kind it is. `"run_level"` has already set `ok`
+  false for you - the gate could not measure that stage on this run.
+  `"project_level"` does not block: it is a standing gap in what this
+  project checks at all, identical on every run, and gating on it would mean
+  refusing every commit forever. `"not_applicable"` also does not block: the
+  project has declared the stage will never apply.
 
-  **Read the list either way when reporting.** A skipped stage is not a
-  passing one - that governs what you tell the user, not only what gates the
-  commit, so a project-level skip still gets named in the Step 4 report
-  rather than rounded up to "gate green".
+  A skipped stage is not a passing one - that governs what you may *claim*
+  (never "gate fully green" when a stage was skipped), not what you must
+  enumerate. `"project_level"` entries are still named in the Step 4 report.
+  `"not_applicable"` entries are not required in it - repeating a stage that
+  will never apply in every commit report is the noise that stops people
+  reading the skip lines at all.
 
 - **`data.sabotage.missing`** lists new test declarations in the diff with no
   `# sabotage:`-style verification note above them. **This is a report, not a

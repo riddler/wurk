@@ -135,10 +135,14 @@ the branch's own commits, falling back to the branch prefix (step 2).
    their `file:line` findings and stop. Do not push a branch whose gate is red
    in the hope that CI disagrees.
 
-   Entries in `data.skipped_stages` marked `project_level: true` do not
-   block - they are standing gaps in what the project checks at all, not
-   failures of this run. Still name them in the request body and the final
-   report; a stage that never ran is never a stage that passed.
+   Entries in `data.skipped_stages` carry a `classification`.
+   `"run_level"` entries have already made the gate red and this step
+   refuses. `"project_level"` entries do not block - they are standing gaps
+   in what the project checks at all, not failures of this run - and are
+   still named in the request body and the final report; a stage that never
+   ran is never a stage that passed. `"not_applicable"` entries also do not
+   block, and are not required in either the request body or the final
+   report - the project has declared the stage will never apply.
 
    A narrowed run does not count: this script accepts no narrowing flags, and
    passing one is a usage error rather than a narrower run. `data.attested`

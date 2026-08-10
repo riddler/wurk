@@ -49,6 +49,9 @@
       "not installed",
       "disabled in \\.quality\\.exs"
     ],
+    "not_applicable_skips": [
+      "^:gettext not installed$"
+    ],
     "sabotage": {
       "test_roots": ["test/"],
       "test_pattern": "\\btest\\s+\"",
