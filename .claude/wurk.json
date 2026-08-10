@@ -61,5 +61,19 @@
     "mode": "none"
   },
 
-  "release": null
+  "release": null,
+
+  "judge": {
+    "model": "sonnet",
+    "registry": [
+      {
+        "key": "adr-0008",
+        "label": "ADR-0008",
+        "scope_prefix": "skills/",
+        "scope_suffix": "SKILL.md",
+        "text": "docs/adr/0008-merge-time-judge-over-generic-skill-prose.md",
+        "focus": "a step that used to state a policy call, a human gate, or a verification discipline now handing it to a script, or deleted during a rewrite rather than restated - including prose that turns a discipline into a check on its own artifact"
+      }
+    ]
+  }
 }

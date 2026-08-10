@@ -63,7 +63,7 @@ class Manifest
   # The known key surface, for the unknown-key warning. Nested sections list
   # their own keys; a section absent from this map is not validated further.
   KNOWN = {
-    nil => %w[wurk beads forge gate parallelism tmux models artifacts commits changelog release],
+    nil => %w[wurk beads forge gate parallelism tmux models artifacts commits changelog release judge],
     "beads" => %w[prefix topology areas],
     "beads.areas" => %w[labels lands_alone always_batchable],
     "forge" => %w[kind labels],
@@ -76,7 +76,8 @@ class Manifest
     "artifacts" => %w[plans research filename repository],
     "commits" => %w[style package_map subject_under body_line_max total_lines_max trailer],
     "commits.trailer" => %w[key],
-    "changelog" => %w[mode dir]
+    "changelog" => %w[mode dir],
+    "judge" => %w[model registry]
   }.freeze
 
   DEFAULTS = {
@@ -87,7 +88,8 @@ class Manifest
     "commits.total_lines_max" => 40,
     "commits.trailer.key" => "Refs",
     "models.direction" => "opus",
-    "artifacts.filename" => "YYMMDD-[id-]kebab"
+    "artifacts.filename" => "YYMMDD-[id-]kebab",
+    "judge.model" => "sonnet"
   }.freeze
 
   attr_reader :path, :raw, :errors, :warnings
@@ -404,6 +406,23 @@ class Manifest
     fetch("release")
   end
 
+  # Whether a judged-prose registry is configured at all. Absent means the
+  # judge has nothing to judge, not that it judged and found nothing.
+  def judge?
+    !fetch("judge").nil?
+  end
+
+  def judge_model
+    fetch("judge.model")
+  end
+
+  # Registry entries as plain hashes, in declaration order. Each carries
+  # key, label, scope_prefix, optional scope_suffix, text (the path of the
+  # judged document) and focus (what the propose pass is asked to look for).
+  def judge_registry
+    Array(fetch("judge.registry"))
+  end
+
   # The bead id shape, built from the prefix: "st-" followed by lowercase
   # alphanumerics, optionally dotted (e.g. "st-00p.3"). Every script that
   # needs this shape asks here rather than re-deriving it - see lib/refs.rb
@@ -448,6 +467,7 @@ class Manifest
     validate_commands
     validate_regex_lists
     validate_sabotage
+    validate_judge
     collect_unknown_keys(raw, nil)
   end
 
@@ -482,6 +502,53 @@ class Manifest
     unless exempt.nil? || (exempt.is_a?(Array) && exempt.all? { |p| p.is_a?(String) })
       errors << "#{path}: gate.sabotage.exempt_prefixes must be a list of path prefixes"
     end
+  end
+
+  JUDGE_ENTRY_STRING_FIELDS = %w[key label scope_prefix text focus].freeze
+
+  # Present-or-absent, never half-present, same rule as gate.sabotage: a
+  # judge section with an empty (or missing) registry is a schema error, not
+  # a silently disabled judge.
+  def validate_judge
+    section = fetch("judge")
+    return if section.nil?
+
+    unless section.is_a?(Hash)
+      errors << "#{path}: judge must be an object (see wurk docs/manifest.md)"
+      return
+    end
+
+    registry = section["registry"]
+    unless registry.is_a?(Array) && !registry.empty?
+      errors << "#{path}: judge.registry must be a non-empty array of objects"
+      return
+    end
+
+    registry.each { |entry| validate_judge_entry(entry) }
+
+    model = section["model"]
+    unless model.nil? || (model.is_a?(String) && !model.empty?)
+      errors << "#{path}: judge.model must be a non-empty string"
+    end
+  end
+
+  def validate_judge_entry(entry)
+    unless entry.is_a?(Hash)
+      errors << "#{path}: judge.registry entries must be objects"
+      return
+    end
+
+    JUDGE_ENTRY_STRING_FIELDS.each do |field|
+      value = entry[field]
+      next if value.is_a?(String) && !value.empty?
+
+      errors << "#{path}: judge.registry entry missing #{field}"
+    end
+
+    suffix = entry["scope_suffix"]
+    return if suffix.nil? || suffix.is_a?(String)
+
+    errors << "#{path}: judge.registry entry scope_suffix must be a string"
   end
 
   def validate_regex_lists
