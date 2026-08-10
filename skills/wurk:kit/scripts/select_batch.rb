@@ -21,7 +21,9 @@ require_relative "worktree_survey"
 # the only thing it does. `recommended` is a recommendation, not an outcome:
 # the envelope always carries `mode`, and only sets `requires_user_choice` in
 # manual mode, so a calling model cannot read `recommended` as the decision.
-# The picker itself stays in the skill.
+# The picker itself stays in the skill. The `upstream` verdict is how it
+# keeps /wurk:next from claiming or standing up a worktree for a bead whose
+# work happens in a sibling repo (ADR-0009).
 module SelectBatch
   MAX_N = 4
 
@@ -226,7 +228,15 @@ module SelectBatch
       verdict, reason, collides_with =
         if issue["issue_type"] == "epic"
           ["epic", "epic - work its children", nil]
-        elsif areas.empty? && !upstream
+        elsif upstream
+          # An always_batchable label means the bead changes no files here
+          # (ADR-0009): it collides with nothing AND has nothing for a
+          # workspace to do. Informational only - never recommended, because
+          # /wurk:next's claim and workspace standup both act on
+          # `recommended`, and this is the only place that waste can be
+          # prevented.
+          ["upstream", "upstream - the work happens in a sibling repo; run /wurk:work #{issue['id']} to handle it", nil]
+        elsif areas.empty?
           ["unlabeled", "unlabeled - blast radius undecided", nil]
         elsif Areas.lands_alone?(labels)
           ["lands-alone", nil, nil]
@@ -285,7 +295,7 @@ module SelectBatch
         idx += 1
 
         case c[:verdict]
-        when "epic", "unlabeled", "collides-with-live-worktree"
+        when "epic", "unlabeled", "upstream", "collides-with-live-worktree"
           skipped << { "id" => c[:id], "reason" => c[:reason] }
         when "lands-alone"
           if recommended.empty?
@@ -327,7 +337,7 @@ module SelectBatch
         # verdict-specific reason - it was excluded for that reason
         # regardless of the batch, not because the walk never got to it.
         reason =
-          if %w[epic unlabeled collides-with-live-worktree].include?(c[:verdict])
+          if %w[epic unlabeled upstream collides-with-live-worktree].include?(c[:verdict])
             c[:reason]
           else
             unreached_reason

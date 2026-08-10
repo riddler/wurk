@@ -160,13 +160,21 @@ fact.
      | Verdict | Meaning |
      |---|---|
      | `epic` | work its children instead |
-     | `unlabeled` | no area label - blast radius undecided. Nobody has decided this bead's blast radius; skipping it is the label being missing, not a failure of this skill. Name every bead skipped for this so they can be labeled and re-run. The exception is the labels the manifest lists under `beads.areas.always_batchable`, which by definition change no files here. |
+     | `unlabeled` | no area label - blast radius undecided. Nobody has decided this bead's blast radius; skipping it is the label being missing, not a failure of this skill. Name every bead skipped for this so they can be labeled and re-run. |
+     | `upstream` | carries a label the manifest lists under `beads.areas.always_batchable`, which by definition changes no files here - so there is nothing for a workspace to do. Informational: it is shown in the candidate table and never enters the recommended batch. The reason points at `/wurk:work <id>`, which handles it without a workspace. |
      | `lands-alone` | carries a label the manifest lists under `beads.areas.lands_alone` - takes the batch alone |
      | `collides-with-live-worktree` | its areas intersect a live workspace's held areas - names the area(s) and the workspace holding them |
      | `free` | none of the above |
 
      A parent epic and its child can both be ready - that is what the `epic`
      verdict is for. Do not batch across that dependency edge.
+
+     An `upstream` candidate is **never claimed here and never given a
+     workspace**, in either mode - manual mode may not offer it as a pick,
+     and the override path does not apply to it, because the workspace is
+     not a risk to accept but pure waste with no cleanup path (an upstream
+     bead opens no request, so `/wurk:cleanup` never reaps it). See
+     ADR-0009.
    - **`data.recommended`** - the greedy pick. Label it the **recommended
      batch**: an option to present, not the outcome to report.
    - **`data.skipped`** - id plus reason for everything not recommended,
@@ -336,6 +344,9 @@ fact.
 
 - **This skill picks and claims; it neither sizes nor implements.** Doing any
   of `/wurk:work`'s job here as well is how one bead gets worked twice.
+- **An `upstream` bead is never claimed and never given a workspace, in
+  either mode.** The work happens in a sibling repo; `/wurk:work <id>` is
+  where it gets handled (ADR-0009).
 - **Manual mode presents, it does not impose.** A run that claims before the
   user has seen the candidate table and chosen among the legal options has
   skipped the part that matters.

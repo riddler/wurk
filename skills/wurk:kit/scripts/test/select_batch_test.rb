@@ -105,7 +105,7 @@ class SelectBatchTest < Minitest::Test
     assert_equal "unlabeled", candidate["verdict"]
   end
 
-  def test_upstream_beads_collide_with_nothing
+  def test_upstream_bead_is_informational_and_never_recommended
     expect_ready([
                    issue("zz-up1", priority: 1, labels: ["upstream"]),
                    issue("zz-up2", priority: 2, labels: ["upstream"])
@@ -114,8 +114,61 @@ class SelectBatchTest < Minitest::Test
 
     _code, env = run_select(["--auto"])
 
-    assert_equal %w[zz-up1 zz-up2], env["data"]["recommended"]
-    env["data"]["candidates"].each { |c| assert_equal "free", c["verdict"] }
+    assert_equal [], env["data"]["recommended"]
+    env["data"]["candidates"].each { |c| assert_equal "upstream", c["verdict"] }
+    up1 = env["data"]["skipped"].find { |s| s["id"] == "zz-up1" }
+    up2 = env["data"]["skipped"].find { |s| s["id"] == "zz-up2" }
+    assert_match(%r{/wurk:work zz-up1}, up1["reason"])
+    assert_match(%r{/wurk:work zz-up2}, up2["reason"])
+  end
+
+  def test_upstream_wins_over_area_labels
+    expect_ready([issue("zz-mix", priority: 1, labels: %w[upstream area:alpha])])
+    expect_empty_survey
+
+    _code, env = run_select(["--auto"])
+
+    assert_equal [], env["data"]["recommended"]
+    candidate = env["data"]["candidates"].find { |c| c["id"] == "zz-mix" }
+    assert_equal "upstream", candidate["verdict"]
+  end
+
+  def test_upstream_beats_unlabeled_but_not_epic
+    expect_ready([issue("zz-epi", priority: 1, labels: ["upstream"], issue_type: "epic")])
+    expect_empty_survey
+
+    _code, env = run_select(["--auto"])
+
+    candidate = env["data"]["candidates"].find { |c| c["id"] == "zz-epi" }
+    assert_equal "epic", candidate["verdict"]
+  end
+
+  def test_unreached_upstream_keeps_its_own_reason
+    expect_ready([
+                   issue("zz-fst", priority: 1, labels: ["area:alpha"]),
+                   issue("zz-up", priority: 2, labels: ["upstream"])
+                 ])
+    expect_empty_survey
+
+    _code, env = run_select(["--n", "1", "--auto"])
+
+    assert_equal ["zz-fst"], env["data"]["recommended"]
+    skipped = env["data"]["skipped"].find { |s| s["id"] == "zz-up" }
+    assert_match(%r{/wurk:work zz-up}, skipped["reason"])
+    refute_match(/ceiling/, skipped["reason"])
+  end
+
+  def test_upstream_label_is_manifest_driven
+    manifest = manifest_with("areas_wide", "beads" => { "areas" => { "always_batchable" => [] } })
+    expect_ready([issue("zz-up", priority: 1, labels: ["upstream"])])
+    expect_empty_survey
+
+    io = StringIO.new
+    with_manifest(manifest) { SelectBatch.run(["--auto"], io: io) }
+    env = JSON.parse(io.string)
+
+    candidate = env["data"]["candidates"].find { |c| c["id"] == "zz-up" }
+    assert_equal "unlabeled", candidate["verdict"]
   end
 
   def test_stale_worktree_areas_do_not_block
