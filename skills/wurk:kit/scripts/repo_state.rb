@@ -9,7 +9,7 @@ require_relative "lib/gate_paths"
 require_relative "lib/manifest"
 
 # RepoState answers "where am I, and what's uncommitted or unpushed here" -
-# replacing /wurk:work Step 0 (locate-self), /wurk:mr Step 1 (establish
+# replacing /wurk:work Step 0.5 (locate-self), /wurk:mr Step 1 (establish
 # where you are), and half of /wurk:commit Step 0 (the gate-applicability carve-out).
 # See statifier-ex docs/plans/260806-st-hzf-skill-mechanics-scripts.md Phase 2.
 module RepoState

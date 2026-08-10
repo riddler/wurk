@@ -143,12 +143,16 @@ Before it is claimed, the bead **must** carry:
 - a description,
 - acceptance criteria,
 - at least one area label from the vocabulary the manifest names in
-  `beads.areas.labels`, where the project defines one.
+  `beads.areas.labels`, where the project defines one - or, for an upstream
+  bead, a label from `beads.areas.always_batchable` instead.
 
 The area label is not optional and is not something to backfill later: an
 unlabeled bead is exactly what `/wurk:next` skips as "blast radius
 undecided", so a bead this skill creates and leaves unlabeled is one the batch
-picker will refuse to touch. Intake owes the label at creation.
+picker will refuse to touch. Intake owes the label at creation. An
+`always_batchable` label satisfies the same requirement rather than violating
+it: the bead's blast radius must be decided at creation either way, and "no
+files change here" is a decided blast radius, not a missing one.
 
 Then claim and publish:
 
@@ -159,6 +163,9 @@ ruby ~/.claude/skills/wurk:kit/scripts/bead.rb sync push
 
 The push is best-effort and never gates the claim - sessions in this
 checkout's worktrees share the database directly and see the claim regardless.
+
+Now that the bead exists, apply step 0's upstream check to it and take step
+0's exit if it fires.
 
 ## Step 2: Size the job
 
