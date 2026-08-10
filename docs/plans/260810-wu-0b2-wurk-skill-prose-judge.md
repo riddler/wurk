@@ -610,10 +610,10 @@ deliberately not in `run.rb`, citing ADR-0008.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `ruby skills/wurk:kit/scripts/test/run.rb` passes (this phase adds no
+- [x] `ruby skills/wurk:kit/scripts/test/run.rb` passes (this phase adds no
       code; the criterion is that it is still green)
-- [ ] `.claude/wurk/mr.md` exists and names `judge.rb`
-- [ ] `grep -n "ADR-0008" docs/architecture.md` returns at least one line
+- [x] `.claude/wurk/mr.md` exists and names `judge.rb`
+- [x] `grep -n "ADR-0008" docs/architecture.md` returns at least one line
 
 #### Manual Verification:
 - [ ] `/wurk:mr` on a real branch reads the extension and runs the judge
@@ -718,6 +718,26 @@ of blocking here.
       verdict") is caught, and the same run with the prose intact is clean
 - [ ] the finding message is legible on its own in `/wurk:mr`'s report -
       file, line, and one sentence
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 3
+
+- [ ] `/wurk:mr` on a real branch reads the extension and runs the judge
+      between the gate and the summary, in that order
+- [ ] the extension adds and never overrides: nothing in it contradicts a
+      step in `skills/wurk:mr/SKILL.md`
+- [ ] the refusal condition is stated as a decision the prose makes, not as
+      "the script exits non-zero, so stop" - the script's `blocked` entry is
+      the input, not the verdict
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
