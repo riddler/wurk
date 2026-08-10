@@ -289,6 +289,62 @@ class WorktreeCreateTest < Minitest::Test
     end
   end
 
+  # sabotage: read a hardcoded "origin/main"/"main" instead of
+  # manifest.remote_default_branch/manifest.default_branch -> red
+  # (FakeSh::UnexpectedCommand: no stub is registered for "origin/main" here,
+  # only for "origin/trunk")
+  def test_trunk_override_uses_the_manifests_remote_default_branch
+    other = manifest_with(FIXTURE, "repo" => { "default_branch" => "trunk" })
+
+    with_manifest(other) do
+      Dir.mktmpdir do |tmp|
+        root = File.join(tmp, "myrepo")
+        FileUtils.mkdir_p(root)
+        worktrees_root = File.join(tmp, "zz-worktrees")
+        path = File.join(worktrees_root, "zz-abc-new-thing")
+
+        expect_location(root)
+        @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+        @fake.expect(%w[git fetch origin], out: "")
+        @fake.expect(["mkdir", "-p", worktrees_root], out: "")
+        @fake.expect(["git", "worktree", "add", path, "-b", "zz-abc-new-thing", "--no-track", "origin/trunk"], out: "")
+        @fake.expect(["faketool", "trust", path], out: "")
+        @fake.expect(["cp", "-Rfc", "vendor", "build", "#{path}/"], out: "")
+        @fake.expect(%w[faketool fetch], out: "")
+        @fake.expect(%w[make quick], out: "loop green\n")
+
+        code, env = run_create(["zz-abc-new-thing"])
+
+        assert_equal 0, code
+        assert_equal "origin/trunk", env["data"]["base_ref"]
+      end
+    end
+  end
+
+  # sabotage: same as above, but for the offline fallback rung -> red
+  # (FakeSh::UnexpectedCommand: no stub for "origin/trunk", and the fallback
+  # would report "main" instead of "trunk")
+  def test_trunk_override_falls_back_to_local_trunk_when_offline
+    other = manifest_with(FIXTURE, "repo" => { "default_branch" => "trunk" })
+
+    with_manifest(other) do
+      Dir.mktmpdir do |tmp|
+        root = File.join(tmp, "myrepo")
+        FileUtils.mkdir_p(root)
+
+        expect_location(root)
+        @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+        @fake.expect(%w[git fetch origin], exitstatus: 1, err: "fatal: unable to access\n")
+
+        code, env = run_create(["zz-abc-new-thing", "--dry-run"])
+
+        assert_equal 0, code
+        assert_equal "trunk", env["data"]["base_ref"]
+        assert_equal "fetch_failed", env["warnings"].first["code"]
+      end
+    end
+  end
+
   def test_never_force_in_source
     source = File.read(File.expand_path("../worktree_create.rb", __dir__))
     refute_match(/--force\b/, source)

@@ -195,4 +195,47 @@ class WorktreeRefreshTest < Minitest::Test
     source = File.read(File.expand_path("../worktree_refresh.rb", __dir__))
     refute_match(/--force\b/, source)
   end
+
+  # sabotage: read a hardcoded "origin/main" instead of
+  # manifest.remote_default_branch -> FakeSh raises UnexpectedCommand (no
+  # stub for "origin/main" here, only "origin/trunk") -> red. data.origin_main
+  # keeps its historical field name even though the value now comes from the
+  # manifest's remote default branch.
+  def test_trunk_override_rev_parses_and_checks_ancestry_against_the_manifests_remote_default_branch
+    other = manifest_with(FIXTURE, "repo" => { "default_branch" => "trunk" })
+
+    porcelain = <<~TXT
+      worktree #{MAIN}
+      HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      branch refs/heads/main
+
+      worktree #{WT1}
+      HEAD bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      branch refs/heads/zz-abc-current-thing
+    TXT
+
+    @fake.expect(%w[git worktree list --porcelain], out: porcelain)
+    @fake.expect(%w[git status --porcelain], out: "")
+    @fake.expect(%w[git merge-base --is-ancestor origin/trunk HEAD], exitstatus: 0)
+    @fake.expect(%w[bd show zz-abc --json], out: '[{"id":"zz-abc","labels":[]}]')
+    @fake.expect(
+      ["gh", "pr", "list", "--state", "merged", "--head", "zz-abc-current-thing",
+       "--json", "number,mergedAt,headRefOid", "--jq", ".[0]"],
+      out: "null\n"
+    )
+
+    @fake.expect(%w[git fetch origin], out: "")
+    @fake.expect(%w[git rev-parse origin/trunk], out: "deadbeef\n")
+    @fake.expect(%w[git merge-base --is-ancestor origin/trunk HEAD], exitstatus: 0)
+
+    io = StringIO.new
+    code = nil
+    with_manifest(other) { code = WorktreeRefresh.run([], io: io) }
+    env = JSON.parse(io.string)
+
+    assert_equal 0, code
+    assert_equal "deadbeef", env["data"]["origin_main"]
+    wt1 = env["data"]["results"].find { |r| r["path"] == WT1 }
+    assert_equal "current, skipped", wt1["result"]
+  end
 end

@@ -82,10 +82,11 @@ module Judge
       chunks.map { |c| c[:body] }.join("\n")
     end
 
-    # The first of --base, origin/main, main for which `git rev-parse
-    # --verify --quiet` succeeds. nil when none resolve.
-    def resolve_base(env, base_override)
-      [base_override, "origin/main", "main"].compact.find do |ref|
+    # The first of --base, the manifest's remote default branch, and its
+    # local default branch for which `git rev-parse --verify --quiet`
+    # succeeds. nil when none resolve.
+    def resolve_base(env, base_override, manifest)
+      [base_override, manifest.remote_default_branch, manifest.default_branch].compact.find do |ref|
         Sh.run(["git", "rev-parse", "--verify", "--quiet", ref], envelope: env).success?
       end
     end
@@ -224,8 +225,11 @@ module Judge
         return skip(env, "no_cli", "the `#{CLI}` CLI is not on PATH")
       end
 
-      base = resolve_base(env, base_override)
-      return skip(env, "no_base_ref", "none of --base, origin/main, or main resolved to a git ref") unless base
+      base = resolve_base(env, base_override, manifest)
+      unless base
+        tried = [base_override, manifest.remote_default_branch, manifest.default_branch].compact.join(", ")
+        return skip(env, "no_base_ref", "none of #{tried} resolved to a git ref")
+      end
 
       base_sha = Sh.run(["git", "merge-base", base, "HEAD"], envelope: env).out.to_s.strip
       diff_out = Sh.run(["git", "diff", base_sha] + DIFF_FLAGS, envelope: env).out.to_s
@@ -299,8 +303,8 @@ module Judge
     def dry_run_steps(env, manifest)
       model = manifest.judge_model || "sonnet"
       env.commands << Sh.render(["which", CLI])
-      env.commands << Sh.render(%w[git rev-parse --verify --quiet origin/main])
-      env.commands << Sh.render(%w[git merge-base origin/main HEAD])
+      env.commands << Sh.render(["git", "rev-parse", "--verify", "--quiet", manifest.remote_default_branch])
+      env.commands << Sh.render(["git", "merge-base", manifest.remote_default_branch, "HEAD"])
       env.commands << Sh.render(["git", "diff", "<merge-base-sha>"] + DIFF_FLAGS)
       env.commands << "#{CLI} -p <prompt> --output-format json --tools '' --strict-mcp-config --model #{model}"
     end
@@ -308,7 +312,7 @@ module Judge
     def run(argv, io: $stdout)
       options = {}
       parser, options = Cli.build("judge.rb [--base REF] [--model NAME]", options) do |opts|
-        opts.on("--base REF", "base ref to diff against, tried before origin/main and main") { |v| options[:base] = v }
+        opts.on("--base REF", "base ref to diff against, tried before the manifest's remote and local default branch") { |v| options[:base] = v }
         opts.on("--model NAME", "model to use for both the propose and refute passes") { |v| options[:model] = v }
       end
       Cli.parse!(parser, argv)

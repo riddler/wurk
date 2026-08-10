@@ -44,18 +44,22 @@ module WorktreeRefresh
       end
 
       # One fetch for the whole sweep. Offline is a hard stop: refreshing
-      # against a stale origin/main would rebase worktrees onto the commit
-      # they are already on and report success for nothing.
+      # against a stale remote default branch would rebase worktrees onto
+      # the commit they are already on and report success for nothing.
       fetch_res = Sh.run(%w[git fetch origin], envelope: env)
       unless fetch_res.success?
         env.block!(
           code: "offline",
-          message: "git fetch origin failed; refreshing against a stale origin/main would report success for nothing"
+          message: "git fetch origin failed; refreshing against a stale #{manifest.remote_default_branch} " \
+                    "would report success for nothing"
         )
         return env.emit(io)
       end
 
-      origin_main_res = Sh.run(%w[git rev-parse origin/main], envelope: env)
+      # `origin_main` is the historical field name (kept for /wurk:refresh's
+      # reading of it); the value is the manifest's remote default branch,
+      # not necessarily literal origin/main.
+      origin_main_res = Sh.run(["git", "rev-parse", manifest.remote_default_branch], envelope: env)
       env.data[:origin_main] = origin_main_res.success? ? origin_main_res.out.to_s.strip : nil
 
       results = worktrees.map { |wt| refresh_one(wt["path"], wt["branch"], env, manifest, dry_run: dry_run) }
@@ -89,12 +93,15 @@ module WorktreeRefresh
 
     # Both checks re-run here, after the fetch above, rather than reusing
     # worktree_survey's precomputed fields - those were computed before this
-    # sweep's fetch and would read a stale origin/main, which is exactly the
-    # failure mode this skill exists to prevent (see refresh-worktree/
-    # SKILL.md Step 3a: the current-check happens after the fetch, not at
-    # enumeration time).
+    # sweep's fetch and would read a stale remote default branch, which is
+    # exactly the failure mode this skill exists to prevent (see
+    # refresh-worktree/SKILL.md Step 3a: the current-check happens after the
+    # fetch, not at enumeration time).
     def refresh_one(path, branch, env, manifest, dry_run:)
-      ancestor_res = Sh.run(%w[git merge-base --is-ancestor origin/main HEAD], chdir: path, envelope: env)
+      ancestor_res = Sh.run(
+        ["git", "merge-base", "--is-ancestor", manifest.remote_default_branch, "HEAD"],
+        chdir: path, envelope: env
+      )
       return { path: path, branch: branch, result: "current, skipped" } if ancestor_res.success?
 
       status_res = Sh.run(%w[git status --porcelain], chdir: path, envelope: env)

@@ -98,7 +98,7 @@ module WorktreeSurvey
       worktrees = []
 
       rest.each do |entry|
-        worktree, gh_available = survey_one(entry, env, gh_available)
+        worktree, gh_available = survey_one(entry, env, manifest, gh_available)
         worktrees << worktree
         degraded << entry[:path] unless gh_available
       end
@@ -118,7 +118,7 @@ module WorktreeSurvey
     # subsequent worktree ("say so once, not once per worktree" - the
     # warning fires on the call that first discovers gh is down, not
     # again). Returns [worktree_hash, gh_available_after_this_call].
-    def survey_one(entry, env, gh_available)
+    def survey_one(entry, env, manifest, gh_available)
       path = entry[:path]
       branch = entry[:branch]
       bead = decompose_bead(branch)
@@ -131,7 +131,13 @@ module WorktreeSurvey
         env.warn(code: "status_failed", message: "git status failed in #{path}")
       end
 
-      ancestor_res = Sh.run(%w[git merge-base --is-ancestor origin/main HEAD], chdir: path, envelope: env)
+      # `ancestor_of_origin_main` is the historical field name (kept for
+      # select_batch.rb and /wurk:cleanup's reading of it); the value is
+      # ancestry against the manifest's remote default branch.
+      ancestor_res = Sh.run(
+        ["git", "merge-base", "--is-ancestor", manifest.remote_default_branch, "HEAD"],
+        chdir: path, envelope: env
+      )
       ancestor_of_origin_main = ancestor_res.success?
 
       areas = areas_for(bead, env)

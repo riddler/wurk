@@ -157,6 +157,41 @@ class WorktreeSurveyTest < Minitest::Test
     assert_equal ["area:parser"], wt2["holds_areas"]
   end
 
+  # sabotage: read a hardcoded "origin/main" instead of
+  # manifest.remote_default_branch -> FakeSh raises UnexpectedCommand (no
+  # stub for "origin/main" here, only "origin/trunk") -> red. The reported
+  # field stays ancestor_of_origin_main even though the value now comes from
+  # the manifest's remote default branch.
+  def test_trunk_override_checks_ancestry_against_the_manifests_remote_default_branch
+    other = manifest_with(FIXTURE, "repo" => { "default_branch" => "trunk" })
+
+    porcelain = <<~TXT
+      worktree /repos/myrepo
+      HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      branch refs/heads/main
+
+      worktree /repos/zz-worktrees/zz-abc-exit-sets
+      HEAD bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      branch refs/heads/zz-abc-exit-sets
+    TXT
+
+    @fake.expect(%w[git worktree list --porcelain], out: porcelain)
+    @fake.expect(%w[git status --porcelain], out: "")
+    @fake.expect(%w[git merge-base --is-ancestor origin/trunk HEAD], exitstatus: 0)
+    @fake.expect(%w[bd show zz-abc --json], out: '[{"id":"zz-abc","labels":[]}]')
+    @fake.expect(
+      ["gh", "pr", "list", "--state", "merged", "--head", "zz-abc-exit-sets",
+       "--json", "number,mergedAt,headRefOid", "--jq", ".[0]"],
+      out: "null\n"
+    )
+
+    code, env = run_survey([], fixture: other)
+
+    assert_equal 0, code
+    wt = env["data"]["worktrees"].first
+    assert_equal true, wt["ancestor_of_origin_main"]
+  end
+
   def test_git_worktree_list_failure_blocks
     @fake.expect(%w[git worktree list --porcelain], exitstatus: 1, err: "fatal: not a git repository\n")
 
