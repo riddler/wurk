@@ -155,6 +155,79 @@ class ManifestValidationTest < Minitest::Test
     )
     assert m.valid?, "expected a fully-declared gate.sabotage section to validate: #{m.errors.inspect}"
   end
+
+  def test_judge_fixture_validates
+    m = ManifestFixtures.load("judge")
+    assert m.valid?, "expected the judge fixture to validate: #{m.errors.inspect}"
+  end
+
+  # sabotage: drop the section-must-be-an-object check in validate_judge -> red
+  def test_judge_non_object_section_blocks
+    m = ManifestFixtures.load_with("valid", "judge" => "on")
+    refute m.valid?
+    assert_match(/judge must be an object/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the empty-registry check in validate_judge -> red
+  def test_judge_empty_registry_blocks
+    m = ManifestFixtures.load_with("valid", "judge" => { "registry" => [] })
+    refute m.valid?
+    assert_match(/judge\.registry must be a non-empty array of objects/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the missing-registry check in validate_judge -> red
+  def test_judge_missing_registry_blocks
+    m = ManifestFixtures.load_with("valid", "judge" => { "model" => "sonnet" })
+    refute m.valid?
+    assert_match(/judge\.registry must be a non-empty array of objects/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop any per-field check in validate_judge_entry -> red
+  def test_judge_entry_missing_required_field_blocks_naming_it
+    %w[key label scope_prefix text focus].each do |field|
+      entry = {
+        "key" => "rule-one",
+        "label" => "RULE-ONE",
+        "scope_prefix" => "docs/rules/",
+        "text" => "docs/rules/rule-one.md",
+        "focus" => "a fake focus string"
+      }
+      entry.delete(field)
+
+      m = ManifestFixtures.load_with("valid", "judge" => { "registry" => [entry] })
+      refute m.valid?, "expected a registry entry missing #{field} to block"
+      assert_match(/judge\.registry entry missing #{field}/, m.errors.join("\n"))
+    end
+  end
+
+  # sabotage: drop the scope_suffix type check in validate_judge_entry -> red
+  def test_judge_entry_non_string_scope_suffix_blocks
+    entry = {
+      "key" => "rule-one",
+      "label" => "RULE-ONE",
+      "scope_prefix" => "docs/rules/",
+      "scope_suffix" => 1,
+      "text" => "docs/rules/rule-one.md",
+      "focus" => "a fake focus string"
+    }
+    m = ManifestFixtures.load_with("valid", "judge" => { "registry" => [entry] })
+    refute m.valid?
+    assert_match(/judge\.registry entry scope_suffix must be a string/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the judge.model type check in validate_judge -> red
+  def test_judge_empty_model_blocks
+    entry = {
+      "key" => "rule-one",
+      "label" => "RULE-ONE",
+      "scope_prefix" => "docs/rules/",
+      "text" => "docs/rules/rule-one.md",
+      "focus" => "a fake focus string"
+    }
+    m = ManifestFixtures.load_with("valid", "judge" => { "model" => "", "registry" => [entry] })
+    refute m.valid?
+    assert_match(/judge\.model must be a non-empty string/, m.errors.join("\n"))
+  end
 end
 
 class ManifestAccessorTest < Minitest::Test
@@ -208,6 +281,34 @@ class ManifestAccessorTest < Minitest::Test
     assert_equal [], @m.sabotage_test_roots
     assert_nil @m.sabotage_test_pattern
     assert_equal [], @m.sabotage_exempt_prefixes
+  end
+
+  # sabotage: make judge? return true when the section is absent -> red
+  def test_judge_absent_leaves_judge_false_and_registry_empty
+    refute @m.judge?
+    assert_equal [], @m.judge_registry
+  end
+
+  # sabotage: drop the judge.model DEFAULTS entry -> red
+  def test_judge_model_defaults_to_sonnet_when_unset
+    assert_equal "sonnet", @m.judge_model
+  end
+
+  def test_judge_fixture_exposes_typed_registry_values
+    m = ManifestFixtures.load("judge")
+    assert m.judge?
+    assert_equal "faketool-model", m.judge_model
+
+    registry = m.judge_registry
+    assert_equal 1, registry.length
+
+    entry = registry.first
+    assert_equal "rule-one", entry["key"]
+    assert_equal "RULE-ONE", entry["label"]
+    assert_equal "docs/rules/", entry["scope_prefix"]
+    assert_equal "RULE.md", entry["scope_suffix"]
+    assert_equal "docs/rules/rule-one.md", entry["text"]
+    refute_empty entry["focus"]
   end
 end
 

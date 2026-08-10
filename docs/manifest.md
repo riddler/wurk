@@ -94,10 +94,24 @@ defaults are listed under "Defaults" below.
     "dir": "changelog.d"              // mode-specific fields
   },
 
-  "release": null                     // (opt) recipe for wurk:release, or null.
+  "release": null,                    // (opt) recipe for wurk:release, or null.
                                       // predicator: {"kind": "hex", "version_file": "mix.exs",
                                       //   "readme_pin": true, "changelog": "CHANGELOG.md"}
                                       // fixative: {"kind": "xcode-app", ...}
+
+  "judge": {                          // (opt) merge-time judge over judgment-bearing prose
+    "model": "sonnet",                // (opt) default "sonnet"
+    "registry": [                     // required when judge is present; non-empty
+      {
+        "key": "adr-0008",
+        "label": "ADR-0008",
+        "scope_prefix": "skills/",
+        "scope_suffix": "SKILL.md",   // (opt)
+        "text": "docs/adr/0008-merge-time-judge-over-generic-skill-prose.md",
+        "focus": "what the propose pass is asked to look for"
+      }
+    ]
+  }
 }
 ```
 
@@ -168,6 +182,36 @@ statifier-ex is the only consumer that declares this section today;
 predicator-ex and fixative have no sabotage-discipline corpus and get the
 off state, honestly.
 
+## `judge`
+
+The merge-time propose/refute judge (ADR-0008) reads this section for what
+to judge and where. It is optional, and present-or-absent rather than
+partly-on, the same rule `gate.sabotage` follows: `judge.registry` must be a
+non-empty array when `judge` is present at all, so a `judge` section with an
+empty registry is a schema error, not a silently disabled judge. Absent
+means the judge has nothing to judge, not that it judged and found nothing -
+a consumer that registers nothing simply never runs it, and `judge?` reports
+`false`.
+
+- **model** - (opt) the model the judge calls for both the propose and
+  refute passes, overridable per run. Defaults to `sonnet` when the section
+  is present but `model` is not given, and `judge_model` returns that
+  default even when the whole `judge` section is absent.
+- **registry** - required, non-empty array of objects. Each entry:
+  - **key** - short identifier for the entry.
+  - **label** - human-readable name shown in findings.
+  - **scope_prefix** - path prefix a changed file must start with to be in
+    scope.
+  - **scope_suffix** - (opt) path suffix a changed file must also end with.
+  - **text** - path to the document judged text (e.g. an ADR) that the
+    propose pass is given verbatim.
+  - **focus** - what the propose pass is asked to look for; a description
+    of the failure mode, not a restatement of the rule the model already has
+    in `text`.
+
+Every field but `scope_suffix` must be a non-empty string; a missing or
+empty field blocks, naming the field.
+
 ## Two path lists, not one
 
 `gate.build_paths` and `gate.also_gated_paths` answer different questions,
@@ -210,6 +254,10 @@ with the new worktree's absolute path. No other field templates.
 | changelog.mode | fragments | keep-a-changelog (direct) | keep-a-changelog per package |
 | release | null (2.0.0-dev) | hex recipe | xcode-app recipe |
 
+None of the three downstream consumers configures `judge`; wurk itself is
+the only repo configuring it today, over its own `skills/**/SKILL.md`, per
+ADR-0008.
+
 ## Resolution
 
 Settled in phase 1 step 2. `lib/manifest.rb` locates the manifest in two
@@ -239,14 +287,15 @@ Defaults applied when a key is absent: `beads.topology` = `beads`,
 `commits.style` = `s-form`, `commits.subject_under` = 50,
 `commits.body_line_max` = 72, `commits.total_lines_max` = 40,
 `commits.trailer.key` = `Refs`, `models.direction` = `opus`,
-`artifacts.filename` = `YYMMDD-[id-]kebab`.
+`artifacts.filename` = `YYMMDD-[id-]kebab`, `judge.model` = `sonnet`.
 
 Everything else absent means the capability is off, and the scripts say so
 rather than guessing: no `tmux` section means no tmux integration, no
 `gate.report` means tier 0, no `gate.attest` means `attested: false`, no
 `gate.project_level_skips` means every skipped stage blocks, no
 `gate.sabotage` means the sabotage scan is off (`data.sabotage.enabled`
-false, `missing` always `[]`, no `git diff` shelled out for it).
+false, `missing` always `[]`, no `git diff` shelled out for it), no `judge`
+section means `judge?` is `false` and the judge never runs.
 
 ## Validation
 
