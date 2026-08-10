@@ -79,9 +79,8 @@ defaults are listed under "Defaults" below.
 
   "models": {                         // (opt) stage models that differ per project
     "direction": "fable"              // (opt) the ADR/direction tier wurk:work
-                                      // dispatches; default "opus". Illustrative
-                                      // here - statifier-ex's own manifest omits
-                                      // this section and runs on the default; see
+                                      // dispatches; default "opus". statifier-ex's
+                                      // own manifest sets this too (st-4i0); see
                                       // "Per-repo starting values" below.
   },
 
@@ -332,7 +331,7 @@ is already handled there.
 | gate.sabotage | yes | none | none |
 | parallelism.model | worktree-per-issue | worktree-per-issue | branch-in-place |
 | tmux.session | statifier-ex | predicator-ex | (renames current window) |
-| models.direction | opus (default) | opus (default) | opus (default) |
+| models.direction | fable | opus (default) | opus (default) |
 | artifacts.plans | docs/plans | docs/plans | thoughts/shared/plans |
 | commits.style | s-form | s-form | conventional + package map |
 | changelog.mode | fragments | keep-a-changelog (direct) | keep-a-changelog per package |
@@ -340,12 +339,12 @@ is already handled there.
 
 `models.direction` was added to the schema because statifier-ex and
 predicator-ex were observed to disagree on it (statifier wanted Fable,
-predicator Opus). That was the intent; neither manifest has ever set the
-field, so both run on the loader's `opus` default today. Whether
-statifier-ex still wants `fable` was an open question, tracked in
+predicator Opus). That was the intent, but neither manifest set the field for
+a while, so both ran on the loader's `opus` default. Whether statifier-ex
+still wanted `fable` was an open question, tracked in
 `docs/research/260810-wu-ubm-direction-model-reality-vs-doc.md` (wu-ubm); it
-is now settled: yes. The change is pending in statifier-ex's own tracker as
-st-4i0; the table above will read `fable` for that column once st-4i0 lands.
+is now settled: yes. st-4i0 landed the change in statifier-ex's own manifest,
+so the table above reads `fable` for that column.
 
 None of the three downstream consumers configures `judge`; wurk itself is
 the only repo configuring it today, over its own `skills/**/SKILL.md`, per
