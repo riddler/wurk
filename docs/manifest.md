@@ -266,11 +266,11 @@ is already handled there.
 `models.direction` was added to the schema because statifier-ex and
 predicator-ex were observed to disagree on it (statifier wanted Fable,
 predicator Opus). That was the intent; neither manifest has ever set the
-field, so both run on the loader's `opus` default today. Whether statifier-ex
-should still set `fable` explicitly is an open question, tracked in
-`docs/research/260810-wu-ubm-direction-model-reality-vs-doc.md` (wu-ubm) -
-this table records what the manifests actually contain, not the lapsed
-intent.
+field, so both run on the loader's `opus` default today. Whether
+statifier-ex still wants `fable` was an open question, tracked in
+`docs/research/260810-wu-ubm-direction-model-reality-vs-doc.md` (wu-ubm); it
+is now settled: yes. The change is pending in statifier-ex's own tracker as
+st-4i0; the table above will read `fable` for that column once st-4i0 lands.
 
 None of the three downstream consumers configures `judge`; wurk itself is
 the only repo configuring it today, over its own `skills/**/SKILL.md`, per
