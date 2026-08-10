@@ -195,4 +195,37 @@ class RebaseOntoTest < Minitest::Test
     source = File.read(File.expand_path("../rebase_onto.rb", __dir__))
     refute_match(/--force\b/, source)
   end
+
+  # sabotage: read a hardcoded "origin/main" instead of
+  # manifest.remote_default_branch -> FakeSh raises UnexpectedCommand (no
+  # stub for "origin/main" here, only "origin/trunk") -> red
+  def test_trunk_override_rebases_against_the_manifests_remote_default_branch
+    manifest = manifest_with(FIXTURE, "repo" => { "default_branch" => "trunk" })
+
+    with_manifest(manifest) do
+      @fake.expect(%w[git rev-parse HEAD], out: "aaaaaaa\n")
+      @fake.expect(%w[git rebase origin/trunk], out: "")
+      @fake.expect(%w[git rev-parse origin/trunk], out: "bbbbbbb\n")
+      @fake.expect(["git", "diff", "--quiet", "aaaaaaa", "HEAD", "--", "lock.json"], exitstatus: 0)
+
+      code, env = run_rebase(["/wt/zz-abc-x"])
+
+      assert_equal 0, code
+      assert_equal "rebased", env["data"]["status"]
+      assert_equal "bbbbbbb", env["data"]["target"]
+    end
+  end
+
+  # sabotage: same, but for the dry-run rendering -> the dry-run commands[]
+  # would still name "origin/main" -> red
+  def test_trunk_override_dry_run_renders_the_manifests_remote_default_branch
+    manifest = manifest_with(FIXTURE, "repo" => { "default_branch" => "trunk" })
+
+    with_manifest(manifest) do
+      code, env = run_rebase(["/wt/zz-abc-x", "--dry-run"])
+
+      assert_equal 0, code
+      assert env["commands"].any? { |c| c.include?("git rebase origin/trunk") }
+    end
+  end
 end

@@ -17,9 +17,10 @@ require_relative "lib/manifest"
 # that resolving a rebase conflict unasked is unauthorized, so this script
 # does not offer one even as dead code.
 #
-# Assumes `origin/main` has already been fetched by the caller: a standalone
-# run does no fetch of its own (see #run), and worktree_refresh.rb fetches
-# once for the whole sweep rather than once per worktree.
+# Assumes the manifest's remote default branch has already been fetched by
+# the caller: a standalone run does no fetch of its own (see #run), and
+# worktree_refresh.rb fetches once for the whole sweep rather than once per
+# worktree.
 module RebaseOnto
   class << self
     # Runs the block against the worktree at `path`, recording every command
@@ -38,7 +39,7 @@ module RebaseOnto
       before_res = Sh.run(%w[git rev-parse HEAD], chdir: path, envelope: env)
       before = before_res.out.to_s.strip
 
-      rebase_res = Sh.run(%w[git rebase origin/main], chdir: path, envelope: env)
+      rebase_res = Sh.run(["git", "rebase", manifest.remote_default_branch], chdir: path, envelope: env)
 
       unless rebase_res.success?
         # Capture the conflicting files first, then abort - the abort clears
@@ -52,7 +53,7 @@ module RebaseOnto
         return { status: "conflict", files: files }
       end
 
-      target_res = Sh.run(%w[git rev-parse origin/main], chdir: path, envelope: env)
+      target_res = Sh.run(["git", "rev-parse", manifest.remote_default_branch], chdir: path, envelope: env)
       target = target_res.out.to_s.strip
 
       # git diff --quiet exits 0 when there is no difference (the fast path:
@@ -104,7 +105,7 @@ module RebaseOnto
 
     def dry_run_steps(path, env, manifest)
       env.commands << Sh.render(%w[git rev-parse HEAD], chdir: path)
-      env.commands << Sh.render(%w[git rebase origin/main], chdir: path)
+      env.commands << Sh.render(["git", "rebase", manifest.remote_default_branch], chdir: path)
       env.commands << "(on conflict) " + Sh.render(%w[git diff --name-only --diff-filter=U], chdir: path)
       env.commands << "(on conflict) " + Sh.render(%w[git rebase --abort], chdir: path)
       prefix = manifest.repair_when ? "(if #{manifest.repair_when} moved) " : "(on repair) "

@@ -305,9 +305,10 @@ the propose pass should look for.
 - **Collection, in order:** the registry check comes first, before any
   shell-out at all - a consumer with no `judge` section reaches its
   `no_registry` skip without spawning a process. Then CLI presence
-  (`which claude`), base-ref resolution (`--base`, `origin/main`, `main`,
-  first to resolve wins), `git merge-base`, and a `-U0` diff against it,
-  split into per-file chunks and scoped per registry entry.
+  (`which claude`), base-ref resolution (`--base`, then the manifest's
+  `repo.default_branch` on the remote, then locally, first to resolve
+  wins), `git merge-base`, and a `-U0` diff against it, split into
+  per-file chunks and scoped per registry entry.
 - **One propose call, one independent refute call, per candidate.** The
   propose pass proposes violations from the scoped hunks and the judged
   text; the refute pass sees the identical hunks (rendered once, shared by

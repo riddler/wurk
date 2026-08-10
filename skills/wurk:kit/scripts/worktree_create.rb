@@ -78,13 +78,14 @@ module WorktreeCreate
         return env.emit(io)
       end
 
-      base_ref = "origin/main"
+      base_ref = manifest.remote_default_branch
       fetch_res = Sh.run(%w[git fetch origin], chdir: root, envelope: env)
       unless fetch_res.success?
-        base_ref = "main"
+        base_ref = manifest.default_branch
         env.warn(
           code: "fetch_failed",
-          message: "git fetch origin failed (offline?); cutting #{name} from local main instead of origin/main"
+          message: "git fetch origin failed (offline?); cutting #{name} from local " \
+                   "#{manifest.default_branch} instead of #{manifest.remote_default_branch}"
         )
       end
 

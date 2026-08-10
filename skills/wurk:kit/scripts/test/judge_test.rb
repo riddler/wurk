@@ -332,6 +332,45 @@ class JudgeTest < Minitest::Test
     end
   end
 
+  # sabotage: read a hardcoded "origin/main"/"main" ladder instead of
+  # manifest.remote_default_branch/manifest.default_branch -> FakeSh raises
+  # UnexpectedCommand (no stub for "origin/main" here, only "origin/trunk")
+  # -> red
+  def test_trunk_override_resolves_base_against_the_manifests_remote_default_branch
+    other = manifest_with(FIXTURE, "repo" => { "default_branch" => "trunk" })
+
+    with_manifest(other) do
+      base_call_expectations(diff: diff_chunk("docs/rules/RULE.md"), base_ref: "origin/trunk")
+      @fake.expect(["claude"],
+                   out: cli_stdout('[{"file": "docs/rules/RULE.md", "line": 3, "claim": "swallowed the human gate"}]'))
+      @fake.expect(["claude"], out: cli_stdout('{"violation": false, "grounds": "the prose still states the gate"}'))
+
+      code, env = run_judge([])
+
+      assert_equal 0, code
+      assert_equal "clean", env["data"]["status"]
+    end
+  end
+
+  # sabotage: same, but for the no_base_ref skip - a ladder that still tries
+  # literal "origin/main"/"main" would resolve against this repo's own
+  # checkout and never reach the skip -> red
+  def test_skip_no_base_ref_when_neither_trunk_rung_resolves
+    other = manifest_with(FIXTURE, "repo" => { "default_branch" => "trunk" })
+
+    with_manifest(other) do
+      @fake.expect(%w[which claude], exitstatus: 0)
+      @fake.expect(%w[git rev-parse --verify --quiet origin/trunk], exitstatus: 1)
+      @fake.expect(%w[git rev-parse --verify --quiet trunk], exitstatus: 1)
+
+      code, env = run_judge([])
+
+      assert_equal 0, code
+      assert_equal true, env["ok"]
+      assert_equal "no_base_ref", env["data"]["skipped_reason"]
+    end
+  end
+
   # --- missing judged text ---------------------------------------------------
 
   def test_missing_judged_text_blocks_rather_than_skips

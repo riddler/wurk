@@ -578,14 +578,14 @@ Each new test carries a `# sabotage:` note.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] No `origin/main` outside a comment in kit source - decided by a command,
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] No `origin/main` outside a comment in kit source - decided by a command,
       not by eye:
       `ruby -e 'bad=Dir.glob("skills/wurk:kit/scripts/**/*.rb").reject{|f| f.include?("/test/")}.flat_map{|f| File.readlines(f).each_with_index.select{|l,_| l !~ /^\s*#/ && l.include?("origin/main")}.map{|_,i| "#{f}:#{i+1}"}}; abort(bad.join(", ")) unless bad.empty?'`
       exits 0
-- [ ] `grep -rn 'origin/main' skills/wurk:kit/REFERENCE.md` returns no
+- [x] `grep -rn 'origin/main' skills/wurk:kit/REFERENCE.md` returns no
       specification-shaped line (the judge ladder line is rewritten)
-- [ ] Envelope field names are unchanged:
+- [x] Envelope field names are unchanged:
       `grep -rn 'origin_main\|ancestor_of_origin_main' skills/wurk:kit/scripts --include='*.rb'`
       still finds them, and `ruby skills/wurk:kit/scripts/worktree_survey.rb`
       still emits `ancestor_of_origin_main` per entry
@@ -852,6 +852,27 @@ before considering the plan fully landed.
       predicator-ex) for `no_main_ref` - `grep -rn no_main_ref
       <checkout>/.claude`. If any extension file keys on the old warning code,
       revert the rename and change only the message text (Open Question 2).
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution, pause
+here for the human to confirm the manual testing before moving to the next
+phase. In looped (`--loop`) execution, this phase's Automated Verification
+gates advancement automatically (via `/wurk:commit --auto`), and Manual
+Verification items are deferred and surfaced once at the end instead of
+blocking here.
+
+---
+
+### Phase 2
+
+- [ ] `ruby skills/wurk:kit/scripts/worktree_refresh.rb --dry-run` in the main
+      checkout renders the same commands it did before the change
+- [ ] `ruby skills/wurk:kit/scripts/judge.rb --help` describes the `--base`
+      ladder without naming a branch, and still tells a caller what `--base`
+      overrides
+- [ ] `ruby skills/wurk:kit/scripts/worktree_create.rb --dry-run <args>` shows
+      `origin/main` as the base ref in this repo and reports it in
+      `data.base_ref`, i.e. the default path is genuinely unchanged
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution, pause
