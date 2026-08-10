@@ -689,20 +689,20 @@ the grep in the criteria rather than trusting this sentence.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] The guard actually runs over the real files:
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] The guard actually runs over the real files:
       `ruby skills/wurk:kit/scripts/test/run.rb --name test_no_hardcoded_default_branch_in_kit_source`
       reports `1 runs, 0 failures` (a `0 runs` result means the test was named
       differently and this criterion proved nothing)
-- [ ] The guard is not vacuous, permanently and unattended: the
+- [x] The guard is not vacuous, permanently and unattended: the
       planted-violation meta-test in `ContractRulesTest` asserts a synthetic
       `Sh.run(["git", "diff", "main...HEAD"])` is caught, and
       `ruby skills/wurk:kit/scripts/test/run.rb --name test_no_hardcoded_default_branch_in_kit_source`
       proves the rule also runs over the real files (above)
-- [ ] No false positive on worktree vocabulary: after the guard lands,
+- [x] No false positive on worktree vocabulary: after the guard lands,
       `grep -rn 'main_checkout\|is_main\|main_repo' skills/wurk:kit/scripts --include='*.rb'`
       still finds every occurrence and the suite is green
-- [ ] `grep -rn 'origin/main\|main\.\.\.HEAD' skills/wurk:*/SKILL.md` returns no
+- [x] `grep -rn 'origin/main\|main\.\.\.HEAD' skills/wurk:*/SKILL.md` returns no
       matches
 
 #### Manual Verification:
@@ -873,6 +873,32 @@ blocking here.
 - [ ] `ruby skills/wurk:kit/scripts/worktree_create.rb --dry-run <args>` shows
       `origin/main` as the base ref in this repo and reports it in
       `data.base_ref`, i.e. the default path is genuinely unchanged
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution, pause
+here for the human to confirm the manual testing before moving to the next
+phase. In looped (`--loop`) execution, this phase's Automated Verification
+gates advancement automatically (via `/wurk:commit --auto`), and Manual
+Verification items are deferred and surfaced once at the end instead of
+blocking here.
+
+---
+
+### Phase 3
+
+- [ ] One-time author sanity check on the guard: temporarily add
+      `X = Sh.run(["git", "diff", "main...HEAD"])` to
+      `skills/wurk:kit/scripts/repo_state.rb`, confirm the suite goes red
+      naming that line, then revert. (This is a hand-run source mutation, so
+      it is manual by nature; the meta-test above is its permanent form.)
+- [ ] Read each `HARDCODED_REFS` pattern and ask what a false positive looks
+      like - in particular whether `develop` or `trunk` appears as an ordinary
+      word anywhere a ref-shaped context could form
+- [ ] The failure message tells a future implementer what to do, not just that
+      something is wrong
+- [ ] `/wurk:mr` step 1 still reads as a runnable instruction - an agent
+      following it knows to substitute the envelope value, and does not paste
+      the angle brackets
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution, pause

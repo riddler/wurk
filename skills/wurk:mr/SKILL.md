@@ -54,10 +54,11 @@ the branch's own commits, falling back to the branch prefix (step 2).
    belongs in a commit, or is unrelated and belongs somewhere else. Do not
    stage it here.
 
-   Confirm there is something to push:
+   Confirm there is something to push, using `data.default_branch` from step
+   1's `repo_state.rb` output in place of `<data.default_branch>`:
 
    ```bash
-   git log origin/main..HEAD --oneline
+   git log origin/<data.default_branch>..HEAD --oneline
    ```
 
    Empty means there is nothing to open a request for. Say so and stop.
