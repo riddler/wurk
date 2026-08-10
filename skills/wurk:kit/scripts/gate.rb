@@ -21,27 +21,35 @@ require_relative "lib/manifest"
 #    whatever the reason. CLAUDE.md: "a skipped stage is not a passing one" -
 #    a summary that drops it launders exactly what that rule protects.
 #
-#    Whether a skip *blocks* is a second question, and CLAUDE.md answers it
-#    in the same breath: "the reason says whether the gap is in this run or
-#    in what the project checks at all." Those are different failures.
+#    Whether a skip *blocks*, and whether it is worth naming when reporting,
+#    are the next two questions, and each skip gets a three-way
+#    `classification`:
 #
-#    - A gap **in this run** blocks. Dialyzer skipping because the PLT is
-#      missing, Tests skipping because compilation half-failed: the gate was
-#      asked to measure something and could not, so `ok` is false.
-#    - A gap in **what the project checks at all** is reported, not blocked.
-#      A check that is not installed, or a stage disabled in the project's
-#      own gate config, is a standing project property, true on every run
-#      including the ones that were green when the policy was written.
-#      Blocking on them makes `ok` false on *every* full gate run forever,
-#      which does not enforce the rule - it deletes the signal, and the
-#      first thing anyone does with a check that is always red is stop
-#      reading it.
+#    - `run_level` - a gap **in this run**. Dialyzer skipping because the PLT
+#      is missing, Tests skipping because compilation half-failed: the gate
+#      was asked to measure something and could not, so `ok` is false.
+#    - `project_level` - a gap in **what the project checks at all**. A check
+#      that is not installed, or a stage disabled in the project's own gate
+#      config, is a standing project property, true on every run including
+#      the ones that were green when the policy was written. Blocking on
+#      them makes `ok` false on *every* full gate run forever, which does not
+#      enforce the rule - it deletes the signal, and the first thing anyone
+#      does with a check that is always red is stop reading it. It does not
+#      block, but it is still named in what you report.
+#    - `not_applicable` - a gap the project has declared **permanently
+#      inapplicable**, not a gap it means to close. It does not block, and
+#      unlike `project_level` it is not required in reports either: naming a
+#      stage that will never apply, forever, is the noise that trains
+#      readers to stop reading the skip lines at all. It stays in
+#      `data.skipped_stages` regardless - rule 1 does not bend for it.
 #
-#    `gate.project_level_skips` (a manifest field, see docs/manifest.md)
-#    draws that line, and a project declaring none gets the strict reading:
-#    anything not matched blocks. Widening the list is the same class of
-#    decision as editing the gate config, so it belongs in review - in the
-#    consumer's own manifest, not in this script.
+#    `gate.project_level_skips` and `gate.not_applicable_skips` (manifest
+#    fields, see docs/manifest.md) draw those lines, checked in that
+#    precedence order (`not_applicable` first, since it is the narrower,
+#    explicitly enumerated declaration), and a project declaring neither
+#    gets the strict reading: anything not matched blocks. Widening either
+#    list is the same class of decision as editing the gate config, so it
+#    belongs in review - in the consumer's own manifest, not in this script.
 # 2. This script accepts exactly one profile argument, `--profile loop`, and
 #    forwarding it always sets `attested: false`. Every other `--profile`
 #    value, and `--skip`/`--quick` in any form, are simply not options this
@@ -182,25 +190,35 @@ module Gate
                     exempt_prefixes: manifest.sabotage_exempt_prefixes)
     end
 
-    def skipped_from(stages, project_level_re)
+    def skipped_from(stages, project_level_re, not_applicable_re)
       Array(stages)
         .select { |s| s["status"] == "skipped" }
         .map do |s|
           summary = s["summary"]
           { name: s["name"], summary: summary,
-            project_level: project_level_skip?(summary, project_level_re) }
+            classification: classify_skip(summary, project_level_re, not_applicable_re) }
         end
     end
 
-    # True when the skip describes what this project checks at all, rather
-    # than something this run could not do. The patterns are manifest data
-    # (gate.project_level_skips): a project that declares none gets the
-    # strict reading, where every skipped stage blocks. See rule 1 in the
-    # module doc.
-    def project_level_skip?(summary, project_level_re)
-      return false if project_level_re.nil?
+    # Three-way, in precedence order. "not_applicable" is checked first: it is
+    # the narrower, explicitly enumerated declaration, and a project whose
+    # project-level pattern is broad ("not installed") must be able to carve
+    # one stage out of it without rewriting the broad pattern. Both regexes
+    # are manifest data (gate.not_applicable_skips, gate.project_level_skips),
+    # and a nil regex never matches - which is what makes "declare neither
+    # list and every skipped stage blocks" the default rather than a special
+    # case. See rule 1 in the module doc.
+    def classify_skip(summary, project_level_re, not_applicable_re)
+      return "not_applicable" if matches?(summary, not_applicable_re)
+      return "project_level" if matches?(summary, project_level_re)
 
-      !(summary.to_s =~ project_level_re).nil?
+      "run_level"
+    end
+
+    def matches?(summary, re)
+      return false if re.nil?
+
+      !(summary.to_s =~ re).nil?
     end
 
     # `data.gate_guard` is a report, never repaired: the ledger existence
@@ -331,7 +349,7 @@ module Gate
       tier = report.nil? ? 0 : 1
       report ||= {}
       stages = report["stages"] || []
-      skipped = skipped_from(stages, manifest.project_level_skip_re)
+      skipped = skipped_from(stages, manifest.project_level_skip_re, manifest.not_applicable_skip_re)
 
       env.data[:ran] = loop_mode ? "loop" : "all"
       env.data[:tier] = tier
@@ -370,7 +388,19 @@ module Gate
       end
 
       skipped.each do |s|
-        if s[:project_level]
+        case s[:classification]
+        when "not_applicable"
+          # Declared permanently inapplicable in the consumer's own manifest.
+          # Still in data.skipped_stages - rule 1 does not bend - but naming
+          # it in every report forever is noise that trains readers to skim
+          # the skip lines, so this warning says so instead of asking for it.
+          env.warn(
+            code: "stage_skipped_not_applicable",
+            message: "#{s[:name]} was skipped (#{s[:summary]}) - declared permanently inapplicable to " \
+                     "this project (gate.not_applicable_skips); not a passing stage, and not required " \
+                     "in reports"
+          )
+        when "project_level"
           # Reported, never blocking: this is a gap in what the project
           # checks at all, not in what this run measured. It is identical on
           # a green run and a red one, so gating on it would only ever mean

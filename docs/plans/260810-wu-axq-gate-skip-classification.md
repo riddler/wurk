@@ -458,18 +458,18 @@ without the boolean and needs no change.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `ruby skills/wurk:kit/scripts/test/run.rb` is green
-- [ ] a test asserts a not-applicable skip yields `ok: true`, empty
+- [x] `ruby skills/wurk:kit/scripts/test/run.rb` is green
+- [x] a test asserts a not-applicable skip yields `ok: true`, empty
       `blocked`, `classification: "not_applicable"`, and a
       `stage_skipped_not_applicable` warning
-- [ ] a test asserts a summary matching both lists classifies
+- [x] a test asserts a summary matching both lists classifies
       `not_applicable`, and one matching only the broad list classifies
       `project_level`, in the same run
-- [ ] a test asserts that with both lists absent a familiar-looking summary
+- [x] a test asserts that with both lists absent a familiar-looking summary
       still blocks with code `stage_skipped` and `classification: "run_level"`
-- [ ] `grep -rn "project_level:" skills/ docs/manifest.md` returns no hit
+- [x] `grep -rn "project_level:" skills/ docs/manifest.md` returns no hit
       describing the envelope key (the manifest *field* names stay)
-- [ ] the contract test still passes, i.e. no consumer vocabulary entered
+- [x] the contract test still passes, i.e. no consumer vocabulary entered
       `gate.rb`
 
 #### Manual Verification:
@@ -569,6 +569,31 @@ before considering the plan fully landed.
       implementation accident
 - [ ] no consumer-project vocabulary entered kit source - the statifier
       examples live in `docs/manifest.md` only
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 2
+
+- [ ] `gate.rb`'s module doc rule 1 reads as one coherent three-way rule, not
+      a two-way rule with a paragraph bolted on
+- [ ] `/wurk:commit` Step 0 and `/wurk:mr` step 4 give an agent an
+      unambiguous answer for each of the three values, with no residual
+      instruction to name a not-applicable stage
+- [ ] running the wurk gate through `gate.rb` in this repo still produces a
+      sane envelope (this repo is tier 0, so `skipped_stages` is empty - the
+      check is that nothing regressed, not that a skip appears)
+- [ ] statifier-ex's manifest could be edited today to move gettext and the
+      `.po` patterns into the new list, with no wurk change left outstanding
+      (read st-wz4's requirement against the shipped field; do not edit that
+      repo here)
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
