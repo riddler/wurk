@@ -76,6 +76,11 @@ patterns. Examples of what lives here rather than in wurk:
   corpus/ratchet success criteria, Appendix D conventions.
 - predicator-ex: ISA Impact sections, ISA sizing rule, hex release recipe.
 - fixative: UniFFI/SwiftUI-privacy plan patterns, bead-to-GitLab promotion.
+- wurk itself: `wurk/mr.md` declares a merge-time prose judge over this
+  repo's own `skills/**/SKILL.md` (ADR-0008), run through `judge.rb` against
+  the registry in `.claude/wurk.json`. Wurk is a consumer of itself
+  (ADR-0007), so it uses this same extension seam rather than a bespoke one -
+  this repo no longer consumes itself through the manifest alone.
 
 Extensions add; they do not override. A project needing to change generic
 behavior (not just extend it) is a signal the manifest schema is missing a
@@ -110,3 +115,6 @@ required): `ruby skills/wurk:kit/scripts/test/run.rb`. The contract test is
 part of that suite. Consumer repos stop gating skill content they no longer
 contain; statifier-ex narrows its ADR judge scope accordingly (recorded in a
 statifier ADR, per docs/plan.md phase 2).
+
+The prose judge (`judge.rb`) runs at the merge seam, through `wurk/mr.md`,
+deliberately not inside `run.rb` or this required gate (ADR-0008).
