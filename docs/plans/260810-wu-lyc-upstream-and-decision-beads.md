@@ -494,13 +494,13 @@ Plan-only and Just-do-it. Then a paragraph immediately under the table:
 
 #### Automated Verification:
 
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
       (regression only - no test asserts on skill prose)
-- [ ] `grep -n 'always_batchable' skills/wurk:work/SKILL.md` is non-empty
-- [ ] `grep -n 'bd close' skills/wurk:work/SKILL.md` is non-empty (the
+- [x] `grep -n 'always_batchable' skills/wurk:work/SKILL.md` is non-empty
+- [x] `grep -n 'bd close' skills/wurk:work/SKILL.md` is non-empty (the
       manual-close instruction is present)
-- [ ] `grep -niE '\b(statifier|predicator|fixative|riddler)\b' skills/wurk:work/SKILL.md` is empty - no consumer named in a generic skill
-- [ ] The upstream section precedes the `/wurk:branch` invocation in file
+- [x] `grep -niE '\b(statifier|predicator|fixative|riddler)\b' skills/wurk:work/SKILL.md` is empty - no consumer named in a generic skill
+- [x] The upstream section precedes the `/wurk:branch` invocation in file
       order: `grep -n 'upstream\|/wurk:branch' skills/wurk:work/SKILL.md`
       shows the first `upstream` hit above the first `/wurk:branch` hit
 
@@ -625,6 +625,29 @@ before considering the plan fully landed.
       thing, and all four are in this one commit
 - [ ] The new `docs/manifest.md` section reads as reference material,
       matching its neighbours' register
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 2
+
+- [ ] Walk the skill top to bottom as a model would: an upstream bead in a
+      main checkout reaches the exit before any `/wurk:branch` invocation, and
+      an upstream bead in a workspace reaches the same exit before sizing
+- [ ] The renumbering left no dangling cross-reference - every "step N"
+      mention inside `wurk:work/SKILL.md` and in any other skill that names a
+      `/wurk:work` step still points at the right one
+- [ ] The report contents are stated concretely enough that two different
+      sessions would produce the same shape of report
+- [ ] The signal-not-override wording cannot be read as "type decides the
+      bucket"
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
