@@ -127,7 +127,10 @@ Beyond areas: add whatever topical labels the user mentions, and the labels
 the manifest lists under `beads.areas.always_batchable` where they apply -
 those mark work that changes no files in this repo (a fix that belongs in a
 sibling project, for example), which is why such a bead takes no area label at
-all.
+all. Such a bead is picked up without a workspace, so labelling it is
+strictly better than leaving it unlabelled - the labelled bead gets a
+coordination report, the unlabelled one is skipped as "blast radius
+undecided".
 
 **An unlabeled bead is not neutral: it is unpickable.** `/wurk:next` skips it
 as "blast radius undecided". Labeling at creation is cheaper than the round

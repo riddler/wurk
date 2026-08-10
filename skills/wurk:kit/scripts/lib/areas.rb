@@ -28,9 +28,12 @@ module Areas
       manifest.area_lands_alone
     end
 
-    # Labels marking work that changes no files in this repo
-    # (docs/workflow.md). Always batchable - such a bead collides with
-    # nothing here by definition.
+    # Labels marking work that changes no files in this repo - the work
+    # happens in a sibling project and the bead here tracks it. One
+    # predicate, two consequences (ADR-0009): such a bead collides with
+    # nothing (always batchable), and it has nothing for a workspace to do
+    # (select_batch.rb reports the `upstream` verdict, and /wurk:work exits
+    # early rather than standing one up).
     def always_batchable_labels(manifest = Manifest.current)
       manifest.area_always_batchable
     end
@@ -43,6 +46,9 @@ module Areas
       Array(labels).select { |l| vocabulary.include?(l) }
     end
 
+    # A true result means select_batch.rb's `annotate` reports the
+    # `upstream` verdict rather than sizing the bead into `free` or
+    # `unlabeled` - never claimed, never given a workspace.
     def upstream?(labels, manifest: Manifest.current)
       !(Array(labels) & always_batchable_labels(manifest)).empty?
     end

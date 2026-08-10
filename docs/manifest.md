@@ -256,6 +256,24 @@ The carve-out predicate ("does the gate have anything to measure?") is the
 union of both. Each entry is a directory prefix when it ends in `/`, and an
 exact path otherwise; no globbing.
 
+## `beads.areas.always_batchable`
+
+The field lists labels marking work that **changes no files in this repo** -
+the work happens in a sibling project and the bead here tracks it.
+
+That single predicate has **two consequences, not one**: such a bead
+collides with nothing (so it is always batchable), *and* it has nothing for
+a workspace to do (so no workspace is stood up for it). `select_batch.rb`
+reports it as the `upstream` verdict - informational, never recommended -
+and `/wurk:work` handles it with an early exit and a coordination report.
+
+The name is narrower than the meaning. ADR-0009 considered renaming and
+rejected it: a breaking manifest change bought only for a name. If a
+breaking schema change happens for other reasons, the rename rides along.
+
+A bead carrying one of these labels takes no `area:` label; the two are
+alternatives.
+
 ## `{path}` substitution
 
 `parallelism.trust` is the one command run *about* a new worktree rather
