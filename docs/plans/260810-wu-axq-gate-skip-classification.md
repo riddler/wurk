@@ -239,14 +239,14 @@ gate.not_applicable_skips from REGEX_LIST_FIELDS -> red").
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `ruby skills/wurk:kit/scripts/test/run.rb` is green
-- [ ] the suite contains a test asserting `not_applicable_skip_re` is `nil`
+- [x] `ruby skills/wurk:kit/scripts/test/run.rb` is green
+- [x] the suite contains a test asserting `not_applicable_skip_re` is `nil`
       when the field is absent, and a compiled `Regexp` when it is declared
-- [ ] a manifest carrying `"not_applicable_skips": "a string"` fails
+- [x] a manifest carrying `"not_applicable_skips": "a string"` fails
       validation with an error naming `gate.not_applicable_skips`
-- [ ] a manifest carrying `"not_applicable_skips": ["["]` fails validation
+- [x] a manifest carrying `"not_applicable_skips": ["["]` fails validation
       with an error naming the offending entry
-- [ ] `ruby skills/wurk:kit/scripts/lib/manifest.rb check` (the standalone
+- [x] `ruby skills/wurk:kit/scripts/lib/manifest.rb check` (the standalone
       lint, `lib/manifest.rb:673-696`) still reports this repo's own
       `.claude/wurk.json` valid - the field is optional
 
@@ -553,3 +553,29 @@ of blocking here.
 - Consumers of the classification: `skills/wurk:kit/REFERENCE.md:257-273`,
   `skills/wurk:commit/SKILL.md:114-124`, `skills/wurk:mr/SKILL.md:138-141`
 - Contract: `docs/gate-contract.md`, `docs/manifest.md:164-177`
+
+## Deferred Manual Verification
+
+Manual verification items are deferred during looped (--loop) execution and
+surfaced here once, rather than blocking after each phase. Confirm these
+before considering the plan fully landed.
+
+### Phase 1
+
+- [ ] `docs/manifest.md` states the choosing test in a form a human can apply
+      to a stage they have never seen, not just a restatement of the field
+      names
+- [ ] the precedence rule reads as a deliberate decision in the doc, not an
+      implementation accident
+- [ ] no consumer-project vocabulary entered kit source - the statifier
+      examples live in `docs/manifest.md` only
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---

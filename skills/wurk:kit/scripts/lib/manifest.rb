@@ -69,7 +69,7 @@ class Manifest
     "beads.areas" => %w[labels lands_alone always_batchable],
     "forge" => %w[kind labels],
     "gate" => %w[full loop report report_loop attest guard_ledger build_paths also_gated_paths moving_files
-                 project_level_skips sabotage],
+                 project_level_skips not_applicable_skips sabotage],
     "gate.sabotage" => %w[test_roots test_pattern exempt_prefixes],
     "parallelism" => %w[model worktrees_dir trust warm_clone warm_globs warm repair_when repair post_branch],
     "tmux" => %w[session model],
@@ -285,10 +285,15 @@ class Manifest
   # blocks. Widening this list is a review decision made in the consumer's
   # own manifest, not a default this kit guesses at.
   def project_level_skip_re
-    sources = Array(fetch("gate.project_level_skips"))
-    return nil if sources.empty?
+    skip_re("gate.project_level_skips")
+  end
 
-    Regexp.union(sources.map { |s| Regexp.new(s) })
+  # The sibling list, for stages the project has declared permanently
+  # inapplicable rather than a gap it means to close. Same shape, same
+  # nil-means-strict default; gate.rb checks this one first (see
+  # docs/manifest.md).
+  def not_applicable_skip_re
+    skip_re("gate.not_applicable_skips")
   end
 
   # Whether the sabotage scan is configured at all. A section absent means
@@ -456,6 +461,16 @@ class Manifest
 
   private
 
+  # Shared by project_level_skip_re and not_applicable_skip_re: compiles a
+  # regex-list field into one Regexp, or nil when the project declares none.
+  # One helper so the two accessors cannot drift apart.
+  def skip_re(dotted)
+    sources = Array(fetch(dotted))
+    return nil if sources.empty?
+
+    Regexp.union(sources.map { |s| Regexp.new(s) })
+  end
+
   # Commands are argv arrays in the manifest, never shell strings - the same
   # rule Sh enforces at the other end. A string here is a schema error, not
   # something to split on whitespace.
@@ -473,7 +488,7 @@ class Manifest
 
   # Fields that hold a list of regex source strings rather than argv. Each
   # entry must compile; the field itself may be absent.
-  REGEX_LIST_FIELDS = %w[gate.project_level_skips].freeze
+  REGEX_LIST_FIELDS = %w[gate.project_level_skips gate.not_applicable_skips].freeze
 
   def validate!
     validate_version

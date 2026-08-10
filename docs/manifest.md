@@ -49,6 +49,10 @@ defaults are listed under "Defaults" below.
       "not\\s+installed",
       "disabled in \\.quality\\.exs"
     ],
+    "not_applicable_skips": [        // (opt) tier 1
+      "^:gettext not installed$",
+      "^no \\.po files"
+    ],
     "sabotage": {                    // (opt) report-only mutation-testing scan
       "test_roots": ["test/"],
       "test_pattern": "\\btest\\s+\"",
@@ -161,20 +165,47 @@ changelogs) is phase-4 work. Any unimplemented kind is refused by name - a
 half-performed release recipe is indistinguishable from a finished one by
 looking.
 
-## `gate.project_level_skips`
+## `gate.project_level_skips` and `gate.not_applicable_skips`
 
-Regex source strings, matched against a skipped stage's `summary` to decide
-whether the gap is in this run or in what the project checks at all
-(`gate.rb`'s module doc draws the same line). A match means the stage is
-reported with `project_level: true` and a warning, but does not block; no
-match blocks, and a skipped stage is never reported as passing either way.
+Two sibling lists of regex source strings, both matched against a skipped
+stage's `summary`, that classify a skip beyond "the gate could not measure it
+on this run". `gate.rb`'s module doc draws the same line.
 
-Absent means the list is empty, which is the strict reading: nothing is
-project-level, so every skipped stage blocks. Widening the list is a review
-decision made in this file, not a kit default - see `gate.rb`'s module doc
-for why the strict direction is deliberate. statifier-ex's values above
-(`not installed`, `disabled in .quality.exs`) are that project's own
-taxonomy, not a default any other consumer inherits.
+The choosing test, stated plainly: *is this a stage the project would run if
+someone did the work?* Yes - it belongs in `project_level_skips`; the gap is
+real and the nag is doing its job. No, and it never will - it belongs in
+`not_applicable_skips`; the stage is permanently out of scope for this
+project, not merely unaddressed.
+
+statifier-ex is the worked example. `:doctor not installed` is a
+documentation-coverage check for a library with an `@spec`/`@doc` discipline
+- a genuine gap, so it stays in `project_level_skips`. `:gettext not
+installed` and the `no .po files` summaries are translation tooling for a
+library with no user-facing strings - they will never apply, so they belong
+in `not_applicable_skips`.
+
+A `project_level_skips` match reports the stage with a warning and does not
+block; the report explicitly still names the stage in commit reports and
+request bodies, because it is a standing gap someone should eventually close.
+A `not_applicable_skips` match also reports with a warning and does not
+block, but is explicitly not required in commit reports or request bodies -
+naming a permanently inapplicable stage forever is noise, not signal. Either
+way a skipped stage is never reported as passing.
+
+**Precedence:** when a summary matches both lists, `gate.rb` checks
+`not_applicable_skips` first, so the stage classifies as not-applicable. The
+narrower, explicitly-enumerated declaration wins over the broader
+standing-gap pattern - the alternative would force every consumer with a
+broad `project_level_skips` pattern to rewrite it with a negative lookahead
+before `not_applicable_skips` could do anything, which defeats the point of
+having a separate field.
+
+Absent means the corresponding list is empty, which is the strict reading:
+nothing is project-level and nothing is not-applicable, so every skipped
+stage blocks. Widening either list is a review decision made in this file,
+not a kit default - see `gate.rb`'s module doc for why the strict direction
+is deliberate. statifier-ex's values above are that project's own taxonomy,
+not a default any other consumer inherits.
 
 ## `gate.sabotage`
 
@@ -356,7 +387,8 @@ Defaults applied when a key is absent: `repo.default_branch` = `main`,
 Everything else absent means the capability is off, and the scripts say so
 rather than guessing: no `tmux` section means no tmux integration, no
 `gate.report` means tier 0, no `gate.attest` means `attested: false`, no
-`gate.project_level_skips` means every skipped stage blocks, no
+`gate.project_level_skips` and no `gate.not_applicable_skips` means every
+skipped stage blocks, no
 `gate.sabotage` means the sabotage scan is off (`data.sabotage.enabled`
 false, `missing` always `[]`, no `git diff` shelled out for it), no `judge`
 section means `judge?` is `false` and the judge never runs.
