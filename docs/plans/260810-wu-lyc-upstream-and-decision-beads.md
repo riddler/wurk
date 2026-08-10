@@ -384,16 +384,16 @@ same-commit rule exists to prevent.
 
 #### Manual Verification:
 
-- [ ] Read the new verdict row against `select_batch.rb`'s emitted reason
+- [x] Read the new verdict row against `select_batch.rb`'s emitted reason
       string - the table's wording and the script's wording agree
-- [ ] The reason string reads as an instruction a model will follow
+- [x] The reason string reads as an instruction a model will follow
       (`run /wurk:work <id>`), not as a bare classification
-- [ ] No regressions in the rest of the verdict table: `epic`, `unlabeled`,
+- [x] No regressions in the rest of the verdict table: `epic`, `unlabeled`,
       `lands-alone`, `collides-with-live-worktree` are unchanged in meaning
-- [ ] All four statements of the phrase (`docs/manifest.md`, `lib/areas.rb`,
+- [x] All four statements of the phrase (`docs/manifest.md`, `lib/areas.rb`,
       `wurk:next/SKILL.md`'s verdict row, `wurk:issue/SKILL.md`) say the same
       thing, and all four are in this one commit
-- [ ] The new `docs/manifest.md` section reads as reference material,
+- [x] The new `docs/manifest.md` section reads as reference material,
       matching its neighbours' register
 
 **Implementation Note**: Use the project's loop gate between edits while
@@ -506,15 +506,15 @@ Plan-only and Just-do-it. Then a paragraph immediately under the table:
 
 #### Manual Verification:
 
-- [ ] Walk the skill top to bottom as a model would: an upstream bead in a
+- [x] Walk the skill top to bottom as a model would: an upstream bead in a
       main checkout reaches the exit before any `/wurk:branch` invocation, and
       an upstream bead in a workspace reaches the same exit before sizing
-- [ ] The renumbering left no dangling cross-reference - every "step N"
+- [x] The renumbering left no dangling cross-reference - every "step N"
       mention inside `wurk:work/SKILL.md` and in any other skill that names a
       `/wurk:work` step still points at the right one
-- [ ] The report contents are stated concretely enough that two different
+- [x] The report contents are stated concretely enough that two different
       sessions would produce the same shape of report
-- [ ] The signal-not-override wording cannot be read as "type decides the
+- [x] The signal-not-override wording cannot be read as "type decides the
       bucket"
 
 **Implementation Note**: Use the project's loop gate between edits while
@@ -612,19 +612,34 @@ Manual verification items are deferred during looped (--loop) execution and
 surfaced here once, rather than blocking after each phase. Confirm these
 before considering the plan fully landed.
 
+**All items walked and confirmed 2026-08-10.** Findings and the two fixes
+they prompted are recorded per item below.
+
 ### Phase 1
 
-- [ ] Read the new verdict row against `select_batch.rb`'s emitted reason
-      string - the table's wording and the script's wording agree
-- [ ] The reason string reads as an instruction a model will follow
-      (`run /wurk:work <id>`), not as a bare classification
-- [ ] No regressions in the rest of the verdict table: `epic`, `unlabeled`,
-      `lands-alone`, `collides-with-live-worktree` are unchanged in meaning
-- [ ] All four statements of the phrase (`docs/manifest.md`, `lib/areas.rb`,
+- [x] Read the new verdict row against `select_batch.rb`'s emitted reason
+      string - the table's wording and the script's wording agree.
+      The row describes the reason string rather than restating it, so there
+      is no second copy to drift.
+- [x] The reason string reads as an instruction a model will follow
+      (`run /wurk:work <id>`), not as a bare classification. Imperative and
+      names the exact command, consistent with `epic - work its children`.
+- [x] No regressions in the rest of the verdict table: `epic`, `unlabeled`,
+      `lands-alone`, `collides-with-live-worktree` are unchanged in meaning.
+      One intentional semantic change, not a regression: a bead carrying both
+      an `always_batchable` and an `area:` label used to reach the collision
+      path and could come out `free`; it is now `upstream`. That is
+      ADR-0009's rule, pinned by `test_upstream_wins_over_area_labels`, and
+      it rests on `docs/manifest.md`'s "the two are alternatives".
+- [x] All four statements of the phrase (`docs/manifest.md`, `lib/areas.rb`,
       `wurk:next/SKILL.md`'s verdict row, `wurk:issue/SKILL.md`) say the same
-      thing, and all four are in this one commit
-- [ ] The new `docs/manifest.md` section reads as reference material,
-      matching its neighbours' register
+      thing, and all four are in this one commit (`c19c5bf`).
+      `wurk:issue`'s is the loosest - it states the outcome without the
+      two-consequences framing - which suits a skill about filing beads.
+- [x] The new `docs/manifest.md` section reads as reference material,
+      matching its neighbours' register. The one departure is the paragraph
+      on why the field was not renamed, kept deliberately: it answers the
+      question a reader would otherwise file a bead about.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
@@ -638,16 +653,40 @@ of blocking here.
 
 ### Phase 2
 
-- [ ] Walk the skill top to bottom as a model would: an upstream bead in a
+- [x] Walk the skill top to bottom as a model would: an upstream bead in a
       main checkout reaches the exit before any `/wurk:branch` invocation, and
-      an upstream bead in a workspace reaches the same exit before sizing
-- [ ] The renumbering left no dangling cross-reference - every "step N"
+      an upstream bead in a workspace reaches the same exit before sizing.
+      Step 0 precedes Step 0.5 (locate-self), which is where the
+      `/wurk:branch` handoff lives, so one check covers both cases.
+- [x] The renumbering left no dangling cross-reference - every "step N"
       mention inside `wurk:work/SKILL.md` and in any other skill that names a
-      `/wurk:work` step still points at the right one
-- [ ] The report contents are stated concretely enough that two different
-      sessions would produce the same shape of report
-- [ ] The signal-not-override wording cannot be read as "type decides the
-      bucket"
+      `/wurk:work` step still points at the right one.
+      Found one stale reference outside the skill:
+      `select_batch.rb`'s sibling `repo_state.rb:12` still said "/work Step
+      0 (locate-self)". Fixed. `wurk:next/SKILL.md:142`'s "step 0.5" is its
+      own cleanup step, not `/wurk:work`'s - correctly left alone.
+- [x] The report contents are stated concretely enough that two different
+      sessions would produce the same shape of report. Four required
+      elements are enumerated, including the branch for when the description
+      names no sibling repo - the case where sessions would otherwise
+      diverge by guessing.
+- [x] The signal-not-override wording cannot be read as "type decides the
+      bucket". It gives the test in both directions (a `task`-typed
+      direction question still lands in Direction; a `decision`-typed chore
+      does not) and closes by naming the description and the code in reach
+      as the evidence.
+
+**Two gaps found and folded in** rather than filed as follow-ups:
+
+- Step 0's intake-mode bullet forward-referenced a re-check "at the end of
+  step 1", but Step 1 was never edited, so the destination had no anchor. A
+  two-sentence pointer now closes the loop at Step 1.
+- Step 1's intake rules required an `area:` label unconditionally, which
+  contradicted `docs/manifest.md` and `wurk:issue/SKILL.md` ("a bead
+  carrying one of these labels takes no `area:` label"). `wurk:work` now
+  carves out the upstream case: an `always_batchable` label satisfies the
+  labelling requirement, because "no files change here" is a decided blast
+  radius rather than a missing one.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
