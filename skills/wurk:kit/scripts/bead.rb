@@ -15,7 +15,7 @@ require_relative "lib/beads"
 # show, ready, claim, note, link, label, create, sync, resolve.
 #
 # There is deliberately no `close` subcommand. `bd close` fires only on a
-# verified merge into origin/main, and /cleanup-worktrees is the only closer
+# verified merge into origin/main, and /wurk:cleanup is the only closer
 # (CLAUDE.md's authority table) - a generic "finish the bead" helper here
 # would be the most tempting and most wrong extraction available, so it is
 # not offered even as dead code.
@@ -375,7 +375,7 @@ module Bead
 
     # --- resolve --------------------------------------------------------
     #
-    # Encodes /commit's five-strategy bead ladder as data. Strategy 1 (an
+    # Encodes /wurk:commit's five-strategy bead ladder as data. Strategy 1 (an
     # explicit id, e.g. $ARGUMENTS) is resolved by the caller before this
     # ever runs. Strategy 2 (the bead this session was seeded with) is not
     # visible to a script at all, so it is an input - --seeded-bead - and

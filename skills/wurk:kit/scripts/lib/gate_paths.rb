@@ -13,7 +13,7 @@ require_relative "manifest"
 # under `touches_build`.
 #
 # `gate_applicable?` - does the gate have anything to measure? This is the
-# carve-out predicate stated in /commit's Step 0 and /merge-request's gate
+# carve-out predicate stated in /wurk:commit's Step 0 and /wurk:mr's gate
 # step, and it is strictly wider, because the gate covers more than the
 # build. Here the `Script tests` stage (.quality.exs, ledger entry st-hzf)
 # runs the Ruby suite under `.claude/scripts/`, so a branch touching only

@@ -6,10 +6,10 @@ require_relative "lib/sh"
 require_relative "lib/cli"
 require_relative "lib/manifest"
 
-# RebaseOnto is the shared rebase-with-repair block that /merge-request
-# deferred to /refresh-worktree by prose cross-reference - defined once here
+# RebaseOnto is the shared rebase-with-repair block that /wurk:mr
+# deferred to /wurk:refresh by prose cross-reference - defined once here
 # so it cannot drift, and reused directly (as a library call, not shelled out
-# to) by worktree_refresh.rb and, in a later phase, /merge-request's own
+# to) by worktree_refresh.rb and, in a later phase, /wurk:mr's own
 # script. See statifier-ex docs/plans/260806-st-hzf-skill-mechanics-scripts.md Phase 4.
 #
 # A conflict is always blocked with needs: "human", the conflicting files

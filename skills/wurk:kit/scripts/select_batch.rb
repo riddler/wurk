@@ -11,7 +11,7 @@ require_relative "lib/summary"
 require_relative "bead"
 require_relative "worktree_survey"
 
-# SelectBatch is the mechanics behind /next-issues (and, at n=1, /next-issue):
+# SelectBatch is the mechanics behind /wurk:next at any n, including 1:
 # candidate listing, the verdict table, and the greedy priority-ordered walk.
 # See statifier-ex docs/plans/260806-st-hzf-skill-mechanics-scripts.md Phase 6 and
 # .claude/skills/next-issues/SKILL.md's Steps 1-3 (the verdict table lives at
