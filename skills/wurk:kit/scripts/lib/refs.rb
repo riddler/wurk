@@ -5,11 +5,11 @@ require_relative "manifest"
 # Refs is the single definition site for extracting bead ids from the commit
 # trailer line the project uses (`Refs:` here; the key is manifest data, see
 # `commits.trailer.key`). Before this extraction the same pattern was written
-# twice, independently: `/merge-request` SKILL.md (over
-# `git log origin/main..HEAD --pretty=%B`) and `/cleanup-worktrees` SKILL.md
+# twice, independently: `/wurk:mr` SKILL.md (over
+# `git log origin/main..HEAD --pretty=%B`) and `/wurk:cleanup` SKILL.md
 # (over `gh pr view <n> --json commits --jq '.commits[].messageBody'`). A
 # drift between the two would mean a PR body's `Closes` lines and the beads
-# `/cleanup-worktrees` actually closes disagree - see
+# `/wurk:cleanup` actually closes disagree - see
 # statifier-ex docs/plans/260806-st-hzf-skill-mechanics-scripts.md Phase 2.
 #
 # The anchor (`^Refs:`) is load-bearing, not tidiness: a commit body

@@ -11,7 +11,7 @@ require_relative "lib/forge"
 require_relative "worktree_survey"
 require_relative "pr_state"
 
-# WorktreeCleanup is the /cleanup-worktrees sweep, minus the two pieces that
+# WorktreeCleanup is the /wurk:cleanup sweep, minus the two pieces that
 # stay at the skill boundary on purpose (see
 # statifier-ex docs/plans/260806-st-hzf-skill-mechanics-scripts.md Phase 4):
 #

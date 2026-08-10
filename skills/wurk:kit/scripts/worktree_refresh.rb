@@ -10,7 +10,7 @@ require_relative "lib/manifest"
 require_relative "worktree_survey"
 require_relative "rebase_onto"
 
-# WorktreeRefresh is the /refresh-worktree sweep: enumerate live worktrees,
+# WorktreeRefresh is the /wurk:refresh sweep: enumerate live worktrees,
 # fetch origin once, then per worktree skip-if-current / refuse-if-dirty /
 # rebase_onto / confirm green. See
 # statifier-ex docs/plans/260806-st-hzf-skill-mechanics-scripts.md Phase 4.

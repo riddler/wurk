@@ -9,8 +9,8 @@ require_relative "lib/gate_paths"
 require_relative "lib/manifest"
 
 # RepoState answers "where am I, and what's uncommitted or unpushed here" -
-# replacing /work Step 0 (locate-self), /merge-request Step 1 (establish
-# where you are), and half of /commit Step 0 (the gate-applicability carve-out).
+# replacing /wurk:work Step 0 (locate-self), /wurk:mr Step 1 (establish
+# where you are), and half of /wurk:commit Step 0 (the gate-applicability carve-out).
 # See statifier-ex docs/plans/260806-st-hzf-skill-mechanics-scripts.md Phase 2.
 module RepoState
   UNPUSHED_FIELD_SEP = "\x1f"
@@ -112,7 +112,7 @@ module RepoState
       end
 
       # Three-dot diff against the merge base with the manifest's default
-      # branch, matching /commit Step 0 and /merge-request's gate step
+      # branch, matching /wurk:commit Step 0 and /wurk:mr's gate step
       # exactly - see lib/gate_paths.rb.
       base = manifest.default_branch
       diff_res = Sh.run(["git", "diff", "--name-only", "#{base}...HEAD"], envelope: env)

@@ -11,7 +11,7 @@ require_relative "lib/forge"
 require_relative "pr_state"
 
 # WorktreeSurvey is one survey standing in for three near-identical ones:
-# /next-issues Step 2, /refresh-worktree Step 1, and /cleanup-worktrees
+# /wurk:next Step 2, /wurk:refresh Step 1, and /wurk:cleanup
 # Step 1. See statifier-ex docs/plans/260806-st-hzf-skill-mechanics-scripts.md Phase 2.
 module WorktreeSurvey
   class << self

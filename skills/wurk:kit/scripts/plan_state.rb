@@ -7,10 +7,10 @@ require_relative "lib/sh"
 require_relative "lib/cli"
 require_relative "lib/refs"
 
-# PlanState parses the /create-plan grammar: "## Phase N:" sectioning,
+# PlanState parses the /wurk:plan grammar: "## Phase N:" sectioning,
 # "#### Automated Verification:" vs "#### Manual Verification:" subsections,
 # "- [ ]"/"- [x]" checkboxes, and the "## Deferred Manual Verification"
-# section /implement-plan --loop appends to. See
+# section /wurk:implement --loop appends to. See
 # statifier-ex docs/plans/260806-st-hzf-skill-mechanics-scripts.md Phase 8.
 #
 # This module holds the pure, testable parsing/mutation logic over an array
@@ -28,7 +28,7 @@ module PlanState
   CHECKBOX_RE = /\A- \[( |x)\] (.+)\z/.freeze
   DEFERRED_HEADING_RE = /\A## Deferred Manual Verification\s*\z/.freeze
 
-  # /create-plan's mandatory nine sections, in the order the template
+  # /wurk:plan's mandatory nine sections, in the order the template
   # specifies them (create-plan/SKILL.md's "Template Structure" list).
   MANDATORY_SECTIONS = [
     ["title", /\A# .+/],
@@ -242,13 +242,13 @@ module PlanStateCli
     # --- check / uncheck ------------------------------------------------
     #
     # With no --line: bulk-toggles every Automated Verification box in the
-    # phase (the common /implement-plan --loop case: "this phase's gate is
+    # phase (the common /wurk:implement --loop case: "this phase's gate is
     # green, check its automated criteria"). Manual boxes are never touched
     # in this mode - they are simply not in the target set.
     #
     # With --line N: targets exactly one checkbox by its absolute 1-indexed
     # line number. If that line is a Manual Verification box, this refuses
-    # (blocked) rather than toggling it - /implement-plan is explicit that
+    # (blocked) rather than toggling it - /wurk:implement is explicit that
     # Manual boxes are never checked by the loop.
 
     def run_mutate(argv, io, action:)

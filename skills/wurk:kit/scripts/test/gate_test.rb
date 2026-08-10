@@ -606,7 +606,7 @@ class GateTest < Minitest::Test
     end
   end
 
-  # --- Carve-out predicate: matches /commit's Step 0 (L97-98) exactly ---
+  # --- Carve-out predicate: matches /wurk:commit's Step 0 (L97-98) exactly ---
 
   # `any?` answers a question about the Elixir build and must NOT widen when
   # the gate grows a stage measuring something else - that is what

@@ -7,8 +7,8 @@ require_relative "lib/sh"
 require_relative "lib/cli"
 require_relative "lib/manifest"
 
-# DocMeta is the metadata/filename/frontmatter shell around /research-codebase
-# and /create-plan: the metadata triple, the one filename rule shared by both
+# DocMeta is the metadata/filename/frontmatter shell around /wurk:research
+# and /wurk:plan: the metadata triple, the one filename rule shared by both
 # document directories (`artifacts.plans` and `artifacts.research`),
 # research-doc frontmatter emission, and the follow-up-research mutation. See
 # statifier-ex docs/plans/260806-st-hzf-skill-mechanics-scripts.md Phase 8.
@@ -16,7 +16,7 @@ require_relative "lib/manifest"
 # It emits frontmatter and filenames; it never writes section headings or
 # body content into a document. A scaffolding script that emitted section
 # headings would invite filling them, and nothing in a skeleton stops a
-# model writing recommendations into /research-codebase's output.
+# model writing recommendations into /wurk:research's output.
 module DocMeta
   # Field order for a research-doc frontmatter block, per
   # .claude/skills/research-codebase/SKILL.md's "Generate research document"

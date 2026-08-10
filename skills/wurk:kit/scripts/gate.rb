@@ -58,7 +58,7 @@ module Gate
   # Matches both accepted note forms - a real mutation
   # (`# sabotage: <what> -> red`) and a stated exemption
   # (`# sabotage: n/a - <why>`) - because both start with the same prefix.
-  # Presence is all this checks: docs/testing.md and /commit's Step 0 own the
+  # Presence is all this checks: docs/testing.md and /wurk:commit's Step 0 own the
   # judgment call about whether the mutation was actually run. This is
   # wurk's own comment-shape grammar, not consumer data - it stays a
   # constant.
@@ -81,7 +81,7 @@ module Gate
       end.compact
     end
 
-    # The carve-out predicate (see lib/gate_paths.rb) so /commit's Step 0
+    # The carve-out predicate (see lib/gate_paths.rb) so /wurk:commit's Step 0
     # and this script cannot drift apart the way the trailer extraction once
     # did. Note this is `gate_applicable?`, not `touches_build?`: it is wider
     # than repo_state.rb's `touches_build` because a gate stage may measure
@@ -310,7 +310,7 @@ module Gate
       env.data[:carve_out_reason] = applicable ? nil : carve_out_reason(manifest)
 
       # The carve-out ("skip the gate command and review the diff instead") is a
-      # pre-commit decision about the full gate - see /commit's Step 0. It
+      # pre-commit decision about the full gate - see /wurk:commit's Step 0. It
       # does not apply to --profile loop: that flag is a deliberate ask for
       # inner-loop feedback, not a request to decide whether a commit needs
       # the gate, so it always runs and always reports attested: false.

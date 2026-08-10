@@ -10,10 +10,10 @@ require_relative "lib/manifest"
 require_relative "bead"
 require_relative "plan_state"
 
-# WorkState is /work Step 2's resumability seam: for a given bead, which of
+# WorkState is /wurk:work Step 2's resumability seam: for a given bead, which of
 # the research / plan / implement stages already have work landed, so a
-# re-run of /work <id> resumes instead of restarting. It reports; it does
-# not choose a bucket - sizing stays /work's own judgment call ("sizing
+# re-run of /wurk:work <id> resumes instead of restarting. It reports; it does
+# not choose a bucket - sizing stays /wurk:work's own judgment call ("sizing
 # happens here, with the codebase in reach" - work/SKILL.md Step 2). See
 # statifier-ex docs/plans/260806-st-hzf-skill-mechanics-scripts.md Phase 12.
 module WorkState
@@ -40,11 +40,11 @@ module WorkState
 end
 
 # The thin CLI: composes Bead.run(["show", id]) for the loop notes (the
-# same wrapper /commit and /implement-plan use, so the note grammar is
+# same wrapper /wurk:commit and /wurk:implement use, so the note grammar is
 # parsed exactly once - lib/beads.rb), a doc-directory scan for research
 # and plan docs naming this bead, and plan_state.rb's own parser over
 # whichever plan doc it finds, for the phase/checkbox state
-# /implement-plan --loop already tracks in the file itself.
+# /wurk:implement --loop already tracks in the file itself.
 module WorkStateCli
   class << self
     def run(argv, io: $stdout)

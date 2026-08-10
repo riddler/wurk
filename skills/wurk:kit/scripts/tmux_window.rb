@@ -7,7 +7,7 @@ require_relative "lib/cli"
 require_relative "lib/manifest"
 
 # TmuxWindow is the tmux mechanics shared by /new-worktree (open a seeded
-# window) and /cleanup-worktrees (find, classify, quiesce, close one), per
+# window) and /wurk:cleanup (find, classify, quiesce, close one), per
 # statifier-ex docs/plans/260806-st-hzf-skill-mechanics-scripts.md Phase 5. It carries the
 # most fragile logic in the extraction: a byte-level idle classifier, an
 # empty-window-id trap that cost a live window on 2026-08-02, and the rule
@@ -30,7 +30,7 @@ module TmuxWindow
   # Both substitutions exist because both were once literals here, and a
   # literal in this template fails silently: the session launches, works,
   # and only the last instruction is wrong, with nobody watching the window.
-  # `/commit` survived the phase 2 rename this way (wu-bls), and "the Refs
+  # `/wurk:commit` survived the phase 2 rename this way (wu-bls), and "the Refs
   # trailer" is statifier's key, not every project's.
   FINISH_TEMPLATE = " When the work is complete, finish with /wurk:commit --auto " \
                      "- it writes the %{trailer} trailer and refuses if the tree " \

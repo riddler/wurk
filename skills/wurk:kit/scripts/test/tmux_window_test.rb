@@ -401,7 +401,7 @@ class TmuxWindowTest < Minitest::Test
   # by crash, or the session never having been started) must report
   # "exited", not fall through to the byte-level idle/busy classifier. The
   # byte classifier would read an empty shell prompt as "idle", which then
-  # sent /cleanup-worktrees into a full quiesce (typing /exit into a plain
+  # sent /wurk:cleanup into a full quiesce (typing /exit into a plain
   # shell) on a window that was ready to close from the start.
   # sabotage: classify_cmd's `if bare_shell_panes?(panes_res)` branch
   # deleted, falling straight through to capture_and_classify -> red

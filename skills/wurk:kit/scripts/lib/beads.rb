@@ -2,9 +2,9 @@
 
 # Beads holds the pure, testable logic behind bead.rb: unwrapping bd show's
 # one-element array, splitting its single notes blob into entries and
-# parsing the /implement-plan --loop note grammar out of them, unioning
+# parsing the /wurk:implement --loop note grammar out of them, unioning
 # bd ready results for the --label-any workaround (beads#5358), and ranking
-# /commit's bead-resolution candidates. bead.rb is the thin CLI that shells
+# /wurk:commit's bead-resolution candidates. bead.rb is the thin CLI that shells
 # out via Sh and wires this module's results into the envelope. See
 # statifier-ex docs/plans/260806-st-hzf-skill-mechanics-scripts.md Phase 3.
 module Beads
@@ -17,7 +17,7 @@ module Beads
     issue_type assignee labels dependent_count dependency_count
   ].freeze
 
-  # The /implement-plan --loop note grammar, appended verbatim by that
+  # The /wurk:implement --loop note grammar, appended verbatim by that
   # skill's looped execution mode - see .claude/skills/implement-plan/
   # SKILL.md's "## Looped Execution Mode" and st-hzf's own notes for real
   # examples ("loop: Phase 1 complete, commit a2aa5a9").
@@ -88,7 +88,7 @@ module Beads
       seen.values.sort_by { |issue| issue["id"].to_s }
     end
 
-    # Ranks /commit's bead-resolution candidates (strategies 2-4 of its
+    # Ranks /wurk:commit's bead-resolution candidates (strategies 2-4 of its
     # five-strategy ladder; strategy 1 - an explicit id - is resolved by
     # the caller before this ever runs, and strategy 5 - asking the user -
     # is not scriptable at all). `candidates` is an ordered array (highest
@@ -98,7 +98,7 @@ module Beads
     # candidates: [...] } where `candidates` holds every candidate other
     # than the resolved one, each annotated with a `warning` when closed or
     # not found - a closed bead must never surface silently
-    # (/commit L174-179).
+    # (/wurk:commit L174-179).
     def rank_candidates(candidates)
       resolved_index = candidates.find_index { |c| eligible?(c) }
       resolved = resolved_index ? candidates[resolved_index] : nil

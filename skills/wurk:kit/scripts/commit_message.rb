@@ -6,7 +6,7 @@ require_relative "lib/cli"
 require_relative "lib/manifest"
 
 # CommitMessage is pure validation over an already-drafted commit message -
-# it never drafts or fixes one. Encodes /commit Step 2's three hard limits
+# it never drafts or fixes one. Encodes /wurk:commit Step 2's three hard limits
 # (a maximum subject length, a maximum body line length, a maximum total
 # line count), the trailer shape, and the Step 4.4 attribution check, so the
 # same rules run both pre-commit (over the drafted message) and post-commit
@@ -24,14 +24,14 @@ require_relative "lib/manifest"
 # session-model (or Haiku-delegated, per docs/skill-automation.md's Model
 # routing) job; this script only reports pass/fail per rule.
 module CommitMessage
-  # Same substrings /commit Step 4.4 checks for - kept in exact sync so the
+  # Same substrings /wurk:commit Step 4.4 checks for - kept in exact sync so the
   # pre-commit draft check and the post-commit verification cannot drift.
   ATTRIBUTION_PATTERNS = ["Co-Authored-By", "Generated with", "Claude"].freeze
 
   class << self
     # Returns an array of {rule:, ok:, message:}, always in the same order.
-    # `refs`, when given, is the bead id /commit Step 1.5 resolved - the
-    # trailer rule is only checked when a caller passes one, since /commit
+    # `refs`, when given, is the bead id /wurk:commit Step 1.5 resolved - the
+    # trailer rule is only checked when a caller passes one, since /wurk:commit
     # only requires the trailer when a bead was actually resolved ("If no
     # issue, omit this line entirely" - Step 2). Callers with no bead (the
     # rare interactive fallback where the user skips the prompt) omit
