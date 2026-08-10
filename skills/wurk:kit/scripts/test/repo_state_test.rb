@@ -203,6 +203,37 @@ class RepoStateTest < Minitest::Test
     assert_equal [], env["data"]["changelog_fragments"]
   end
 
+  # sabotage: drop env.data[:default_branch] = manifest.default_branch -> red
+  def test_default_branch_is_reported_on_the_default_manifest
+    expect_locate
+    @fake.expect(%w[git branch --show-current], out: "zz-abc-x\n")
+    @fake.expect(%w[git status --porcelain], out: "")
+    @fake.expect(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], exitstatus: 1)
+    @fake.expect(%w[git diff --name-only main...HEAD], out: "")
+
+    _code, env = run_repo_state
+
+    assert_equal "main", env["data"]["default_branch"]
+  end
+
+  # sabotage: read a hardcoded "main...HEAD" instead of manifest.default_branch
+  # -> red (FakeSh::UnexpectedCommand: no stub for "main...HEAD" here, only
+  # "trunk...HEAD")
+  def test_trunk_override_diffs_against_trunk_and_reports_it
+    Manifest.current = manifest_with("repo_layout", "repo" => { "default_branch" => "trunk" })
+
+    expect_locate
+    @fake.expect(%w[git branch --show-current], out: "zz-abc-x\n")
+    @fake.expect(%w[git status --porcelain], out: "")
+    @fake.expect(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], exitstatus: 1)
+    @fake.expect(%w[git diff --name-only trunk...HEAD], out: "docs/plans/260806-zz-abc.md\n")
+
+    _code, env = run_repo_state
+
+    assert_equal "trunk", env["data"]["default_branch"]
+    assert_equal ["docs/plans/260806-zz-abc.md"], env["data"]["plan_docs"]
+  end
+
   def test_not_a_git_repo_blocks_with_needs_human
     @fake.expect(%w[git rev-parse --git-dir], exitstatus: 128, err: "fatal: not a git repository\n")
     @fake.expect(%w[git rev-parse --git-common-dir], exitstatus: 128)

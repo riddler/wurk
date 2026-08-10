@@ -5,6 +5,7 @@ require "json"
 require_relative "lib/envelope"
 require_relative "lib/sh"
 require_relative "lib/cli"
+require_relative "lib/manifest"
 require_relative "lib/refs"
 require_relative "lib/beads"
 
@@ -393,11 +394,15 @@ module Bead
       Cli.parse!(parser, argv)
 
       env = Envelope.new(script: "bead_resolve")
+
+      manifest = Manifest.require!(env)
+      return env.emit(io) unless manifest
+
       candidates = []
 
       candidates << { id: options[:seeded_bead], strategy: "seeded_prompt", confidence: "strong" } if options[:seeded_bead]
 
-      plan_bead = resolve_plan_doc_bead(env)
+      plan_bead = resolve_plan_doc_bead(env, manifest)
       candidates << { id: plan_bead, strategy: "plan_doc", confidence: "strong" } if plan_bead
 
       branch_bead = resolve_branch_bead(env)
@@ -415,8 +420,8 @@ module Bead
       env.emit(io)
     end
 
-    def resolve_plan_doc_bead(env)
-      diff_res = Sh.run(%w[git diff main...HEAD --name-only], envelope: env)
+    def resolve_plan_doc_bead(env, manifest)
+      diff_res = Sh.run(["git", "diff", "#{manifest.default_branch}...HEAD", "--name-only"], envelope: env)
       return nil unless diff_res.success?
 
       files = diff_res.out.to_s.each_line.map(&:strip).reject(&:empty?)

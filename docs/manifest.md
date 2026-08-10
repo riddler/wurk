@@ -13,6 +13,12 @@ defaults are listed under "Defaults" below.
 {
   "wurk": 1,                          // schema version, required
 
+  "repo": {                           // (opt)
+    "default_branch": "main"          // (opt) default "main"; the branch every
+                                      // "what did this branch change" diff is
+                                      // taken against
+  },
+
   "beads": {
     "prefix": "st",                   // id shape becomes st-[a-z0-9]+(\.\d+)?
     "topology": "beads",              // (opt) or "beads-with-forge-projection" (fixative)
@@ -117,6 +123,25 @@ defaults are listed under "Defaults" below.
   }
 }
 ```
+
+## `repo.default_branch`
+
+The branch every "what did this branch change" three-dot diff is taken
+against: `git diff <repo.default_branch>...HEAD`. This is *not* the remote
+name - the remote is always `origin`, unconfigurable - only the branch name on
+it changes. Defaults to `"main"`.
+
+Setting it moves several behaviors at once, all reading the same field:
+
+- the commit carve-out (`gate.rb`'s `gate_applicable?`, `/wurk:commit` Step 0)
+- the sabotage mutation-testing pathspec (`gate.rb`'s `sabotage_diff_args`)
+- plan-document bead resolution (`bead.rb`'s `resolve_plan_doc_bead`)
+- worktree rebasing and staleness checks (`rebase_onto.rb`, `worktree_refresh.rb`,
+  `worktree_survey.rb`, `worktree_create.rb`'s base-ref ladder)
+- the merge-time judge's base ref
+
+A consumer whose default branch is `master`, `trunk`, or `develop` sets this
+field once instead of getting silently wrong diffs from every site above.
 
 ## Release recipes
 
@@ -247,6 +272,7 @@ is already handled there.
 
 | Field | statifier-ex | predicator-ex | fixative |
 |---|---|---|---|
+| repo.default_branch | `main` | `main` | `main` |
 | beads.prefix | `st` | `px` | (uses GL-NN branch tags; bead prefix TBD) |
 | beads.topology | beads | beads | beads-with-forge-projection |
 | forge.kind | github | github | gitlab |
@@ -302,7 +328,8 @@ Required: `wurk`, `beads.prefix`, `forge.kind`, `gate.full`, `gate.loop`,
 `parallelism.model`, `artifacts.plans`, `artifacts.research`,
 `changelog.mode`.
 
-Defaults applied when a key is absent: `beads.topology` = `beads`,
+Defaults applied when a key is absent: `repo.default_branch` = `main`,
+`beads.topology` = `beads`,
 `commits.style` = `s-form`, `commits.subject_under` = 50,
 `commits.body_line_max` = 72, `commits.total_lines_max` = 40,
 `commits.trailer.key` = `Refs`, `models.direction` = `opus`,

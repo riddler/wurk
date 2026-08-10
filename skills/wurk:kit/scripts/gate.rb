@@ -87,12 +87,13 @@ module Gate
     # than repo_state.rb's `touches_build` because a gate stage may measure
     # paths that touch no build at all.
     def gate_applicable?(env, manifest)
-      diff_res = Sh.run(%w[git diff --name-only main...HEAD], envelope: env)
+      base = manifest.default_branch
+      diff_res = Sh.run(["git", "diff", "--name-only", "#{base}...HEAD"], envelope: env)
       diff_files =
         if diff_res.success?
           diff_res.out.to_s.each_line.map(&:strip).reject(&:empty?)
         else
-          env.warn(code: "no_main_ref", message: "could not diff against local main ref")
+          env.warn(code: "no_base_ref", message: "could not diff against local #{base}")
           []
         end
 
@@ -162,7 +163,7 @@ module Gate
     # in case it is ever handed diff text from elsewhere. Both read the same
     # manifest list.
     def sabotage_diff_args(manifest)
-      %w[git diff main...HEAD -U0 --] +
+      ["git", "diff", "#{manifest.default_branch}...HEAD", "-U0", "--"] +
         manifest.sabotage_test_roots +
         manifest.sabotage_exempt_prefixes.map { |prefix| ":!#{prefix}" }
     end
