@@ -437,15 +437,15 @@ make it red, per the convention throughout `test/` (e.g. `gate_test.rb:126`).
       both)
 
 #### Manual Verification:
-- [ ] `ruby skills/wurk:kit/scripts/repo_state.rb` in this worktree reports the
+- [x] `ruby skills/wurk:kit/scripts/repo_state.rb` in this worktree reports the
       same `changed_files`, `touches_build` and `plan_docs` it did before the
       change, and now also `data.default_branch: "main"`
-- [ ] The rewritten `repo_state.rb:114-116` comment still makes the "same rule
+- [x] The rewritten `repo_state.rb:114-116` comment still makes the "same rule
       as /commit Step 0 and /wurk:mr" point, so the three sites stay
       recognizably one rule
-- [ ] `docs/manifest.md`'s new subsection tells a consumer with a `master`
+- [x] `docs/manifest.md`'s new subsection tells a consumer with a `master`
       default branch exactly which behaviors change when they set the field
-- [ ] Before merging, grep the sibling consumer checkouts (statifier-ex,
+- [x] Before merging, grep the sibling consumer checkouts (statifier-ex,
       predicator-ex) for `no_main_ref` - `grep -rn no_main_ref
       <checkout>/.claude`. If any extension file keys on the old warning code,
       revert the rename and change only the message text (Open Question 2).
@@ -591,12 +591,12 @@ Each new test carries a `# sabotage:` note.
       still emits `ancestor_of_origin_main` per entry
 
 #### Manual Verification:
-- [ ] `ruby skills/wurk:kit/scripts/worktree_refresh.rb --dry-run` in the main
+- [x] `ruby skills/wurk:kit/scripts/worktree_refresh.rb --dry-run` in the main
       checkout renders the same commands it did before the change
-- [ ] `ruby skills/wurk:kit/scripts/judge.rb --help` describes the `--base`
+- [x] `ruby skills/wurk:kit/scripts/judge.rb --help` describes the `--base`
       ladder without naming a branch, and still tells a caller what `--base`
       overrides
-- [ ] `ruby skills/wurk:kit/scripts/worktree_create.rb --dry-run <args>` shows
+- [x] `ruby skills/wurk:kit/scripts/worktree_create.rb --dry-run <args>` shows
       `origin/main` as the base ref in this repo and reports it in
       `data.base_ref`, i.e. the default path is genuinely unchanged
 
@@ -706,17 +706,17 @@ the grep in the criteria rather than trusting this sentence.
       matches
 
 #### Manual Verification:
-- [ ] One-time author sanity check on the guard: temporarily add
+- [x] One-time author sanity check on the guard: temporarily add
       `X = Sh.run(["git", "diff", "main...HEAD"])` to
       `skills/wurk:kit/scripts/repo_state.rb`, confirm the suite goes red
       naming that line, then revert. (This is a hand-run source mutation, so
       it is manual by nature; the meta-test above is its permanent form.)
-- [ ] Read each `HARDCODED_REFS` pattern and ask what a false positive looks
+- [x] Read each `HARDCODED_REFS` pattern and ask what a false positive looks
       like - in particular whether `develop` or `trunk` appears as an ordinary
       word anywhere a ref-shaped context could form
-- [ ] The failure message tells a future implementer what to do, not just that
+- [x] The failure message tells a future implementer what to do, not just that
       something is wrong
-- [ ] `/wurk:mr` step 1 still reads as a runnable instruction - an agent
+- [x] `/wurk:mr` step 1 still reads as a runnable instruction - an agent
       following it knows to substitute the envelope value, and does not paste
       the angle brackets
 
@@ -817,6 +817,10 @@ in the loop, and what would change it.
    code. Before merging, grep the sibling checkouts (statifier-ex,
    predicator-ex) for `no_main_ref`; if any extension matches on it, keep the
    old code and change only the message text.
+
+   **Settled after the loop**: that grep was run over both sibling checkouts
+   in full (not just their `.claude` directories) and found no matches, so the
+   rename stands and nothing needs reverting.
 3. **Whether phase 2 belongs in this bead at all.** The bead names three
    scripts and the three-dot diff; phase 2 goes wider on the argument that a
    `repo.default_branch` field which leaves `git rebase origin/main`
@@ -838,20 +842,32 @@ Manual verification items are deferred during looped (--loop) execution and
 surfaced here once, rather than blocking after each phase. Confirm these
 before considering the plan fully landed.
 
+All 11 items were walked through by hand after the loop finished; each is
+ticked with what was actually observed. Nothing forced a revert.
+
 ### Phase 1
 
-- [ ] `ruby skills/wurk:kit/scripts/repo_state.rb` in this worktree reports the
+- [x] `ruby skills/wurk:kit/scripts/repo_state.rb` in this worktree reports the
       same `changed_files`, `touches_build` and `plan_docs` it did before the
-      change, and now also `data.default_branch: "main"`
-- [ ] The rewritten `repo_state.rb:114-116` comment still makes the "same rule
+      change, and now also `data.default_branch: "main"` - verified against an
+      envelope captured before the first phase landed: same keys in the same
+      order, and `commands` still renders `git diff --name-only main...HEAD`.
+      `changed_files` and `touches_build` differ only because the branch now
+      carries the phase commits.
+- [x] The rewritten `repo_state.rb:114-116` comment still makes the "same rule
       as /commit Step 0 and /wurk:mr" point, so the three sites stay
       recognizably one rule
-- [ ] `docs/manifest.md`'s new subsection tells a consumer with a `master`
-      default branch exactly which behaviors change when they set the field
-- [ ] Before merging, grep the sibling consumer checkouts (statifier-ex,
+- [x] `docs/manifest.md`'s new subsection tells a consumer with a `master`
+      default branch exactly which behaviors change when they set the field -
+      it lists all five behavior groups and closes on the `master`/`trunk`/
+      `develop` consumer directly.
+- [x] Before merging, grep the sibling consumer checkouts (statifier-ex,
       predicator-ex) for `no_main_ref` - `grep -rn no_main_ref
       <checkout>/.claude`. If any extension file keys on the old warning code,
       revert the rename and change only the message text (Open Question 2).
+      **Settled: no matches** in either checkout (grepped the whole repo, not
+      just `.claude`), so the rename to `no_base_ref` stands and Open
+      Question 2 is closed.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution, pause
@@ -865,14 +881,18 @@ blocking here.
 
 ### Phase 2
 
-- [ ] `ruby skills/wurk:kit/scripts/worktree_refresh.rb --dry-run` in the main
-      checkout renders the same commands it did before the change
-- [ ] `ruby skills/wurk:kit/scripts/judge.rb --help` describes the `--base`
+- [x] `ruby skills/wurk:kit/scripts/worktree_refresh.rb --dry-run` in the main
+      checkout renders the same commands it did before the change - every
+      rendered command still spells `origin/main`, and the `origin_main`
+      envelope key is unrenamed as "What We're NOT Doing" requires.
+- [x] `ruby skills/wurk:kit/scripts/judge.rb --help` describes the `--base`
       ladder without naming a branch, and still tells a caller what `--base`
-      overrides
-- [ ] `ruby skills/wurk:kit/scripts/worktree_create.rb --dry-run <args>` shows
+      overrides - it reads "tried before the manifest's remote and local
+      default branch".
+- [x] `ruby skills/wurk:kit/scripts/worktree_create.rb --dry-run <args>` shows
       `origin/main` as the base ref in this repo and reports it in
-      `data.base_ref`, i.e. the default path is genuinely unchanged
+      `data.base_ref`, i.e. the default path is genuinely unchanged - the
+      rendered `git worktree add` still passes `--no-track origin/main`.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution, pause
@@ -886,19 +906,28 @@ blocking here.
 
 ### Phase 3
 
-- [ ] One-time author sanity check on the guard: temporarily add
+- [x] One-time author sanity check on the guard: temporarily add
       `X = Sh.run(["git", "diff", "main...HEAD"])` to
       `skills/wurk:kit/scripts/repo_state.rb`, confirm the suite goes red
       naming that line, then revert. (This is a hand-run source mutation, so
       it is manual by nature; the meta-test above is its permanent form.)
-- [ ] Read each `HARDCODED_REFS` pattern and ask what a false positive looks
+      Ran: the suite went red at 1 failure naming
+      `repo_state.rb:157 (three-dot diff base)`, and reverted clean.
+- [x] Read each `HARDCODED_REFS` pattern and ask what a false positive looks
       like - in particular whether `develop` or `trunk` appears as an ordinary
-      word anywhere a ref-shaped context could form
-- [ ] The failure message tells a future implementer what to do, not just that
-      something is wrong
-- [ ] `/wurk:mr` step 1 still reads as a runnable instruction - an agent
+      word anywhere a ref-shaped context could form - the only occurrences in
+      kit source are "developer" in `lib/sh.rb`, and the patterns' trailing
+      `\b` rejects `origin/developer`. The four warning messages that used to
+      spell a branch now interpolate the manifest value; the one surviving
+      literal `origin/main` is in a `worktree_refresh.rb` comment, which
+      `each_code_line` strips.
+- [x] The failure message tells a future implementer what to do, not just that
+      something is wrong - it says "build the ref from
+      `Manifest#default_branch` / `#remote_default_branch` instead".
+- [x] `/wurk:mr` step 1 still reads as a runnable instruction - an agent
       following it knows to substitute the envelope value, and does not paste
-      the angle brackets
+      the angle brackets - the prose says "using `data.default_branch` from
+      step 1's `repo_state.rb` output in place of `<data.default_branch>`".
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution, pause
