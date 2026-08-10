@@ -37,8 +37,9 @@ Parse `$ARGUMENTS`:
   `beads.prefix` plus an id, e.g. `zz-abc`, `zz-00p.3`) -> **bead mode**: that
   is the bead to work.
 - **`--auto` present** -> **unattended mode**: no checkpoint pauses, no
-  questions. This is what `/wurk:branch` seeds. Without it, this skill pauses
-  at each artifact boundary for review.
+  questions. This is what a seeded session (see step 0.5) is given
+  automatically. Without it, this skill pauses at each artifact boundary for
+  review.
 - **Anything else** -> **intake mode**: the free text is the work description,
   and a bead must exist before anything else happens.
 
@@ -48,7 +49,48 @@ Parse `$ARGUMENTS`:
 /wurk:work "add retry backoff to the send queue"  # intake mode
 ```
 
-## Step 0: Locate self
+## Step 0: Upstream beads exit here
+
+**Bead mode only.** This check exists to catch an upstream bead before any
+workspace exists, so it must run before the step 0.5 handoff to
+`/wurk:branch`:
+
+- Read the bead: `ruby ~/.claude/skills/wurk:kit/scripts/bead.rb show <id>`.
+  This read is needed here anyway - step 1 does it - and doing it first is
+  what makes the check possible before any workspace exists.
+- Read `beads.areas.always_batchable` from `.claude/wurk.json` (the same
+  direct-manifest-read pattern as `wurk:next/SKILL.md`'s "Read
+  `beads.topology`"). If the list is absent or empty, no bead is upstream;
+  continue to step 0.5.
+- If any of the bead's labels is in that list, **this bead is upstream: the
+  work happens in a sibling repository and this bead exists to track and
+  coordinate it (ADR-0009).** Then:
+  1. Claim it as usual (`bead.rb claim <id>`) - the claim still marks
+     coordination in progress - and `bead.rb sync push`, best-effort.
+  2. **Do not invoke `/wurk:branch`. Do not create a branch or a workspace.
+     Do not size the job.** There is nothing here for a workspace to do, and
+     an upstream bead opens no request, so `/wurk:cleanup` would never reap
+     one that got created.
+  3. Report and stop, with: the bead id and title; **which sibling
+     repository the work happens in**, taken from the bead's description -
+     and, when the description does not name one, say so explicitly rather
+     than guessing, and point at the bead as the thing to fix; that this
+     bead **tracks rather than performs** the work; that it stays in
+     progress and is closed manually with `bd close` when the sibling work
+     lands, because `/wurk:cleanup` never will.
+- **Defensive case.** If this session is already inside a workspace for an
+  upstream bead (which `/wurk:next` no longer creates, but a hand-run
+  `/wurk:branch` still can), give the same report and stop rather than
+  sizing, and additionally name the workspace and branch as leftovers to
+  remove by hand. The workspace's existence is a mistake to report, not a
+  reason to proceed (ADR-0009). Because this check runs ahead of "Locate
+  self", one check covers both the main-checkout and in-workspace cases; the
+  defensive text is the extra sentence the in-workspace case adds.
+- **Intake mode** has no bead yet at this point. Re-apply the same check at
+  the end of step 1 once `/wurk:issue` has created the bead, and take the
+  same exit.
+
+## Step 0.5: Locate self
 
 Everything downstream branches on this, because no project in this workflow
 commits on its default branch:
@@ -66,9 +108,9 @@ against a constant.
   the branch name `<id>-<slug>` (2-4 distinctive kebab-case words from the
   title, not a full transcription), then invoke
   **`/wurk:branch <id>-<slug> -- /wurk:work <id> --auto`** and **stop**. Do
-  not work the bead here. The seeded session runs step 0 again, finds itself
-  in the workspace, and does the work - so the recursion terminates at depth
-  one.
+  not work the bead here. The seeded session runs step 0.5 again, finds
+  itself in the workspace, and does the work - so the recursion terminates
+  at depth one.
 - **worktree** -> continue to step 1.
 
 Under `branch-in-place` (manifest `parallelism.model`), `/wurk:branch` puts
@@ -124,19 +166,34 @@ Buckets are **entry points into one sequence**, not terminal choices. Picking
 "plan-only" does not mean planning is the whole job; it means the sequence
 starts at the plan stage and runs through implementation from there.
 
-| Bucket | Enters at | Stages, in order | When |
-|---|---|---|---|
-| **Code-heavy** | research | `/wurk:research` -> `/wurk:plan` -> `/wurk:implement --loop` | Touches a multi-module subsystem; blast radius unclear; existing structure must be mapped before planning. |
-| **Plan-only** | plan | `/wurk:plan` -> `/wurk:implement --loop` | Well understood, but multi-step or cross-cutting enough to deserve a plan under `artifacts.plans`; a research document would be redundant. |
-| **Just-do-it** | implement | one implementation subagent, no artifacts | Bounded doc / chore / config / small utility, low blast radius. |
-| **Direction** | direction | direction stage (step 3) -> resumes into the sequence | ADR-shaped work: architecture decisions, spec interpretation, review of plans or of finished phases. |
+| Bucket | Enters at | Stages, in order | bd type signal | When |
+|---|---|---|---|---|
+| **Code-heavy** | research | `/wurk:research` -> `/wurk:plan` -> `/wurk:implement --loop` | - | Touches a multi-module subsystem; blast radius unclear; existing structure must be mapped before planning. |
+| **Plan-only** | plan | `/wurk:plan` -> `/wurk:implement --loop` | - | Well understood, but multi-step or cross-cutting enough to deserve a plan under `artifacts.plans`; a research document would be redundant. |
+| **Just-do-it** | implement | one implementation subagent, no artifacts | - | Bounded doc / chore / config / small utility, low blast radius. |
+| **Direction** | direction | direction stage (step 3) -> resumes into the sequence | `decision` | ADR-shaped work: architecture decisions, spec interpretation, review of plans or of finished phases. |
+
+bd's `decision` issue type means the same thing the Direction bucket means -
+ADR-shaped work: architecture decisions, spec interpretation, review - so a
+`decision`-typed bead starts in Direction unless the description plainly says
+otherwise. `epic` is a refusal, not a bucket; step 1 already handles it.
+**The type is a signal, never an override.** It raises the prior; it does not
+settle the bucket. A `task`-typed bead whose description is plainly a
+direction question ("should we ...", "decide whether ...", "which of these
+two designs") still lands in Direction, and a `decision`-typed bead whose
+description is really a small chore does not. The description and the code in
+reach are still the evidence; the type is one more piece of it, free and
+usually right (ADR-0009).
 
 **Direction still goes through the same workspace path, deliberately.** An ADR
 is a documentation change and often precedes the code it governs, so a warmed
 workspace is setup it does not need - but wasted is not harmful, and the
 alternative is a second pickup path that only Direction beads use, forking the
 flow this skill exists to keep singular. One path that occasionally warms a
-build it does not need is cheaper than two paths to keep in sync.
+build it does not need is cheaper than two paths to keep in sync. This
+rationale does not extend to upstream beads (step 0): a Direction bead commits
+a record *here*, so its workspace is used late rather than wasted, whereas an
+upstream bead produces no commit here at all (ADR-0009).
 
 **Sizing happens here, with the codebase in reach.** That is the whole reason
 it lives in this skill rather than in `/wurk:next`: read the files the bead
