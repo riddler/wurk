@@ -428,15 +428,15 @@ disjointness tests have something realistic to mutate.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `ruby skills/wurk:kit/scripts/test/run.rb` is green
-- [ ] `grep -c "auto_resolve_paths" skills/wurk:kit/scripts/test/manifest_test.rb`
+- [x] `ruby skills/wurk:kit/scripts/test/run.rb` is green
+- [x] `grep -c "auto_resolve_paths" skills/wurk:kit/scripts/test/manifest_test.rb`
       is at least 10 - the five path-list classes, both match directions, the
       manifest-directory rule, and the shape errors
-- [ ] `conflict_paths_test.rb` exists and covers empty-allowlist,
+- [x] `conflict_paths_test.rb` exists and covers empty-allowlist,
       empty-paths, all-in, any-out, prefix, and exact-vs-sibling
-- [ ] `ruby skills/wurk:kit/scripts/repo_state.rb` returns `ok: true` against
+- [x] `ruby skills/wurk:kit/scripts/repo_state.rb` returns `ok: true` against
       this repo's own manifest (which sets no `rebase` section yet)
-- [ ] `grep -n "auto_resolve_paths" docs/manifest.md` matches in the new
+- [x] `grep -n "auto_resolve_paths" docs/manifest.md` matches in the new
       section, the defaults table, and the validation section
 
 #### Manual Verification:
@@ -936,5 +936,25 @@ before considering the plan fully landed.
 
 **Implementation Note**: Doc-only; CLAUDE.md says doc-only changes commit on
 review of the diff. Run the gate anyway to prove nothing else moved.
+
+---
+
+### Phase 2
+
+- [ ] `docs/manifest.md` and `lib/manifest.rb` agree, key for key, in this
+      one commit
+- [ ] Each new validation test genuinely fails when its guard is removed -
+      delete each `validate_rebase` check in turn, re-run the suite, confirm
+      red, restore. This is mutation testing and no command in this plan does
+      it for you
+- [ ] The disjointness error messages name both the entry and the list it
+      collided with, so a consumer can fix it without reading the source
+- [ ] No consumer-project constant appears in `lib/manifest.rb` or
+      `lib/conflict_paths.rb`
+
+**Implementation Note**: The field has no reader outside its own tests at the
+end of this phase. That is intentional and the phase is still
+gate-verifiable, because the validation refusals are the behavior being
+added, not scaffolding for a later phase.
 
 ---

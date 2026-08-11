@@ -1,0 +1,22 @@
+{
+  "wurk": 1,
+  "beads": { "prefix": "zz" },
+  "forge": { "kind": "github" },
+  "gate": {
+    "full": ["make", "check"],
+    "loop": ["make", "quick"],
+    "guard_ledger": "docs/quality-gate-changes.md",
+    "build_paths": ["lib/", "mix.exs", "mix.lock"],
+    "also_gated_paths": [".claude/scripts/", ".claude/skills/", "vendor/generated/"],
+    "moving_files": [".quality.exs"]
+  },
+  "parallelism": {
+    "model": "worktree-per-issue",
+    "repair_when": "mix.lock"
+  },
+  "artifacts": { "plans": "docs/plans", "research": "docs/research" },
+  "changelog": { "mode": "none" },
+  "rebase": {
+    "auto_resolve_paths": ["docs/plan.md", "docs/notes/"]
+  }
+}
