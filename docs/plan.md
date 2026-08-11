@@ -1205,12 +1205,17 @@ Deliberately not beads yet. A backlog item becomes a bead when someone
 intends to do it; filing five speculative beads just makes `bd ready`
 noisier without making any of them likelier to happen.
 
-- **wurk-conflict-scout** (agent): when refresh/mr abort on a rebase
-  conflict, a read-only agent examines the captured conflict and reports
-  scope and likely difficulty ("both sides touched the exit-set logic;
-  theirs is a rename, yours is behavioral; ~10-minute manual merge") so
-  the human gate is an informed one. Authority unchanged: it never
-  resolves anything.
+- **wurk-conflict-scout** (agent): ADR-0010 gives `/wurk:mr` a bounded,
+  opt-in path that auto-resolves a rebase conflict confined to
+  `rebase.auto_resolve_paths`, but every conflict outside that allowlist
+  still stops, and so does every allowlisted one that ADR-0010's
+  deterministic screens, its additive-merge invariant, or its refute pass
+  rejects. That is this agent's job: when refresh/mr abort on a rebase
+  conflict that did not auto-resolve, a read-only agent examines the
+  captured conflict and reports scope and likely difficulty ("both sides
+  touched the exit-set logic; theirs is a rename, yours is behavioral;
+  ~10-minute manual merge") so the human gate is an informed one.
+  Authority unchanged: it never resolves anything.
 - **wurk:init** (skill): onboarding for future projects - survey a repo
   (toolchain, forge, test commands, doc layout, tracker state), draft its
   `.claude/wurk.json` and extension stubs, then walk the user through the
