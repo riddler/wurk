@@ -115,6 +115,14 @@ End with the ones needing a human: conflicts, dirty worktrees, red gates.
   worktree exactly as it was; `bd merge-slot` is the coordination primitive
   for resolving it deliberately, one agent at a time. Name the conflicting
   files in the report.
+
+  This sweep never auto-resolves a conflict, whatever
+  `rebase.auto_resolve_paths` allows - that mechanism is scoped to
+  `/wurk:mr` only (ADR-0010). A sweep has no per-worktree model turn, no
+  branch diff, and no bead context, and the worktree it would be merging in
+  belongs to a session that is not this one. A conflict here stays what it
+  has always been: signal that the area labels were wrong or the batch was
+  picked badly.
 - **A red gate is a real result, not a failure of the refresh.** The rebase was
   clean but the combination is not, which is exactly what refreshing early is
   for. Leave the worktree as it is - the agent working there needs to see it.

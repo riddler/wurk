@@ -765,15 +765,15 @@ predicator-ex start at `[]`.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `ruby skills/wurk:kit/scripts/test/run.rb` is green
-- [ ] `ruby skills/wurk:kit/scripts/repo_state.rb` returns `ok: true`, which
+- [x] `ruby skills/wurk:kit/scripts/test/run.rb` is green
+- [x] `ruby skills/wurk:kit/scripts/repo_state.rb` returns `ok: true`, which
       proves the new `.claude/wurk.json` section passes Phase 2's validation,
       including disjointness against this repo's `build_paths`
-- [ ] `grep -n "auto_resolve_paths" skills/wurk:mr/SKILL.md
+- [x] `grep -n "auto_resolve_paths" skills/wurk:mr/SKILL.md
       skills/wurk:refresh/SKILL.md` matches in both
-- [ ] `grep -n "Conflict:" skills/wurk:mr/SKILL.md` matches inside the step 6
+- [x] `grep -n "Conflict:" skills/wurk:mr/SKILL.md` matches inside the step 6
       fenced template
-- [ ] `grep -rn "docs/plan\.md" skills/wurk:mr/SKILL.md
+- [x] `grep -rn "docs/plan\.md" skills/wurk:mr/SKILL.md
       skills/wurk:refresh/SKILL.md skills/wurk:kit/scripts/rebase_resolve.rb`
       is empty - this repo's allowlist value lives in `.claude/wurk.json`
       only, never in generic prose or the script (the bare namespace string
@@ -980,5 +980,35 @@ added, not scaffolding for a later phase.
 **Implementation Note**: This is the largest phase and is still one phase:
 the script and its tests cannot be split without leaving an intermediate
 commit whose gate proves nothing. Use the loop gate between edits.
+
+---
+
+### Phase 4
+
+- [ ] `ruby skills/wurk:kit/scripts/judge.rb` on this branch returns
+      `data.status: "clean"`. A surviving finding stops the phase and is a
+      conversation, not a reroll (`.claude/wurk/mr.md`). A skip is only
+      acceptable for a reason other than `no_cli`, since this branch
+      certainly touches scoped prose
+- [ ] Read the rewritten step 3 against ADR-0008 point 1 as if judging it:
+      does it state the policy, or does it name a script and stop? Does the
+      human gate that used to be stated unconditionally survive, restated
+      with its exception, rather than deleted?
+- [ ] The step 6 and step 7 requirements read as a discipline ("a resolution
+      that reaches step 7 unnamed is a defect"), not as a check on an
+      artifact - a script confirming a marker exists is the anti-pattern
+      ADR-0008 names
+- [ ] End-to-end: manufacture an additive `docs/plan.md` conflict between a
+      scratch branch and `origin/main` in a clone, run `/wurk:mr` through step
+      3, and confirm the resolution happens, the summary names it, and the
+      request body would too
+- [ ] End-to-end negative: manufacture a conflict touching
+      `skills/wurk:kit/scripts/` and confirm the run stops with `needs:
+      "human"` and no CLI call
+
+**Implementation Note**: The `.claude/wurk.json` edit is what turns the
+feature on. Land it in this phase, not earlier: a live allowlist with no
+mechanism behind it is dead config, and a live allowlist with an unwired
+mechanism is worse.
 
 ---

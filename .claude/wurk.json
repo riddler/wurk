@@ -75,5 +75,9 @@
         "focus": "a step that used to state a policy call, a human gate, or a verification discipline now handing it to a script, or deleted during a rewrite rather than restated - including prose that turns a discipline into a check on its own artifact"
       }
     ]
+  },
+
+  "rebase": {
+    "auto_resolve_paths": ["docs/plan.md"]
   }
 }
