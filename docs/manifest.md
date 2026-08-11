@@ -393,6 +393,12 @@ the only repo configuring it today, over its own `skills/**/SKILL.md`, per
 ADR-0008. wurk's own `.claude/wurk.json` also sets `models.direction` to
 `fable` explicitly - the one manifest in this project that does.
 
+`rebase.auto_resolve_paths` follows the same pattern: statifier-ex and
+predicator-ex start at the schema default, `[]`, same as fixative and every
+other consumer that has not opted in. wurk's own `.claude/wurk.json` sets it
+to `["docs/plan.md"]` - the narrowest useful value, the exact file from the
+incident that motivated ADR-0010, and nothing wider.
+
 ## Resolution
 
 Settled in phase 1 step 2. `lib/manifest.rb` locates the manifest in two

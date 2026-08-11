@@ -108,11 +108,44 @@ the branch's own commits, falling back to the branch prefix (step 2).
      `data.files` names the conflicting files. **The script has already
      captured them and aborted the rebase** - capture-then-abort is baked in,
      since the abort clears the conflict state a report assembled afterward
-     would have nothing left to name. Report the files and stop. Do not fall
-     through to the gate or the push with the branch un-rebased: **an aborted
-     rebase ends this run.** There is no resolve path here or in the script -
-     resolving a rebase conflict unasked is not an authority this workflow
-     grants.
+     would have nothing left to name. That is the default outcome: an
+     aborted rebase ends this run, and resolving a rebase conflict unasked is
+     not an authority this workflow grants.
+
+     There is one exception, and it is a grant the consumer made in advance,
+     not a judgment call made here: when every conflicting file matches the
+     consumer's own `rebase.auto_resolve_paths`, the consumer has already
+     said in writing, before this conflict existed, which files it grants
+     that authority for. Nothing else is eligible, and an empty list - the
+     default - means nothing is. When that holds, run:
+
+     ```bash
+     ruby ~/.claude/skills/wurk:kit/scripts/rebase_resolve.rb .
+     ```
+
+     Read the result: **`status: "rebased"`** with `data.resolved`
+     non-empty means a resolution happened, and it **must** be carried into
+     step 6's summary and step 7's request body. Any `blocked` response
+     means stop and report `data.stop_reason` verbatim - the worktree is
+     never left mid-rebase either way. **`status:
+     "conflict_not_reproduced"`** means the worktree moved since
+     `rebase_onto.rb` captured the conflict; report that and stop.
+
+     The division of labor, per ADR-0010 and ADR-0008: the script owns the
+     rebase plumbing, the blob capture, the deterministic screens, the
+     line-set invariant, and prompt assembly; a model owns the merge and an
+     independent refutation of it. **This prose owns what to do about the
+     result** - and what it says to do about anything short of a clean,
+     unrefuted, provably additive merge is stop.
+
+     The reporting is load-bearing, not courteous: for the file class most
+     likely to qualify, `data.applicable` comes back `false` in step 4 and
+     no gate runs, so the summary and the request body are the only place a
+     human ever sees that a merge was made on their behalf. A resolution
+     that reaches step 7 unnamed is a defect.
+
+     If `rebase_resolve.rb` is interrupted mid-run, `git rebase --abort` in
+     the worktree restores the pre-rebase state.
 
    **On the no-op case** (nothing to replay): the gate in step 4 still runs.
    What the no-op skips is the expensive part, not the gate. The gate attests
@@ -175,6 +208,8 @@ the branch's own commits, falling back to the branch prefix (step 2).
    Branch:    <branch> -> <default branch>
    Rebased:   already current, no commits replayed
               (or: onto <sha>, N commits replayed)
+   Conflict:  none
+              (or: auto-resolved in <files> - <rationale>)
    Commits:   N
    Gate:      full gate green   (or: docs only, no gate applicable)
    Changelog: <path>   (or: not needed - internal tooling)
@@ -215,7 +250,8 @@ the branch's own commits, falling back to the branch prefix (step 2).
    - **Why** - the problem, in the bead's terms
    - **What** - the shape of the change, not a file list; the diff has that
    - **Notes** - anything surprising, deliberately deferred, or worth a
-     second opinion, plus which gate ran
+     second opinion, plus which gate ran, and - when step 3 auto-resolved a
+     conflict - which file it resolved and what the merge did
    - **The close lines** - one per bead the branch's trailers name (plus the
      epic, if they share one). Under the default `beads` topology these name
      the bead ids. Under `beads-with-forge-projection` they name the forge
