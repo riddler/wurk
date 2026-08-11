@@ -302,14 +302,14 @@ invariant, or the refute pass rejected. Cite ADR-0010 in the bullet.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `ruby skills/wurk:kit/scripts/test/run.rb` is green (unchanged; proves
+- [x] `ruby skills/wurk:kit/scripts/test/run.rb` is green (unchanged; proves
       the doc commit touched no script)
-- [ ] `docs/adr/0010-bounded-rebase-conflict-auto-resolution.md` exists and
+- [x] `docs/adr/0010-bounded-rebase-conflict-auto-resolution.md` exists and
       its first two lines are a `# ADR-0010:` heading and a `Status:` line,
       matching every other file in `docs/adr/`
-- [ ] `grep -n "ADR-0010" docs/plan.md` matches inside the
+- [x] `grep -n "ADR-0010" docs/plan.md` matches inside the
       `wurk-conflict-scout` bullet
-- [ ] `grep -rn "0010" docs/adr/0008-merge-time-judge-over-generic-skill-prose.md`
+- [x] `grep -rn "0010" docs/adr/0008-merge-time-judge-over-generic-skill-prose.md`
       is empty (ADR-0008 is not edited; ADR-0010 cites it, not the reverse)
 
 #### Manual Verification:
@@ -918,3 +918,23 @@ should survive.
 - Untouched by design: `skills/wurk:kit/scripts/rebase_onto.rb:44-54`,
   `skills/wurk:kit/scripts/test/rebase_onto_test.rb:65-70`,
   `skills/wurk:kit/scripts/worktree_refresh.rb:112`
+
+## Deferred Manual Verification
+
+Manual verification items are deferred during looped (--loop) execution and
+surfaced here once, rather than blocking after each phase. Confirm these
+before considering the plan fully landed.
+
+### Phase 1
+
+- [ ] The ADR states all six decisions above and does not defer any of them
+- [ ] The ADR's answer to ADR-0008's open question 1 is legible to someone
+      who has read ADR-0008 and not this plan
+- [ ] The re-scoped backlog bullet still describes a thing worth doing, not a
+      dead item kept for politeness
+- [ ] Plain ASCII punctuation throughout, per CLAUDE.md
+
+**Implementation Note**: Doc-only; CLAUDE.md says doc-only changes commit on
+review of the diff. Run the gate anyway to prove nothing else moved.
+
+---
