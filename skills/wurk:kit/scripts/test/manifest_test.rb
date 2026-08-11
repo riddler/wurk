@@ -257,6 +257,145 @@ class ManifestValidationTest < Minitest::Test
     assert_match(/repo\.default_branch must be a git branch name/, m.errors.join("\n"))
   end
 
+  def test_rebase_fixture_validates
+    m = ManifestFixtures.load("rebase")
+    assert m.valid?, "expected the rebase fixture to validate: #{m.errors.inspect}"
+  end
+
+  # sabotage: drop the section-must-be-an-object check in validate_rebase -> red
+  def test_rebase_non_object_section_blocks
+    m = ManifestFixtures.load_with("valid", "rebase" => "on")
+    refute m.valid?
+    assert_match(/rebase must be an object/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the is_a?(Array) check on auto_resolve_paths -> red
+  def test_rebase_non_list_auto_resolve_paths_blocks
+    m = ManifestFixtures.load_with("valid", "rebase" => { "auto_resolve_paths" => "docs/plan.md" })
+    refute m.valid?
+    assert_match(/rebase\.auto_resolve_paths must be a list of non-empty strings/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the entry non-empty-string check in validate_rebase_entry -> red
+  def test_rebase_empty_string_entry_blocks
+    m = ManifestFixtures.load_with("valid", "rebase" => { "auto_resolve_paths" => [""] })
+    refute m.valid?
+    assert_match(/auto_resolve_paths entries must be non-empty strings/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop REBASE_WHOLE_REPO_ENTRIES from validate_rebase_entry -> red
+  def test_rebase_whole_repo_entry_blocks
+    m = ManifestFixtures.load_with("valid", "rebase" => { "auto_resolve_paths" => ["/"] })
+    refute m.valid?
+    assert_match(/auto_resolve_paths entry "\/" matches the whole repo/, m.errors.join("\n"))
+
+    m = ManifestFixtures.load_with("valid", "rebase" => { "auto_resolve_paths" => ["."] })
+    refute m.valid?
+    assert_match(/auto_resolve_paths entry "\." matches the whole repo/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop gate.build_paths from REBASE_COLLISION_LIST_FIELDS -> red
+  def test_rebase_entry_colliding_with_build_paths_blocks_naming_the_list
+    m = ManifestFixtures.load_with("rebase", "rebase" => { "auto_resolve_paths" => ["mix.exs"] })
+    refute m.valid?
+    assert_match(/auto_resolve_paths entry "mix\.exs" collides with gate\.build_paths entry "mix\.exs"/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop gate.also_gated_paths from REBASE_COLLISION_LIST_FIELDS -> red
+  def test_rebase_entry_colliding_with_also_gated_paths_blocks_naming_the_list
+    m = ManifestFixtures.load_with("rebase", "rebase" => { "auto_resolve_paths" => ["vendor/generated/"] })
+    refute m.valid?
+    assert_match(
+      /auto_resolve_paths entry "vendor\/generated\/" collides with gate\.also_gated_paths entry "vendor\/generated\/"/,
+      m.errors.join("\n")
+    )
+  end
+
+  # sabotage: drop gate.moving_files from REBASE_COLLISION_LIST_FIELDS -> red
+  def test_rebase_entry_colliding_with_moving_files_blocks_naming_the_list
+    m = ManifestFixtures.load_with("rebase", "rebase" => { "auto_resolve_paths" => [".quality.exs"] })
+    refute m.valid?
+    assert_match(
+      /auto_resolve_paths entry "\.quality\.exs" collides with gate\.moving_files entry "\.quality\.exs"/,
+      m.errors.join("\n")
+    )
+  end
+
+  # sabotage: drop gate.guard_ledger from REBASE_COLLISION_SCALAR_FIELDS -> red
+  def test_rebase_entry_colliding_with_guard_ledger_blocks_naming_the_field
+    m = ManifestFixtures.load_with("rebase", "rebase" => { "auto_resolve_paths" => ["docs/quality-gate-changes.md"] })
+    refute m.valid?
+    assert_match(
+      /auto_resolve_paths entry "docs\/quality-gate-changes\.md" collides with gate\.guard_ledger \("docs\/quality-gate-changes\.md"\)/,
+      m.errors.join("\n")
+    )
+  end
+
+  # sabotage: drop parallelism.repair_when from REBASE_COLLISION_SCALAR_FIELDS -> red
+  def test_rebase_entry_colliding_with_repair_when_blocks_naming_the_field
+    m = ManifestFixtures.load_with(
+      "rebase",
+      "parallelism" => { "repair_when" => "package.lock" },
+      "rebase" => { "auto_resolve_paths" => ["package.lock"] }
+    )
+    refute m.valid?
+    assert_match(
+      /auto_resolve_paths entry "package\.lock" collides with parallelism\.repair_when \("package\.lock"\)/,
+      m.errors.join("\n")
+    )
+  end
+
+  # sabotage: check only GatePaths.match_one?(entry, guarded) and drop the
+  # reverse direction in rebase_collision -> red. An allowlist entry that is
+  # a directory prefix of a guarded exact path is as wrong as the reverse.
+  def test_rebase_entry_that_is_a_prefix_of_a_guarded_path_blocks
+    m = ManifestFixtures.load_with("rebase", "rebase" => { "auto_resolve_paths" => ["docs/"] })
+    refute m.valid?
+    assert_match(/auto_resolve_paths entry "docs\/" collides with gate\.guard_ledger/, m.errors.join("\n"))
+  end
+
+  # sabotage: check only GatePaths.match_one?(guarded, entry) and drop the
+  # forward direction in rebase_collision -> red.
+  def test_rebase_entry_that_is_prefixed_by_a_guarded_path_blocks
+    m = ManifestFixtures.load_with("rebase", "rebase" => { "auto_resolve_paths" => ["vendor/generated/extra.rb"] })
+    refute m.valid?
+    assert_match(/auto_resolve_paths entry "vendor\/generated\/extra\.rb" collides with gate\.also_gated_paths/, m.errors.join("\n"))
+  end
+
+  # sabotage: check only GatePaths.match_one?(entry, guarded) and drop the
+  # reverse direction, specifically inside the REBASE_COLLISION_LIST_FIELDS
+  # loop -> red. A directory-prefix allowlist entry that is broader than a
+  # list-field guarded path (rather than a guard_ledger/repair_when scalar)
+  # must also be caught; the scalar-field case above does not exercise this
+  # branch.
+  def test_rebase_directory_prefix_entry_broader_than_a_list_field_guarded_path_blocks
+    m = ManifestFixtures.load_with("rebase", "rebase" => { "auto_resolve_paths" => ["vendor/"] })
+    refute m.valid?
+    assert_match(/auto_resolve_paths entry "vendor\/" collides with gate\.also_gated_paths/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the manifest-directory check in validate_rebase_entry -> red
+  def test_rebase_entry_naming_the_manifest_file_blocks
+    m = ManifestFixtures.load_with("valid", "rebase" => { "auto_resolve_paths" => [".claude/wurk.json"] })
+    refute m.valid?
+    assert_match(/auto_resolve_paths entry "\.claude\/wurk\.json" is inside \.claude\//, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the exact-directory branch of the manifest-directory check -> red
+  def test_rebase_entry_naming_the_manifest_directory_itself_blocks
+    m = ManifestFixtures.load_with("valid", "rebase" => { "auto_resolve_paths" => [".claude/"] })
+    refute m.valid?
+    assert_match(/auto_resolve_paths entry "\.claude\/" is inside \.claude\//, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the start_with?("#{manifest_dir}/") branch, only checking
+  # equality with the bare directory -> red
+  def test_rebase_entry_naming_an_extension_file_blocks
+    m = ManifestFixtures.load_with("valid", "rebase" => { "auto_resolve_paths" => [".claude/wurk/mr.md"] })
+    refute m.valid?
+    assert_match(/auto_resolve_paths entry "\.claude\/wurk\/mr\.md" is inside \.claude\//, m.errors.join("\n"))
+  end
+
   # sabotage: drop the leading-character class from DEFAULT_BRANCH_RE, letting
   # a leading "-" through -> red
   def test_default_branch_leading_dash_blocks
@@ -388,6 +527,19 @@ class ManifestAccessorTest < Minitest::Test
   def test_remote_default_branch_composes_origin_and_the_default_branch
     m = ManifestFixtures.load_with("valid", "repo" => { "default_branch" => "trunk" })
     assert_equal "origin/trunk", m.remote_default_branch
+  end
+
+  # sabotage: return nil (or a non-empty default) instead of [] for an
+  # absent rebase section -> red
+  def test_rebase_auto_resolve_paths_defaults_to_empty_when_absent
+    assert_equal [], @m.rebase_auto_resolve_paths
+  end
+
+  # sabotage: read the wrong dotted key, or drop the Array() wrap, in
+  # rebase_auto_resolve_paths -> red
+  def test_rebase_auto_resolve_paths_round_trips_a_well_formed_list
+    m = ManifestFixtures.load("rebase")
+    assert_equal ["docs/plan.md", "docs/notes/"], m.rebase_auto_resolve_paths
   end
 
   def test_judge_fixture_exposes_typed_registry_values

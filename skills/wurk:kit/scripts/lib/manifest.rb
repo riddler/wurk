@@ -4,6 +4,7 @@ require "json"
 require_relative "sh"
 require_relative "envelope"
 require_relative "cli"
+require_relative "gate_paths"
 
 # Manifest is the single place that locates, parses, and validates the
 # consumer repo's `.claude/wurk.json` and hands typed values to every other
@@ -63,7 +64,7 @@ class Manifest
   # The known key surface, for the unknown-key warning. Nested sections list
   # their own keys; a section absent from this map is not validated further.
   KNOWN = {
-    nil => %w[wurk repo beads forge gate parallelism tmux models artifacts commits changelog release judge],
+    nil => %w[wurk repo beads forge gate parallelism tmux models artifacts commits changelog release judge rebase],
     "repo" => %w[default_branch],
     "beads" => %w[prefix topology areas],
     "beads.areas" => %w[labels lands_alone always_batchable],
@@ -78,7 +79,8 @@ class Manifest
     "commits" => %w[style package_map subject_under body_line_max total_lines_max trailer],
     "commits.trailer" => %w[key],
     "changelog" => %w[mode dir],
-    "judge" => %w[model registry]
+    "judge" => %w[model registry],
+    "rebase" => %w[auto_resolve_paths]
   }.freeze
 
   DEFAULTS = {
@@ -443,6 +445,14 @@ class Manifest
     Array(fetch("judge.registry"))
   end
 
+  # The only paths a rebase conflict may be auto-resolved in. Empty - the
+  # default - means the feature is off, which is where every consumer starts.
+  # Same matching rule as the gate path lists (see lib/gate_paths.rb): a
+  # trailing "/" is a directory prefix, anything else is an exact path.
+  def rebase_auto_resolve_paths
+    Array(fetch("rebase.auto_resolve_paths"))
+  end
+
   # The bead id shape, built from the prefix: "st-" followed by lowercase
   # alphanumerics, optionally dotted (e.g. "st-00p.3"). Every script that
   # needs this shape asks here rather than re-deriving it - see lib/refs.rb
@@ -499,6 +509,7 @@ class Manifest
     validate_default_branch
     validate_sabotage
     validate_judge
+    validate_rebase
     collect_unknown_keys(raw, nil)
   end
 
@@ -597,6 +608,90 @@ class Manifest
     return if suffix.nil? || suffix.is_a?(String)
 
     errors << "#{path}: judge.registry entry scope_suffix must be a string"
+  end
+
+  # The three source lists that, together with gate.guard_ledger and
+  # parallelism.repair_when, define the "code, lockfile, gate-guarded file"
+  # stop categories from the bead. Kept as separate named sources rather than
+  # one flattened list so a collision error can name exactly which one an
+  # entry hit.
+  REBASE_COLLISION_LIST_FIELDS = %w[gate.build_paths gate.also_gated_paths gate.moving_files].freeze
+  REBASE_COLLISION_SCALAR_FIELDS = %w[gate.guard_ledger parallelism.repair_when].freeze
+
+  # An allowlist entry that resolves to the whole repo is not an allowlist.
+  REBASE_WHOLE_REPO_ENTRIES = ["/", "."].freeze
+
+  # Present-or-absent, never half-present, same rule as gate.sabotage and
+  # judge: a rebase section with a malformed auto_resolve_paths is a schema
+  # error, not a silently-empty allowlist. See ADR-0010 for why every entry
+  # is validated disjoint from the gate-guarded, lockfile, and manifest
+  # surfaces rather than merely documented as such.
+  def validate_rebase
+    section = fetch("rebase")
+    return if section.nil?
+
+    unless section.is_a?(Hash)
+      errors << "#{path}: rebase must be an object (see wurk docs/manifest.md)"
+      return
+    end
+
+    entries = section["auto_resolve_paths"]
+    return if entries.nil?
+
+    unless entries.is_a?(Array)
+      errors << "#{path}: rebase.auto_resolve_paths must be a list of non-empty strings, got #{entries.inspect}"
+      return
+    end
+
+    entries.each { |entry| validate_rebase_entry(entry) }
+  end
+
+  def validate_rebase_entry(entry)
+    unless entry.is_a?(String) && !entry.empty?
+      errors << "#{path}: rebase.auto_resolve_paths entries must be non-empty strings, got #{entry.inspect}"
+      return
+    end
+
+    if REBASE_WHOLE_REPO_ENTRIES.include?(entry)
+      errors << "#{path}: rebase.auto_resolve_paths entry #{entry.inspect} matches the whole repo, " \
+                "which is not an allowlist"
+      return
+    end
+
+    manifest_dir = File.dirname(Manifest::FILENAME)
+    if entry == manifest_dir || entry.start_with?("#{manifest_dir}/")
+      errors << "#{path}: rebase.auto_resolve_paths entry #{entry.inspect} is inside #{manifest_dir}/, " \
+                "which holds the manifest and every extension file"
+      return
+    end
+
+    collision = rebase_collision(entry)
+    return unless collision
+
+    errors << "#{path}: rebase.auto_resolve_paths entry #{entry.inspect} collides with #{collision}"
+  end
+
+  # "Matches or is matched by" both directions, against the manifest's own
+  # gate-guarded, lockfile, and repair-trigger surfaces. Returns a string
+  # naming the colliding field and value, or nil.
+  def rebase_collision(entry)
+    REBASE_COLLISION_LIST_FIELDS.each do |dotted|
+      Array(fetch(dotted)).each do |guarded|
+        next unless GatePaths.match_one?(entry, guarded) || GatePaths.match_one?(guarded, entry)
+
+        return "#{dotted} entry #{guarded.inspect}"
+      end
+    end
+
+    REBASE_COLLISION_SCALAR_FIELDS.each do |dotted|
+      guarded = fetch(dotted)
+      next if guarded.nil?
+      next unless GatePaths.match_one?(entry, guarded) || GatePaths.match_one?(guarded, entry)
+
+      return "#{dotted} (#{guarded.inspect})"
+    end
+
+    nil
   end
 
   def validate_regex_lists

@@ -123,6 +123,10 @@ defaults are listed under "Defaults" below.
         "focus": "what the propose pass is asked to look for"
       }
     ]
+  },
+
+  "rebase": {                         // (opt) omit = auto-resolution off
+    "auto_resolve_paths": []          // (opt) default []; see "rebase.auto_resolve_paths" below
   }
 }
 ```
@@ -270,6 +274,44 @@ a consumer that registers nothing simply never runs it, and `judge?` reports
 Every field but `scope_suffix` must be a non-empty string; a missing or
 empty field blocks, naming the field.
 
+## `rebase.auto_resolve_paths`
+
+The only paths a rebase conflict may be auto-resolved in (ADR-0010). Defaults
+to `[]`, which is where every consumer starts: an empty list can never
+satisfy "every conflicting path is allowlisted", so the feature is off until
+a consumer opts in. The field has no reader in the kit yet beyond its own
+validation; `/wurk:mr`'s resolver is later work.
+
+Same matching rule as the gate path lists (see "Two path lists, not one"
+below): each entry is a directory prefix when it ends in `/`, and an exact
+path otherwise; no globbing.
+
+`lib/manifest.rb` validates every entry disjoint from the surfaces a rebase
+conflict must never be allowed to touch, rather than merely documenting the
+rule - a documented-only rule is one a careful consumer follows and a
+careless one does not, and the human review step this feature removes was
+the only check on that:
+
+- An entry equal to `/`, `""`, or `.` is rejected outright. An allowlist
+  that resolves to the whole repo is not an allowlist.
+- An entry that **matches, or is matched by**, any entry of
+  `gate.build_paths`, `gate.also_gated_paths`, `gate.moving_files`,
+  `gate.guard_ledger`, or `parallelism.repair_when` is rejected. Both
+  directions are checked deliberately: allowing `docs/` when
+  `docs/plan.md` is gate-guarded is exactly as wrong as allowing
+  `docs/plan.md` when `docs/` is gate-guarded. This covers the "code",
+  "lockfile", and "gate-guarded file" stop categories from the bead that
+  opened this feature.
+- An entry that is, or is under, the directory holding the manifest itself
+  (`.claude/`, per ADR-0004's two seams - it holds `wurk.json` and every
+  extension file) is rejected. This covers the "manifest" stop category;
+  without it, `.claude/wurk.json` would otherwise validate cleanly as an
+  allowlist entry.
+
+Each rejection names both the offending entry and the list or field it
+collided with, so a consumer can fix its manifest without reading the kit
+source.
+
 ## Two path lists, not one
 
 `gate.build_paths` and `gate.also_gated_paths` answer different questions,
@@ -381,7 +423,8 @@ Defaults applied when a key is absent: `repo.default_branch` = `main`,
 `commits.style` = `s-form`, `commits.subject_under` = 50,
 `commits.body_line_max` = 72, `commits.total_lines_max` = 40,
 `commits.trailer.key` = `Refs`, `models.direction` = `opus`,
-`artifacts.filename` = `YYMMDD-[id-]kebab`, `judge.model` = `sonnet`.
+`artifacts.filename` = `YYMMDD-[id-]kebab`, `judge.model` = `sonnet`,
+`rebase.auto_resolve_paths` = `[]`.
 
 Everything else absent means the capability is off, and the scripts say so
 rather than guessing: no `tmux` section means no tmux integration, no
@@ -390,7 +433,9 @@ rather than guessing: no `tmux` section means no tmux integration, no
 skipped stage blocks, no
 `gate.sabotage` means the sabotage scan is off (`data.sabotage.enabled`
 false, `missing` always `[]`, no `git diff` shelled out for it), no `judge`
-section means `judge?` is `false` and the judge never runs.
+section means `judge?` is `false` and the judge never runs, no `rebase`
+section (or an empty `auto_resolve_paths`) means rebase auto-resolution is
+off - see "`rebase.auto_resolve_paths`" above.
 
 ## Validation
 
@@ -406,6 +451,12 @@ section means `judge?` is `false` and the judge never runs.
   stopping.
 - **Command fields must be argv arrays** of strings. A shell string is a
   schema error, never something to split on whitespace.
+- **`rebase.auto_resolve_paths` entries are validated disjoint** from
+  `gate.build_paths`, `gate.also_gated_paths`, `gate.moving_files`,
+  `gate.guard_ledger`, `parallelism.repair_when`, and the manifest's own
+  directory (`.claude/`) - in both match directions - plus rejected outright
+  if an entry is `/`, `""`, or `.`. See "`rebase.auto_resolve_paths`" above
+  for why these are validated rather than merely documented.
 
 `ruby skills/wurk:kit/scripts/lib/manifest.rb check [--file PATH]` is the
 standalone lint. It emits the usual envelope and exits 1 on an invalid
