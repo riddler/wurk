@@ -635,18 +635,18 @@ paragraph, retained conflict marker (false); whitespace-only reindentation
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `ruby skills/wurk:kit/scripts/test/run.rb` is green
-- [ ] `rebase_onto_test.rb` passes **with no edits** - confirm with
+- [x] `ruby skills/wurk:kit/scripts/test/run.rb` is green
+- [x] `rebase_onto_test.rb` passes **with no edits** - confirm with
       `git diff --stat skills/wurk:kit/scripts/test/rebase_onto_test.rb`
       showing no change in the phase commit
-- [ ] `contract_test.rb` picks up `rebase_resolve.rb` automatically: shebang,
+- [x] `contract_test.rb` picks up `rebase_resolve.rb` automatically: shebang,
       executable bit, `--dry-run`, no banned calls, no `system`/backticks, no
       consumer vocabulary, no hardcoded default-branch ref
-- [ ] `grep -c "rebase --abort" skills/wurk:kit/scripts/test/rebase_resolve_test.rb`
+- [x] `grep -c "rebase --abort" skills/wurk:kit/scripts/test/rebase_resolve_test.rb`
       is at least 12 - one per stop path in the list above
-- [ ] `grep -rn "claude" skills/wurk:kit/scripts/test/rebase_resolve_test.rb`
+- [x] `grep -rn "claude" skills/wurk:kit/scripts/test/rebase_resolve_test.rb`
       shows only stubbed responses; no test shells the real CLI
-- [ ] `ruby skills/wurk:kit/scripts/rebase_resolve.rb . --dry-run` emits a
+- [x] `ruby skills/wurk:kit/scripts/rebase_resolve.rb . --dry-run` emits a
       valid envelope with `status: "dry_run"` and executes nothing
 
 #### Manual Verification:
@@ -956,5 +956,29 @@ review of the diff. Run the gate anyway to prove nothing else moved.
 end of this phase. That is intentional and the phase is still
 gate-verifiable, because the validation refusals are the behavior being
 added, not scaffolding for a later phase.
+
+---
+
+### Phase 3
+
+- [ ] Every stop path in the list above has a test asserting `git rebase
+      --abort` **precedes** the block in the recorded call sequence, in the
+      style of `rebase_onto_test.rb:57-61`. A green suite does not prove the
+      ordering; read the assertions
+- [ ] Read both prompts: stages 2 and 3 are labeled `upstream` and `branch`
+      by role, never `ours`/`theirs`, and the comment explaining the rebase
+      inversion is present
+- [ ] The refute parser's inverted fail-closed direction is commented at the
+      parser, not only in the ADR
+- [ ] Exercise the script by hand in a throwaway git repo per the Testing
+      Strategy: confirm a real additive conflict resolves and continues, and
+      that `git status` afterward shows no rebase in progress
+- [ ] Kill the process mid-run (SIGINT during the propose call) and confirm
+      the worktree is recoverable with a single `git rebase --abort`, and
+      that the skill prose in Phase 4 says so
+
+**Implementation Note**: This is the largest phase and is still one phase:
+the script and its tests cannot be split without leaving an intermediate
+commit whose gate proves nothing. Use the loop gate between edits.
 
 ---

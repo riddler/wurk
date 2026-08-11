@@ -56,10 +56,21 @@ module RebaseOnto
       target_res = Sh.run(["git", "rev-parse", manifest.remote_default_branch], chdir: path, envelope: env)
       target = target_res.out.to_s.strip
 
-      # git diff --quiet exits 0 when there is no difference (the fast path:
-      # no repair commands, no cache work) and non-zero when the lockfile
-      # named by parallelism.repair_when moved. A repo that configures no
-      # repair_when has no such fast/slow split to make.
+      repair = repair_after(path, env, manifest, before: before)
+
+      { status: "rebased", target: target, lock_changed: repair[:lock_changed], repaired: repair[:repaired] }
+    end
+
+    # The post-rebase half, public so rebase_resolve.rb can run it after
+    # continuing a rebase it resolved. Extracted, not duplicated: a second
+    # copy of the repair recipe is exactly the drift this file was created to
+    # prevent (see the header).
+    #
+    # git diff --quiet exits 0 when there is no difference (the fast path: no
+    # repair commands, no cache work) and non-zero when the lockfile named by
+    # parallelism.repair_when moved. A repo that configures no repair_when
+    # has no such fast/slow split to make.
+    def repair_after(path, env, manifest, before:)
       lock_changed = false
       if manifest.repair_when
         lock_res = Sh.run(
@@ -79,7 +90,7 @@ module RebaseOnto
         copy_warm_caches(path, env, manifest)
       end
 
-      { status: "rebased", target: target, lock_changed: lock_changed, repaired: repaired }
+      { lock_changed: lock_changed, repaired: repaired }
     end
 
     def run(argv, io: $stdout)
