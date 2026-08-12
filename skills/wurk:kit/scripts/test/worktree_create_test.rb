@@ -200,6 +200,44 @@ class WorktreeCreateTest < Minitest::Test
     end
   end
 
+  # The dry-run report is the contract for what a real run will do, so a
+  # nested entry has to show its own mkdir -p and single-source cp rather
+  # than folding into the flat multi-source cp above it.
+  def test_dry_run_command_sequence_for_a_nested_warm_clone_entry
+    manifest = manifest_with(FIXTURE, "parallelism" => { "warm_clone" => %w[vendor priv/plts] })
+
+    with_manifest(manifest) do
+      Dir.mktmpdir do |tmp|
+        root = File.join(tmp, "myrepo")
+        FileUtils.mkdir_p(root)
+        worktrees_root = File.join(tmp, "zz-worktrees")
+        path = File.join(worktrees_root, "zz-abc-new-thing")
+
+        expect_location(root)
+        @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+        @fake.expect(%w[git fetch origin], out: "")
+
+        _code, env = run_create(["zz-abc-new-thing", "--dry-run"])
+
+        mutating = env["commands"].select do |c|
+          c =~ /mkdir -p|git worktree add|faketool trust|cp -Rfc|fallback|faketool fetch|make quick/
+        end
+
+        assert_equal 10, mutating.length
+        assert_match(/\Amkdir -p #{Regexp.escape(worktrees_root)}/, mutating[0])
+        assert_match(/git worktree add/, mutating[1])
+        assert_match(/faketool trust/, mutating[2])
+        assert_match(/cp -Rfc vendor #{Regexp.escape("#{path}/")}/, mutating[3])
+        assert_match(/\A\(fallback/, mutating[4])
+        assert_match(/\Amkdir -p #{Regexp.escape(File.join(path, "priv"))}/, mutating[5])
+        assert_match(/cp -Rfc priv\/plts #{Regexp.escape(File.join(path, "priv", "plts"))}/, mutating[6])
+        assert_match(/\A\(fallback/, mutating[7])
+        assert_match(/faketool fetch/, mutating[8])
+        assert_match(/make quick/, mutating[9])
+      end
+    end
+  end
+
   def test_happy_path_creates_warms_and_verifies
     with_scratch_repo do |root, worktrees_root|
       FileUtils.mkdir_p(File.join(root, "build", "cache"))
@@ -224,6 +262,43 @@ class WorktreeCreateTest < Minitest::Test
       assert_equal true, env["data"]["warm_caches_present"]
       assert_equal true, env["data"]["quality_green"]
       refute env["commands"].any? { |c| c.include?("--force") }
+    end
+  end
+
+  # sabotage: batch a nested entry into the flat multi-source cp instead of
+  # giving it its own mkdir -p + single-source cp -> cp flattens it to its
+  # basename ("plts" instead of "priv/plts") and this goes red. This is the
+  # wu-z6w regression case: predicator-ex's warm_clone includes priv/plts.
+  def test_a_nested_warm_clone_entry_lands_at_its_relative_path
+    manifest = manifest_with(FIXTURE, "parallelism" => { "warm_clone" => %w[vendor priv/plts] })
+
+    with_manifest(manifest) do
+      Dir.mktmpdir do |tmp|
+        root = File.join(tmp, "myrepo")
+        FileUtils.mkdir_p(File.join(root, "build", "cache"))
+        FileUtils.touch(File.join(root, "build", "cache", "faketool-1.2.cache"))
+        worktrees_root = File.join(tmp, "zz-worktrees")
+        path = File.join(worktrees_root, "zz-abc-new-thing")
+
+        expect_location(root)
+        @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+        @fake.expect(%w[git fetch origin], out: "")
+        @fake.expect(["mkdir", "-p", worktrees_root], out: "")
+        @fake.expect(["git", "worktree", "add", path, "-b", "zz-abc-new-thing", "--no-track", "origin/main"], out: "")
+        @fake.expect(["faketool", "trust", path], out: "")
+        @fake.expect(["cp", "-Rfc", "vendor", "#{path}/"], out: "")
+        @fake.expect(["mkdir", "-p", File.join(path, "priv")], out: "")
+        @fake.expect(["cp", "-Rfc", "priv/plts", File.join(path, "priv", "plts")], out: "")
+        @fake.expect(%w[faketool fetch], out: "")
+        @fake.expect(%w[make quick], out: "loop green\n")
+
+        code, env = run_create(["zz-abc-new-thing"])
+
+        assert_equal 0, code
+        assert_equal true, env["ok"]
+        assert_equal true, env["data"]["caches_cloned"]
+        assert_empty env["warnings"]
+      end
     end
   end
 

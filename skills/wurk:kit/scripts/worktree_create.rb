@@ -115,14 +115,45 @@ module WorktreeCreate
       env.commands << Sh.render(["git", "worktree", "add", path, "-b", name, "--no-track", base_ref], chdir: root)
       trust = trust_argv(manifest, path)
       env.commands << Sh.render(trust) if trust
-      clone = manifest.warm_clone
-      unless clone.empty?
-        env.commands << Sh.render(["cp", "-Rfc"] + clone + ["#{path}/"], chdir: root)
-        env.commands << "(fallback if -c is unsupported) " +
-                         Sh.render(["cp", "-Rf"] + clone + ["#{path}/"], chdir: root)
-      end
+      record_clone_dry_run(env, manifest.warm_clone, root: root, path: path)
       manifest.warm.each { |cmd| env.commands << Sh.render(cmd, chdir: path) }
       env.commands << Sh.render(manifest.gate_loop, chdir: path)
+    end
+
+    # Mirrors clone_caches below command-for-command, so --dry-run reports
+    # exactly the sequence a real run would execute. Flat entries (no "/")
+    # still land in one multi-source cp - cp only flattens to a source's
+    # basename when the destination is an existing directory, and a flat
+    # entry's basename *is* its relative path, so batching them costs
+    # nothing and keeps the common case (deps, _build, vendor, build) to two
+    # rendered commands instead of two per entry. A nested entry (priv/plts)
+    # cannot share that batch: cp would drop its "priv/" parent the same way
+    # the bug did, so each one gets its own mkdir -p of the destination
+    # parent plus its own single-source cp naming the full destination path.
+    def record_clone_dry_run(env, clone, root:, path:)
+      return if clone.empty?
+
+      flat, nested = partition_clone(clone)
+      record_cp_dry_run(env, flat, dest: "#{path}/", chdir: root) unless flat.empty?
+
+      nested.each do |entry|
+        dest = File.join(path, entry)
+        env.commands << Sh.render(["mkdir", "-p", File.dirname(dest)])
+        record_cp_dry_run(env, [entry], dest: dest, chdir: root)
+      end
+    end
+
+    def record_cp_dry_run(env, sources, dest:, chdir:)
+      env.commands << Sh.render(["cp", "-Rfc"] + sources + [dest], chdir: chdir)
+      env.commands << "(fallback if -c is unsupported) " +
+                       Sh.render(["cp", "-Rf"] + sources + [dest], chdir: chdir)
+    end
+
+    # A warm_clone entry with no "/" (deps, _build, vendor, build) is already
+    # its own relative path, so it belongs in the flat batch; anything with a
+    # "/" (priv/plts) needs its own destination and its own mkdir -p first.
+    def partition_clone(clone)
+      clone.partition { |entry| !entry.include?("/") }
     end
 
     # `parallelism.trust` is the one command run *about* the new worktree
@@ -186,12 +217,10 @@ module WorktreeCreate
       if clone.empty?
         env.data[:caches_cloned] = nil
       else
-        cp_res = Sh.run(["cp", "-Rfc"] + clone + ["#{path}/"], chdir: root, envelope: env)
-        cp_res = Sh.run(["cp", "-Rf"] + clone + ["#{path}/"], chdir: root, envelope: env) unless cp_res.success?
-
-        env.data[:caches_cloned] = cp_res.success?
-        unless cp_res.success?
-          env.warn(code: "cache_clone_failed", message: err_or(cp_res, "could not clone #{clone.join(', ')} into #{path}"))
+        failed = clone_caches(env, clone, root: root, path: path)
+        env.data[:caches_cloned] = failed.empty?
+        unless failed.empty?
+          env.warn(code: "cache_clone_failed", message: "could not clone #{failed.join(', ')} into #{path}")
         end
       end
 
@@ -204,6 +233,41 @@ module WorktreeCreate
           message: "nothing matches #{glob} in #{root}; the first full gate run in the worktree will rebuild it"
         )
       end
+    end
+
+    # Flat entries clone in one shot, same as before. Nested entries each get
+    # their own mkdir -p of the destination parent and their own single-source
+    # cp naming the full destination path - batching them into the flat cp
+    # would silently drop each one's parent directory (see partition_clone).
+    # Returns the entries that failed to clone, empty when all of them did;
+    # `warm` turns a non-empty result into a single cache_clone_failed
+    # warning rather than blocking the worktree.
+    def clone_caches(env, clone, root:, path:)
+      flat, nested = partition_clone(clone)
+      failed = []
+
+      if !flat.empty? && !cp_with_fallback(env, flat, dest: "#{path}/", chdir: root)
+        failed.concat(flat)
+      end
+
+      nested.each do |entry|
+        dest = File.join(path, entry)
+        mkdir_res = Sh.run(["mkdir", "-p", File.dirname(dest)], envelope: env)
+        if !mkdir_res.success? || !cp_with_fallback(env, [entry], dest: dest, chdir: root)
+          failed << entry
+        end
+      end
+
+      failed
+    end
+
+    # On APFS, cp -c uses copy-on-write clonefiles, so this is nearly instant
+    # and costs almost no disk; not every filesystem supports -c, so a plain
+    # recursive copy is the fallback.
+    def cp_with_fallback(env, sources, dest:, chdir:)
+      cp_res = Sh.run(["cp", "-Rfc"] + sources + [dest], chdir: chdir, envelope: env)
+      cp_res = Sh.run(["cp", "-Rf"] + sources + [dest], chdir: chdir, envelope: env) unless cp_res.success?
+      cp_res.success?
     end
 
     def main_checkout_root(env)
