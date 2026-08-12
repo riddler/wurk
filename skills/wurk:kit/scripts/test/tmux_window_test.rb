@@ -129,6 +129,25 @@ class TmuxWindowTest < Minitest::Test
     [code, JSON.parse(io.string)]
   end
 
+  # wu-esa: every `open` call probes for caffeinate before composing the
+  # seeded command line. Tests that aren't about the probe itself register
+  # this - "no caffeinate on PATH" - so their command-line assertions stay
+  # exactly what they were before the probe existed.
+  def expect_no_caffeinate
+    @fake.expect(%w[which caffeinate], exitstatus: 1)
+  end
+
+  def expect_caffeinate_on_ac
+    @fake.expect(%w[which caffeinate], exitstatus: 0)
+    @fake.expect(["pmset", "-g", "batt"], out: "Now drawing from 'AC Power'\n -InternalBattery-0\t100%; charged;\n")
+  end
+
+  def expect_caffeinate_on_battery
+    @fake.expect(%w[which caffeinate], exitstatus: 0)
+    @fake.expect(["pmset", "-g", "batt"],
+                 out: "Now drawing from 'Battery Power'\n -InternalBattery-0\t62%; discharging;\n")
+  end
+
   # The main checkout is derived, not configured: every path that names a
   # session working directory asks git for it first.
   def expect_main_checkout
@@ -210,6 +229,7 @@ class TmuxWindowTest < Minitest::Test
 
   def test_open_creates_a_window_and_seeds_it
     @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "other-window\n")
+    expect_no_caffeinate
     @fake.expect(
       ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=zz-session:", "-n", "zz-abc-thing",
        "-c", "/repos/zz-worktrees/zz-abc-thing"],
@@ -244,6 +264,7 @@ class TmuxWindowTest < Minitest::Test
   # form, and the bare pre-rename spelling is asserted absent.
   def test_seeded_finishing_clause_names_the_installed_skill
     @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    expect_no_caffeinate
     @fake.expect(
       ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=zz-session:", "-n", "zz-abc-thing",
        "-c", "/repos/zz-worktrees/zz-abc-thing"],
@@ -266,6 +287,7 @@ class TmuxWindowTest < Minitest::Test
   # Overriding to "Closes" is what proves the read.
   def test_seeded_finishing_clause_takes_the_trailer_key_from_the_manifest
     @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    expect_no_caffeinate
     @fake.expect(
       ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=zz-session:", "-n", "zz-abc-thing",
        "-c", "/repos/zz-worktrees/zz-abc-thing"],
@@ -296,6 +318,7 @@ class TmuxWindowTest < Minitest::Test
 
   def test_open_never_sends_keys_when_the_captured_window_id_is_empty
     @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    expect_no_caffeinate
     @fake.expect(["tmux", "new-window"], out: "") # empty id despite success
     # No send-keys expectation registered at all - FakeSh raises if the code
     # tries. An empty -t "" resolves to the *current* window in real tmux,
@@ -309,6 +332,7 @@ class TmuxWindowTest < Minitest::Test
 
   def test_open_dry_run_renders_a_pasteable_command_line
     @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    expect_no_caffeinate
 
     code, env = run_tmux([
                             "open", "--dry-run", "zz-abc-thing",
@@ -323,6 +347,113 @@ class TmuxWindowTest < Minitest::Test
     # Sh.render single-quotes the seeded-command argument, exactly what a
     # human would type at a fish prompt.
     assert_match(/'.*claude --permission-mode auto --model fakemodel.*'/, send_line)
+  end
+
+  # --- caffeinate probe (wu-esa) ------------------------------------------
+
+  # Sh.run's real runner shells out via Open3.popen3(*argv), which raises
+  # Errno::ENOENT - not a failed Result - when the binary itself is missing.
+  # That is the literal shape a platform with no `which` on PATH hits, and
+  # FakeSh's #expect can only script a Result, never a raise, so this wraps
+  # it to inject the one exception a stubbed Result can't represent.
+  class RaisingOnWhichSh
+    def initialize(inner)
+      @inner = inner
+    end
+
+    def run(argv, chdir: nil, timeout: 60)
+      raise Errno::ENOENT, "which" if argv[0, 2] == %w[which caffeinate]
+
+      @inner.run(argv, chdir: chdir, timeout: timeout)
+    end
+  end
+
+  # sabotage: the `rescue StandardError` in caffeinate_available? removed ->
+  # red (Errno::ENOENT propagates out of claude_command and the whole `open`
+  # call raises instead of degrading to an unwrapped launch)
+  def test_open_command_is_unwrapped_when_the_which_probe_raises_enoent
+    @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=zz-session:", "-n", "zz-abc-thing",
+       "-c", "/repos/zz-worktrees/zz-abc-thing"],
+      out: "@42\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@42"], out: "")
+    Sh.runner = RaisingOnWhichSh.new(@fake)
+
+    code, env = run_tmux(["open", "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing", "zz-abc",
+                           "/wurk:work zz-abc --auto"])
+
+    assert_equal 0, code
+    keys = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }.argv[4]
+    refute_match(/caffeinate/, keys)
+    assert_match(/\Aclaude --permission-mode auto/, keys)
+    assert (env["warnings"] || []).empty?
+  end
+
+  # sabotage: caffeinate_prefix's `&&` changed to `||` -> red (wraps even
+  # when the platform has no caffeinate, as long as it's on AC power)
+  def test_open_wraps_the_command_in_caffeinate_when_available_and_on_ac_power
+    @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    expect_caffeinate_on_ac
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=zz-session:", "-n", "zz-abc-thing",
+       "-c", "/repos/zz-worktrees/zz-abc-thing"],
+      out: "@42\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@42"], out: "")
+
+    run_tmux(["open", "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing", "zz-abc", "/wurk:work zz-abc --auto"])
+
+    keys = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }.argv[4]
+    assert_match(/\Acaffeinate -i claude --permission-mode auto/, keys)
+  end
+
+  # Pins the exact unwrapped string a platform with no `caffeinate` produces,
+  # so a future change to the probe cannot silently start prepending
+  # anything even when the binary genuinely isn't there.
+  def test_open_command_is_byte_identical_to_unwrapped_when_caffeinate_is_absent
+    @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    expect_no_caffeinate
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=zz-session:", "-n", "zz-abc-thing",
+       "-c", "/repos/zz-worktrees/zz-abc-thing"],
+      out: "@42\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@42"], out: "")
+
+    code, env = run_tmux(["open", "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing", "zz-abc",
+                           "/wurk:work zz-abc --auto"])
+
+    keys = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }.argv[4]
+    assert_equal "claude --permission-mode auto --model fakemodel " \
+                 "'/wurk:work zz-abc --auto. When the work is complete, finish with /wurk:commit --auto " \
+                 "- it writes the Refs trailer and refuses if the tree carries changes unrelated to zz-abc. " \
+                 "Do not run git commit directly.'", keys
+    assert_empty env["warnings"] || []
+  end
+
+  # The probe doubles as the opt-out (wu-esa's settled design): on battery,
+  # the launch degrades exactly like a platform with no caffeinate at all -
+  # unwrapped, and not an error or a warning.
+  def test_open_command_is_unwrapped_when_the_probe_declines_on_battery
+    @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    expect_caffeinate_on_battery
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=zz-session:", "-n", "zz-abc-thing",
+       "-c", "/repos/zz-worktrees/zz-abc-thing"],
+      out: "@42\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@42"], out: "")
+
+    code, env = run_tmux(["open", "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing", "zz-abc",
+                           "/wurk:work zz-abc --auto"])
+
+    keys = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }.argv[4]
+    refute_match(/caffeinate/, keys)
+    assert_match(/\Aclaude --permission-mode auto/, keys)
+    assert_equal 0, code
+    assert (env["warnings"] || []).empty?
   end
 
   # --- find --------------------------------------------------------------
