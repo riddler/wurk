@@ -10,7 +10,9 @@ state, because wurk is orienting agents to itself.
   the directory name.
 - `skills/wurk:kit/` - shared foundation: `REFERENCE.md` (the script
   contract), `scripts/*.rb`, `scripts/lib/*.rb`, `scripts/test/*.rb`.
-- `agents/*.md` - the eight read-only research agents.
+- `agents/*.md` - the eight subagents the skills spawn: six read-only
+  research agents, plus `wurk-gate-reader` (triages a failing gate; the one
+  with a Bash tool) and `wurk-plan-critic`.
 - `docs/` - `architecture.md`, `manifest.md`, `gate-contract.md`, `plan.md`
   (active migration plan), `docs/adr/` (settled decisions), `docs/plans/`
   (per-bead implementation plans), `docs/research/` (dated research docs).
@@ -42,8 +44,11 @@ manifest, extension, envelope, gate tier, bead, kit, seam, rung - and the
 ## Reading rules
 
 - Scripts are stdlib-only system Ruby, one JSON envelope on stdout, exit
-  0 (ran and judged) / 1 (crashed) / 2 (usage error); every shell-out goes
-  through `lib/sh.rb`.
+  0 (`ok: true`) / 1 (`ok: false` - something is blocked, or a wrapped
+  command failed, envelope still printed) / 2 (usage error, plain text on
+  stderr, no envelope). Exit 1 is a judgment, not a crash: a gate that ran
+  fine and found the tests red exits 1 with a good envelope. Every
+  shell-out goes through `lib/sh.rb`.
 - Generic skill and agent prose carries no consumer-project constants; those
   come from a consumer's manifest or extension file, never hardcoded here.
 - Accepted ADRs under `docs/adr/` are settled decisions - cite the number
