@@ -45,9 +45,15 @@ vocabulary. Establish it before searching:
 
 1. **The prompt.** The invoking skill often names the layers, the module
    families, or the terms of art that make good search keys. Trust it.
-2. **The repo's orientation documents** - `CLAUDE.md`, `README.md`, an
+2. **`.claude/wurk/codebase.md`, when the prompt gave you none.** Some
+   projects keep a short orientation file there for exactly this purpose:
+   layout, test suites and what distinguishes them, module families,
+   terms of art, and the reading rules that are easy to get wrong. Read it
+   when it exists. Most projects do not have one - its absence is normal,
+   not an error, and not worth reporting.
+3. **The repo's orientation documents** - `CLAUDE.md`, `README.md`, an
    architecture or contributing doc.
-3. **A directory listing** of the source and test roots, which shows you the
+4. **A directory listing** of the source and test roots, which shows you the
    naming conventions directly.
 
 Two things to identify while orienting, because they determine what a useful
