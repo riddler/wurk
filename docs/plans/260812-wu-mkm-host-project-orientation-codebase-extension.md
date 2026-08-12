@@ -312,12 +312,12 @@ execution agent can miss.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
       (regression check only - no test reads these skills' prose)
-- [ ] `git grep -c 'claude/wurk/codebase.md' skills/wurk:research/SKILL.md
+- [x] `git grep -c 'claude/wurk/codebase.md' skills/wurk:research/SKILL.md
       skills/wurk:plan/SKILL.md skills/wurk:iterate/SKILL.md` shows at least
       two hits per file (the extension-section read and the forwarding step)
-- [ ] `git grep -n 'Project orientation, from .claude/wurk/codebase.md'
+- [x] `git grep -n 'Project orientation, from .claude/wurk/codebase.md'
       skills/` returns exactly three hits, one per skill, with identical
       heading text
 
@@ -646,6 +646,30 @@ before considering the plan fully landed.
       dashes - matching the surrounding agent prose
 - [ ] Each rung states that absence is normal, so an agent in a repo with no
       `.claude/` does not report a missing file as a finding
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 2
+
+- [ ] In each skill the forwarding instruction sits next to the existing
+      `artifacts.*` forwarding, so a reader finds both in one place
+- [ ] The instruction says verbatim, and gives the reason (an invisible
+      per-invocation judgment call) rather than only the rule
+- [ ] Each skill's absent-file behavior is stated as silence, not a warning
+- [ ] No consumer-project constant appears in any inserted text
+- [ ] Cross-references use installed skill names (`/wurk:research`,
+      `/wurk:plan`) where any are added
+- [ ] Plain ASCII punctuation throughout the inserted prose
+- [ ] Nothing was deleted: the ADR-0008 judge scope covers
+      `skills/**/SKILL.md`, and this phase only adds steps
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,

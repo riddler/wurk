@@ -24,6 +24,10 @@ If `.claude/wurk/iterate.md` exists, **read it before step 1**; so is
 `.claude/wurk/plan.md`, since its required sections and success criteria
 apply to any plan this skill edits.
 
+Also read `.claude/wurk/codebase.md` if it exists. It is not this skill's
+extension - it is addressed to the `wurk-codebase-*` agents, and this skill's
+only job with it is to forward it (step 2).
+
 ## Initial response
 
 1. **Parse the input** for a plan file path and the requested changes.
@@ -93,8 +97,14 @@ question needs - the same menu `/wurk:plan` step 1.2 lists
 `wurk-codebase-pattern-finder`, `wurk-docs-locator`, `wurk-docs-analyzer`,
 `Explore`, and `general-purpose` only when the answer needs execution or a
 repo outside this checkout). Pass the manifest's `artifacts.*` roots to the
-docs agents. Be explicit about directories. Read any new files they identify
-FULLY into the main context, wait for all of them, then continue.
+docs agents. **Pass the project's orientation** to every `wurk-codebase-*`
+agent you spawn: paste the content of `.claude/wurk/codebase.md`, verbatim,
+under the heading `## Project orientation, from .claude/wurk/codebase.md`.
+Forward it as it stands - summarizing or excerpting it is a judgment call you
+would be making invisibly, on every invocation. If the file does not exist,
+say nothing about it; the agents orient from the repo, which is the normal
+case. Be explicit about directories. Read any new files they identify FULLY
+into the main context, wait for all of them, then continue.
 
 ### Step 3: Present understanding and approach
 

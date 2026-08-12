@@ -29,6 +29,10 @@ content: the project's own vocabulary for its pipeline or layers, sibling or
 reference checkouts worth pointing an agent at, and areas that reliably need
 their own sub-agent.
 
+Also read `.claude/wurk/codebase.md` if it exists. It is not this skill's
+extension - it is addressed to the `wurk-codebase-*` agents, and this skill's
+only job with it is to forward it (step 3).
+
 See `~/.claude/skills/wurk:kit/REFERENCE.md` for the envelope contract shared
 by every script below.
 
@@ -115,6 +119,14 @@ by every script below.
    and `artifacts.plans`, plus the ADR directory if the project has one. The
    agents can find these themselves, but a skill that forgets costs every
    invocation an extra manifest read.
+
+   **Pass the project's orientation** to every `wurk-codebase-*` agent you
+   spawn: paste the content of `.claude/wurk/codebase.md`, verbatim, under
+   the heading `## Project orientation, from .claude/wurk/codebase.md`.
+   Forward it as it stands - summarizing or excerpting it is a judgment call
+   you would be making invisibly, on every invocation. If the file does not
+   exist, say nothing about it; the agents orient from the repo, which is
+   the normal case.
 
    The research agents are documentarians, not critics: they describe what
    exists and do not suggest improvements or identify issues. Accepted ADRs
