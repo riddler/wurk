@@ -526,13 +526,13 @@ correct, because here wurk is the consumer:
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
       (regression check only - nothing reads `.claude/wurk/codebase.md`
       mechanically, by design)
-- [ ] `.claude/wurk/codebase.md` exists and is tracked by git
-- [ ] `wc -l .claude/wurk/codebase.md` is under 60 lines, honoring
+- [x] `.claude/wurk/codebase.md` exists and is tracked by git
+- [x] `wc -l .claude/wurk/codebase.md` is under 60 lines, honoring
       ADR-0011's one-screenful guidance
-- [ ] `git grep -n 'step 11' docs/plan.md` finds the new follow-on step
+- [x] `git grep -n 'step 11' docs/plan.md` finds the new follow-on step
 
 #### Manual Verification:
 - [ ] The reroute note does not rewrite the historical table rows or the DONE
@@ -691,6 +691,35 @@ of blocking here.
       deliberate property rather than an oversight
 - [ ] Plain ASCII punctuation, matching each file's existing style
 - [ ] Skill cross-references in the new prose use installed names
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 4
+
+- [ ] The reroute note does not rewrite the historical table rows or the DONE
+      status of step 7
+- [ ] Step 11 names what moves and what stays, so whoever picks it up does
+      not have to re-derive the split from ADR-0011
+- [ ] `.claude/wurk/codebase.md` describes this repo accurately - layout,
+      suite, families, vocabulary, reading rules - and a reader who knows the
+      repo finds no false statement in it
+- [ ] Spawn a `wurk-codebase-locator` through `/wurk:research` in this repo
+      and confirm the forwarded orientation appears in its prompt under the
+      fixed heading (the fast path)
+- [ ] Spawn a `wurk-codebase-analyzer` directly, with no orientation in the
+      prompt, and confirm it reads `.claude/wurk/codebase.md` rather than
+      falling straight through to `CLAUDE.md` (the standalone path)
+- [ ] Temporarily rename the file aside and confirm both an agent and a skill
+      proceed silently, with no warning and no error (the degradation
+      property), then restore it
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
