@@ -47,10 +47,16 @@ searching, in this order, stopping as soon as you have enough:
 1. **The prompt.** The invoking skill often names the layers, directories, or
    vocabulary that matter. Trust what it gives you; it read the project's
    manifest and extension files so you would not have to.
-2. **The repo's own orientation documents.** `CLAUDE.md`, `README.md`, and any
+2. **`.claude/wurk/codebase.md`, when the prompt gave you none.** Some
+   projects keep a short orientation file there: layout, test suites,
+   module families, and terms of art. You have no Read tool, so Grep it for
+   its headings and the lines around them - or skip it, because when the
+   invoking skill did its job this content already reached you in rung 1.
+   Its absence is normal, not an error, and not worth reporting.
+3. **The repo's own orientation documents.** `CLAUDE.md`, `README.md`, and any
    top-level architecture or contributing doc name the important directories
    in a few lines.
-3. **A directory listing.** One `LS` at the repository root, plus one level
+4. **A directory listing.** One `LS` at the repository root, plus one level
    into the obvious source and test roots, tells you the conventions.
 
 Also worth a look when the request touches documents rather than code:

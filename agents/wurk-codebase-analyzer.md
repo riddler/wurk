@@ -47,11 +47,17 @@ read the code accurately before you start tracing, in this order:
 1. **The prompt.** The invoking skill often names the pipeline, the layer
    vocabulary, or the invariants that govern the component. Trust it - it read
    the project's manifest and extension files so you would not have to.
-2. **The repo's orientation documents.** `CLAUDE.md`, `README.md`, and any
+2. **`.claude/wurk/codebase.md`, when the prompt gave you none.** Some
+   projects keep a short orientation file there for exactly this purpose:
+   layout, test suites and what distinguishes them, module families,
+   terms of art, and the reading rules that are easy to get wrong. Read it
+   when it exists. Most projects do not have one - its absence is normal,
+   not an error, and not worth reporting.
+3. **The repo's orientation documents.** `CLAUDE.md`, `README.md`, and any
    architecture or design doc state the layering and the standing rules in a
    few paragraphs. Where the project keeps ADRs, an accepted one is a settled
    decision: cite its number rather than re-deriving the reasoning from code.
-3. **The code itself.** Public entry points and module surfaces.
+4. **The code itself.** Public entry points and module surfaces.
 
 Two things worth establishing early, because they change how you read
 everything else: how the project reports errors (return values, exceptions,
