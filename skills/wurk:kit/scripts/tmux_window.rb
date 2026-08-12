@@ -152,7 +152,64 @@ module TmuxWindow
     # `tmux.model` from the manifest; the flag must not be "simplified" away.
     def claude_command(model, seed, id, trailer_key)
       finish = format(FINISH_TEMPLATE, id: id, trailer: trailer_key)
-      "claude --permission-mode auto --model #{model} '#{seed}.#{finish}'"
+      "#{caffeinate_prefix}claude --permission-mode auto --model #{model} '#{seed}.#{finish}'"
+    end
+
+    # wu-esa: keep the machine from idle-sleeping out from under a seeded
+    # session left to run unattended. `caffeinate -i <command>` asserts
+    # idle-sleep prevention scoped to the wrapped child's lifetime - awake
+    # while the session runs, released the instant it exits, crashes, or is
+    # quiesced. No pmset write, no detached daemon, nothing global to
+    # remember to undo.
+    #
+    # This is a runtime probe, not a manifest field: `caffeinate` is a
+    # platform capability, not a consumer-project constant, so probing for
+    # it needs no manifest schema change and stays correct on a machine that
+    # doesn't have it (settled on the bead - see wu-esa's notes). The probe
+    # also doubles as the only opt-out; there is no separate flag. Two
+    # conditions both have to hold to wrap the command:
+    #
+    #   1. `caffeinate` exists on PATH.
+    #   2. The machine is on AC power (`pmset -g batt`'s first line names
+    #      the power source). A batch of seeded sessions holding a laptop
+    #      awake on battery for an hour can run it down before anyone is
+    #      back to notice, so the assertion is limited to the case it was
+    #      built for: a machine already plugged in and walked away from. On
+    #      battery, the OS's own judgment about when to sleep is left alone.
+    #      This checks AC-vs-battery only, not a charge percentage - a
+    #      threshold would need a number this bead has no evidence for, and
+    #      plugged-in-or-not is the sharper, defensible line.
+    #
+    # Either check failing - no `caffeinate`, no `pmset` (non-macOS), on
+    # battery, or any shell-out error - degrades to the empty string, giving
+    # a launch string byte-identical to the unwrapped one. That degrade is
+    # not a warning or an error; it's the expected shape on any platform or
+    # power state this doesn't apply to.
+    def caffeinate_prefix
+      return "" unless caffeinate_available? && on_ac_power?
+
+      "caffeinate -i "
+    end
+
+    # Sh.run's real runner shells out via Open3.popen3(*argv), which raises
+    # Errno::ENOENT (not a failed Result) when the binary itself is missing
+    # - the exact case a platform with no `which` on PATH hits. The comment
+    # above promises "any shell-out error degrades to the empty string", so
+    # both probes rescue StandardError rather than letting that propagate
+    # out of claude_command and break every seeded launch.
+    def caffeinate_available?
+      Sh.run(["which", "caffeinate"]).success?
+    rescue StandardError
+      false
+    end
+
+    def on_ac_power?
+      res = Sh.run(["pmset", "-g", "batt"])
+      return false unless res.success?
+
+      res.out.to_s.lines.first.to_s.include?("AC Power")
+    rescue StandardError
+      false
     end
 
     # --- classify helpers ------------------------------------------------
