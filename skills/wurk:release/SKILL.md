@@ -79,8 +79,8 @@ only the first half of that unless the version came with it.
 ruby ~/.claude/skills/wurk:kit/scripts/repo_state.rb
 ```
 
-- **STOP if `data.is_main`.** A release commit is a commit like any other and
-  belongs on a branch.
+- **STOP if `data.on_default_branch`.** A release commit is a commit like any
+  other and belongs on a branch.
 - **STOP if `data.dirty`.** An uncommitted change is either unrelated to the
   release - in which case it does not belong in the release commit - or it is
   work that needs its own commit first.

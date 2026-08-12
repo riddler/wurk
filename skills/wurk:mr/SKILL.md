@@ -49,10 +49,10 @@ the branch's own commits, falling back to the branch prefix (step 2).
    ruby ~/.claude/skills/wurk:kit/scripts/repo_state.rb
    ```
 
-   STOP if `data.is_main` - this skill operates on issue branches only. STOP
-   if `data.dirty` - an uncommitted change is either part of this work and
-   belongs in a commit, or is unrelated and belongs somewhere else. Do not
-   stage it here.
+   STOP if `data.on_default_branch` - this skill operates on issue branches
+   only. STOP if `data.dirty` - an uncommitted change is either part of this
+   work and belongs in a commit, or is unrelated and belongs somewhere else.
+   Do not stage it here.
 
    Confirm there is something to push, using `data.default_branch` from step
    1's `repo_state.rb` output in place of `<data.default_branch>`:
