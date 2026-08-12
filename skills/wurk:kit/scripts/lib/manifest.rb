@@ -542,8 +542,10 @@ class Manifest
     end
 
     roots = section["test_roots"]
-    unless roots.is_a?(Array) && !roots.empty? && roots.all? { |r| r.is_a?(String) }
-      errors << "#{path}: gate.sabotage.test_roots must be a non-empty list of path prefixes"
+    unless roots.is_a?(Array) && !roots.empty? &&
+           roots.all? { |r| r.is_a?(String) && !r.empty? && !r.start_with?(":") }
+      errors << "#{path}: gate.sabotage.test_roots must be a non-empty list of git pathspecs " \
+                "(directory prefixes, exact file paths, or globs; no leading ':')"
     end
 
     pattern = section["test_pattern"]

@@ -120,7 +120,27 @@ class ManifestValidationTest < Minitest::Test
       "gate" => { "sabotage" => { "test_pattern" => "\\btest\\s+\"" } }
     )
     refute m.valid?
-    assert_match(/gate\.sabotage\.test_roots must be a non-empty list of path prefixes/, m.errors.join("\n"))
+    assert_match(/gate\.sabotage\.test_roots must be a non-empty list of git pathspecs/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the empty-string check on test_roots entries -> red
+  def test_sabotage_empty_string_test_root_blocks
+    m = ManifestFixtures.load_with(
+      "valid",
+      "gate" => { "sabotage" => { "test_roots" => [""], "test_pattern" => "\\btest\\s+\"" } }
+    )
+    refute m.valid?
+    assert_match(/gate\.sabotage\.test_roots must be a non-empty list of git pathspecs/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the leading-":" check on test_roots entries -> red
+  def test_sabotage_leading_colon_test_root_blocks
+    m = ManifestFixtures.load_with(
+      "valid",
+      "gate" => { "sabotage" => { "test_roots" => [":!test/fixtures/"], "test_pattern" => "\\btest\\s+\"" } }
+    )
+    refute m.valid?
+    assert_match(/gate\.sabotage\.test_roots must be a non-empty list of git pathspecs/, m.errors.join("\n"))
   end
 
   # sabotage: drop the pattern check in validate_sabotage -> red

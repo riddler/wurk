@@ -289,7 +289,9 @@ surface; every command is manifest data. The most constrained script here.
   a stated `n/a` exemption) is not evidence the mutation described was
   actually run against broken code - only reading the diff by hand and
   confirming the test failed for the right reason is. `/commit`'s own
-  Step 0 carries that judgment call; this script only reports absence.
+  Step 0 carries that judgment call; this script only reports absence. The
+  scan's scope is the manifest's `gate.sabotage.test_roots` pathspec, which
+  may enumerate individual files rather than a whole directory.
   The scan itself is a manifest capability, `gate.sabotage` (see
   `docs/manifest.md`): when a project declares no such section,
   `data.sabotage.enabled` is `false` with a `reason`, and `missing` is then

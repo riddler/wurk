@@ -228,8 +228,15 @@ scan means nothing was flagged; an empty `missing` with `enabled: false`
 means the scan never ran - the two are not the same claim, and a reader must
 not collapse them.
 
-- **test_roots** - directory prefixes passed to `git diff main...HEAD -U0 --`
-  as the pathspec, i.e. where the scan looks for new test declarations.
+- **test_roots** - git pathspecs passed verbatim to
+  `git diff main...HEAD -U0 --`, i.e. where the scan looks for new test
+  declarations. A directory prefix (`"test/"`) scans every test under it; an
+  exact file path or bare glob scopes the scan to enumerated binding tests.
+  Entries must not start with `:` - exclusions belong in `exempt_prefixes`,
+  the single definition site for what is exempt. Scoping trap: with
+  enumerated files, a new binding test in an unlisted file is invisible to
+  the scan, so adding a binding test includes adding its path (or covering
+  it with a glob) in the same change.
 - **test_pattern** - a regex source matched against each added line to
   decide whether it declares a test. statifier's ExUnit shape
   (`\btest\s+"`) is one project's syntax, not a default - a project with a
@@ -240,9 +247,10 @@ not collapse them.
   the in-scan filter, so there is exactly one definition site for what is
   exempt.
 
-statifier-ex is the only consumer that declares this section today;
-predicator-ex and fixative have no sabotage-discipline corpus and get the
-off state, honestly.
+statifier-ex runs the broad form (`test_roots: ["test/"]`), scanning every
+new test declaration; predicator-ex runs the narrow form over its
+enumerated binding tests; fixative has no sabotage-discipline corpus and
+keeps the off state, honestly.
 
 ## `judge`
 
@@ -371,7 +379,7 @@ is already handled there.
 | gate.loop | mix quality --profile loop | mix quality --profile loop | mise run quality:quick |
 | gate.report | yes (ex_quality JSON) | yes | no (tier 0; tier 1 later) |
 | gate.attest | mix gate.verify | none | none |
-| gate.sabotage | yes | none | none |
+| gate.sabotage | yes | yes (enumerated binding tests) | none |
 | parallelism.model | worktree-per-issue | worktree-per-issue | branch-in-place |
 | tmux.session | statifier-ex | predicator-ex | (renames current window) |
 | models.direction | fable | opus (default) | opus (default) |
@@ -379,6 +387,12 @@ is already handled there.
 | commits.style | s-form | s-form | conventional + package map |
 | changelog.mode | fragments | keep-a-changelog (direct) | keep-a-changelog per package |
 | release | null (2.0.0-dev) | hex recipe | xcode-app recipe |
+
+The `gate.sabotage` column for predicator-ex describes this schema's
+intent, not yet that repo's own manifest: predicator-ex has the narrow
+sabotage discipline (see wu-4r7), but adopting `test_roots` with its
+enumerated binding-test paths in predicator-ex's own `.claude/wurk.json` is
+separate downstream work not yet landed.
 
 `models.direction` was added to the schema because statifier-ex and
 predicator-ex were observed to disagree on it (statifier wanted Fable,
