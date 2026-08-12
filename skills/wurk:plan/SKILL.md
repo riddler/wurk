@@ -23,6 +23,10 @@ ratchet step, a spec-conformance check), the optional sections its plans
 carry, and the domain patterns a plan should follow. The critic in step 5
 checks the plan against it.
 
+Also read `.claude/wurk/codebase.md` if it exists. It is not this skill's
+extension - it is addressed to the `wurk-codebase-*` agents, and this skill's
+only job with it is to forward it (step 1.2).
+
 ---
 
 ## MANDATORY output requirements
@@ -110,6 +114,14 @@ plan.
      running a snippet, checking behavior in a REPL, or reading a sibling
      checkout. Say explicitly in the prompt when an agent should look outside
      this repo.
+
+   **Pass the project's orientation** to every `wurk-codebase-*` agent you
+   spawn: paste the content of `.claude/wurk/codebase.md`, verbatim, under
+   the heading `## Project orientation, from .claude/wurk/codebase.md`.
+   Forward it as it stands - summarizing or excerpting it is a judgment call
+   you would be making invisibly, on every invocation. If the file does not
+   exist, say nothing about it; the agents orient from the repo, which is
+   the normal case.
 
    The research agents are documentarians: they describe what exists and do
    not critique it. Accepted ADRs are settled - cite the number, do not
