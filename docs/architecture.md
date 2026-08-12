@@ -17,6 +17,7 @@ optional extension files; they do not copy skills.
 <consumer repo>/.claude/
   wurk.json                   the manifest: every project-specific constant
   wurk/<skill>.md             extensions: domain content a skill reads and honors
+  wurk/codebase.md            orientation forwarded into the codebase agents
   settings.json               hooks (bd prime) and deny rules stay per-project
   CLAUDE.md                   authority table; wurk defers to it, never widens it
 ```
@@ -67,10 +68,20 @@ the other scripts.
 
 ### Layer 4: extensions
 
-Optional per-skill markdown at `.claude/wurk/<skill>.md` (e.g. `wurk/mr.md`,
-`wurk/plan.md`). A generic skill states where in its flow it reads its
-extension and treats the content as additional required steps or domain
-patterns. Examples of what lives here rather than in wurk:
+Optional markdown under `.claude/wurk/`, in two key shapes:
+
+- **Per-skill**, `.claude/wurk/<skill>.md` (e.g. `wurk/mr.md`,
+  `wurk/plan.md`) - the common case. A generic skill states where in its flow
+  it reads its extension and treats the content as additional required steps
+  or domain patterns.
+- **Per-agent-family**, `.claude/wurk/codebase.md` (ADR-0011) - host-project
+  orientation addressed to the `wurk-codebase-*` agents: layout, test suites,
+  module families, terms of art, and reading rules. `/wurk:research`,
+  `/wurk:plan`, and `/wurk:iterate` forward it verbatim into those agents'
+  prompts, and the agents that have a Read tool fall back to reading it
+  themselves. Absent, the agents orient from the repo exactly as before.
+
+Examples of what lives here rather than in wurk:
 
 - statifier-ex: ADR judge invocation at merge time, sabotage protocol,
   corpus/ratchet success criteria, Appendix D conventions.
