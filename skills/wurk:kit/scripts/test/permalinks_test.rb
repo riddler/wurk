@@ -88,6 +88,101 @@ class PermalinksLibTest < Minitest::Test
     assert_equal 2, first_subs.length
     assert_equal [], second_subs
   end
+
+  # --- rewrite: colon-bearing paths (wu-18l) -----------------------------
+  #
+  # Every kit skill directory is named skills/wurk:<name>, so a reference
+  # into a kit script always has an interior colon before the line-number
+  # colon. These prove REFERENCE_RE's path class accepts ':' and that the
+  # trailing ':(\d+)' still binds to the LAST colon rather than the first.
+
+  def test_rewrite_replaces_a_colon_bearing_path_reference
+    text = "See `skills/wurk:kit/scripts/permalinks.rb:24` for details."
+
+    rewritten, subs = Permalinks.rewrite(text, owner: "o", repo: "r", commit: "c")
+
+    assert_equal(
+      "See [`skills/wurk:kit/scripts/permalinks.rb:24`]" \
+      "(https://github.com/o/r/blob/c/skills/wurk:kit/scripts/permalinks.rb#L24) for details.",
+      rewritten
+    )
+    assert_equal 1, subs.length
+  end
+
+  def test_rewrite_colon_bearing_path_with_line_range_binds_to_the_last_colon
+    text = "`skills/wurk:kit/scripts/permalinks.rb:12-30` is the file."
+
+    rewritten, = Permalinks.rewrite(text, owner: "o", repo: "r", commit: "c")
+
+    assert_includes rewritten, "skills/wurk:kit/scripts/permalinks.rb#L12-L30"
+  end
+
+  def test_build_url_colon_bearing_path
+    url = Permalinks.build_url(owner: "o", repo: "r", commit: "c",
+                                file: "skills/wurk:kit/scripts/permalinks.rb", line: "24")
+
+    assert_equal "https://github.com/o/r/blob/c/skills/wurk:kit/scripts/permalinks.rb#L24", url
+  end
+
+  # --- rewrite: root: existence guard (wu-18l) ---------------------------
+  #
+  # root: is nil by default, which preserves the pre-wu-18l behavior
+  # (asserted by every test above, none of which pass root:). Passing root:
+  # turns on the existence check that keeps a bare basename - or any
+  # unresolvable path - from being rewritten into a URL that 404s.
+
+  def test_rewrite_with_root_leaves_an_unresolvable_bare_basename_alone
+    Dir.mktmpdir do |root|
+      text = "`permalinks.rb:24`"
+
+      rewritten, subs = Permalinks.rewrite(text, owner: "o", repo: "r", commit: "c", root: root)
+
+      assert_equal text, rewritten
+      assert_equal [], subs
+    end
+  end
+
+  def test_rewrite_with_root_rewrites_a_path_that_exists
+    Dir.mktmpdir do |root|
+      FileUtils.mkdir_p(File.join(root, "lib"))
+      File.write(File.join(root, "lib", "foo.rb"), "")
+      text = "`lib/foo.rb:5`"
+
+      rewritten, subs = Permalinks.rewrite(text, owner: "o", repo: "r", commit: "c", root: root)
+
+      assert_equal 1, subs.length
+      assert_includes rewritten, "lib/foo.rb#L5"
+    end
+  end
+
+  def test_rewrite_with_root_rewrites_a_colon_bearing_path_that_exists
+    Dir.mktmpdir do |root|
+      FileUtils.mkdir_p(File.join(root, "skills", "wurk:kit", "scripts"))
+      File.write(File.join(root, "skills", "wurk:kit", "scripts", "permalinks.rb"), "")
+      text = "`skills/wurk:kit/scripts/permalinks.rb:24`"
+
+      rewritten, subs = Permalinks.rewrite(text, owner: "o", repo: "r", commit: "c", root: root)
+
+      assert_equal 1, subs.length
+      assert_includes rewritten, "skills/wurk:kit/scripts/permalinks.rb#L24"
+    end
+  end
+
+  def test_rewrite_with_root_is_idempotent_for_colon_paths
+    Dir.mktmpdir do |root|
+      FileUtils.mkdir_p(File.join(root, "skills", "wurk:kit", "scripts"))
+      File.write(File.join(root, "skills", "wurk:kit", "scripts", "permalinks.rb"), "")
+      text = "See `skills/wurk:kit/scripts/permalinks.rb:24` and `nonexistent.rb:1` for details."
+
+      once, first_subs = Permalinks.rewrite(text, owner: "o", repo: "r", commit: "c", root: root)
+      twice, second_subs = Permalinks.rewrite(once, owner: "o", repo: "r", commit: "c", root: root)
+
+      assert_equal once, twice
+      assert_equal 1, first_subs.length
+      assert_equal [], second_subs
+      assert_includes once, "`nonexistent.rb:1`"
+    end
+  end
 end
 
 # PermalinksCli, driven through FakeSh (gh/git) and tmpdir documents.
@@ -204,6 +299,50 @@ class PermalinksCliTest < Minitest::Test
     _code, env = run_cli(["/no/such/file.md"])
 
     assert_equal "file_not_found", env["blocked"].first["code"]
+  end
+
+  # The CLI's repo root is two dirnames up from manifest.path (see judge.rb
+  # for the same convention); for the "worktree" fixture that resolves to
+  # test/fixtures, so a reference resolves iff a real file sits there.
+  # test/fixtures/lib/statifier/interpreter.ex and
+  # test/fixtures/skills/wurk:kit/scripts/example.rb exist for exactly this.
+
+  def test_rewrites_a_colon_bearing_path_reference
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "doc.md")
+      File.write(path, "See `skills/wurk:kit/scripts/example.rb:3` please.\n")
+
+      @fake.expect(%w[gh repo view --json owner,name], out: gh_repo_view_json)
+      @fake.expect(%w[git rev-parse HEAD], out: "deadbee1234\n")
+
+      code, env = run_cli([path])
+
+      assert_equal 0, code
+      assert_equal 1, env["data"]["count"]
+      updated = File.read(path)
+      assert_includes updated,
+                       "https://github.com/riddler/statifier-ex/blob/deadbee1234/skills/wurk:kit/scripts/example.rb#L3"
+    end
+  end
+
+  # sabotage: drop the root: argument from the CLI's Permalinks.rewrite call
+  # -> the pre-wu-18l default (no existence check) comes back -> this
+  # basename gets rewritten into a 404 URL instead of being left alone -> red
+  def test_leaves_a_bare_basename_that_does_not_resolve_untouched
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "doc.md")
+      original = "See `interpreter.ex:42` please.\n"
+      File.write(path, original)
+
+      @fake.expect(%w[gh repo view --json owner,name], out: gh_repo_view_json)
+      @fake.expect(%w[git rev-parse HEAD], out: "deadbee1234\n")
+
+      code, env = run_cli([path])
+
+      assert_equal 0, code
+      assert_equal 0, env["data"]["count"]
+      assert_equal original, File.read(path)
+    end
   end
 
   def test_no_references_writes_nothing_and_reports_zero
