@@ -86,6 +86,15 @@ module RepoState
       branch = nil if branch.empty?
       branch_bead = decompose_branch(branch)
 
+      # is_main answers "which checkout am I in" (main vs. worktree);
+      # on_default_branch answers "which branch am I on" - a different
+      # question that only coincides with is_main under worktree-per-issue,
+      # where issue work never happens in the main checkout. A branch
+      # committed directly in the main checkout is is_main true but
+      # on_default_branch false. Detached HEAD (branch is nil) is not the
+      # default branch by definition, so it reads false rather than nil.
+      on_default_branch = !branch.nil? && branch == manifest.default_branch
+
       status_res = Sh.run(%w[git status --porcelain], envelope: env)
       dirty_files = parse_status_porcelain(status_res.out)
       dirty = !dirty_files.empty?
@@ -135,6 +144,7 @@ module RepoState
       env.data[:branch] = branch
       env.data[:branch_bead] = branch_bead
       env.data[:is_main] = is_main
+      env.data[:on_default_branch] = on_default_branch
       env.data[:default_branch] = manifest.default_branch
       env.data[:dirty] = dirty
       env.data[:dirty_files] = dirty_files

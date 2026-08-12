@@ -56,6 +56,7 @@ class RepoStateTest < Minitest::Test
     assert_equal 0, code
     assert_equal "worktree", env["data"]["checkout"]
     assert_equal false, env["data"]["is_main"]
+    assert_equal false, env["data"]["on_default_branch"]
     assert_equal "zz-abc-exit-sets", env["data"]["branch"]
     assert_equal(
       { "id" => "zz-abc", "strategy" => "branch_prefix", "confidence" => "weak" },
@@ -83,7 +84,33 @@ class RepoStateTest < Minitest::Test
     assert_equal 0, code
     assert_equal "main", env["data"]["checkout"]
     assert_equal true, env["data"]["is_main"]
+    assert_equal true, env["data"]["on_default_branch"]
     assert_nil env["data"]["branch_bead"]
+  end
+
+  # The live bug from wu-4qf: an issue branch committed in the main checkout
+  # (no worktree involved) is_main true, but it is not on the default branch.
+  # /wurk:mr and /wurk:release need on_default_branch, not is_main, to answer
+  # "am I on an issue branch" correctly.
+  def test_issue_branch_in_main_checkout_is_main_but_not_on_default_branch
+    expect_locate(git_dir: "/repo/.git", common_dir: "/repo/.git", toplevel: "/repo")
+    @fake.expect(%w[git branch --show-current], out: "zz-abc-x\n")
+    @fake.expect(%w[git status --porcelain], out: "")
+    @fake.expect(
+      ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+      out: "origin/zz-abc-x\n"
+    )
+    @fake.expect(["git", "rev-list", "--count", "origin/zz-abc-x..HEAD"], out: "1\n")
+    @fake.expect(["git", "rev-list", "--count", "HEAD..origin/zz-abc-x"], out: "0\n")
+    @fake.expect(%w[git log], out: "")
+    @fake.expect(%w[git diff --name-only main...HEAD], out: "")
+
+    code, env = run_repo_state
+
+    assert_equal 0, code
+    assert_equal "main", env["data"]["checkout"]
+    assert_equal true, env["data"]["is_main"]
+    assert_equal false, env["data"]["on_default_branch"]
   end
 
   def test_dirty_and_touches_build_true_via_status
