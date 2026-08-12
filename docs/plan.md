@@ -908,6 +908,13 @@ Steps, wurk side:
    | `wurk/implement.md` | the sabotage protocol in full (mutation kinds, the exemption note grammar, the corpus exemption); the "diff against Appendix D first" debugging move; errors-as-events and effects-out rules |
    | `wurk/research.md` | the pipeline-layer vocabulary; the `../statifier` v1 reference-checkout guidance |
 
+   **Reroute (ADR-0011).** The orientation rows above - the pipeline-layer
+   vocabulary and tree map in `wurk/research.md`, and the Appendix D
+   pseudocode rule and common patterns in `wurk/plan.md` - belong in
+   `.claude/wurk/codebase.md`, the agent-family extension the codebase agents
+   read and the spawning skills forward. Step 7 wrote the per-skill files
+   before that decision existed, so the move is follow-on work; see step 11.
+
 3. Move the six agents to `agents/`, renamed with a `wurk-` prefix
    (hyphen, not colon: agent names allow only lowercase letters and
    hyphens; `:` is reserved for plugin identifiers and a name containing
@@ -989,8 +996,9 @@ Steps, wurk side:
      layered shape as item 9's resolution for the docs pair, and the same
      reasoning - an agent that must guess should say it guessed. The
      project vocabulary these sections used to hardcode is already slated
-     for the consumers' `wurk/research.md` and `wurk/plan.md` extensions
-     (step 2's extraction table), which the invoking skill reads and
+     for the consumers' `.claude/wurk/codebase.md` extension (step 2's
+     extraction table, rerouted per ADR-0011, which fixed the mechanism
+     this sentence anticipated), which the invoking skill reads and
      passes down. Illustrative code in the output-format blocks was
      replaced with `<file>:<line>` placeholders rather than a different
      project's real code.
@@ -1113,6 +1121,15 @@ Steps, statifier side (a bead + branch there):
     actually rewritten. `docs/plans/`, `docs/research/`, and
     `docs/quality-gate-changes.md` were deliberately left alone as historical
     record, matching the phase's own git-grep exemption.
+11. **TODO.** Statifier side: move the orientation content out of
+    `.claude/wurk/research.md` and `.claude/wurk/plan.md` into a new
+    `.claude/wurk/codebase.md` (ADR-0011) - the pipeline vocabulary, the tree
+    map, the good-search-keys list, the Appendix D pseudocode rule, and the
+    common patterns. The per-skill files keep the genuinely skill-facing
+    remainder: reference-checkout guidance and areas wanting their own
+    sub-agent in `research.md`; corpus/ratchet success criteria, required
+    sections, and phase-splitting boundaries in `plan.md`. Needs its own bead;
+    not blocking anything here.
 
 Definition of done (**`wu-902`**):
 - Wurk suite green standalone on system Ruby.
