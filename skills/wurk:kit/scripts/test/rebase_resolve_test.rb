@@ -48,16 +48,34 @@ class RebaseResolveTest < Minitest::Test
     [code, JSON.parse(io.string)]
   end
 
-  # Asserts the envelope shape common to every stop path. Deliberately does
-  # NOT assert the abort call itself - each test does that inline with the
+  # Asserts the envelope shape common to every stop path, plus the ordering
+  # property that shape depends on. Deliberately does NOT assert the
+  # *presence* of the abort call - each test does that inline with the
   # literal argv, so `grep -c "rebase --abort"` on this file (the automated
   # check) counts one hit per stop path rather than one hit total behind a
   # shared helper.
+  #
+  # The ordering is asserted here rather than inline because it is the same
+  # claim on every path and it is what the inline presence assertions cannot
+  # show: that the abort is the LAST thing the script does before blocking.
+  # block! is an envelope mutation, not an Sh call, so it never appears in
+  # the recorded sequence and cannot be indexed against directly - "nothing
+  # ran after the abort" is the observable form of "the abort preceded the
+  # block". This is rebase_onto_test.rb's capture-before-abort assertion
+  # pointed at the other end of the same window: there the concern is that
+  # the file list is captured before the abort destroys it, here that no
+  # command runs after the worktree has been restored.
   def assert_conflict_block(env, stop_reason)
     assert_equal "conflict", env["data"]["status"]
     assert_equal stop_reason, env["data"]["stop_reason"]
     assert_equal "rebase_conflict", env["blocked"].first["code"]
     assert_equal "human", env["blocked"].first["needs"]
+
+    abort_index = @fake.calls.rindex { |c| c.argv == %w[git rebase --abort] }
+    refute_nil abort_index, "expected a git rebase --abort on every stop path"
+    assert_equal @fake.calls.length - 1, abort_index,
+                 "expected the abort to be the last recorded call, but " \
+                 "#{@fake.calls[(abort_index + 1)..].map(&:argv).inspect} ran after it"
   end
 
   def cli_stdout(result_text)

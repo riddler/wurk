@@ -374,6 +374,25 @@ class ManifestValidationTest < Minitest::Test
     assert_match(/auto_resolve_paths entry "vendor\/" collides with gate\.also_gated_paths/, m.errors.join("\n"))
   end
 
+  # sabotage: check only GatePaths.match_one?(guarded, entry) and drop the
+  # forward direction, specifically inside the REBASE_COLLISION_SCALAR_FIELDS
+  # loop -> red. Both scalar fields hold a single file path in practice, and
+  # for an exact path the two directions catch the same entries - so the
+  # forward branch is only reachable when a consumer sets a scalar to a
+  # directory prefix, which nothing validates against.
+  def test_rebase_entry_under_a_directory_prefix_scalar_blocks
+    m = ManifestFixtures.load_with(
+      "rebase",
+      "parallelism" => { "repair_when" => "deps/" },
+      "rebase" => { "auto_resolve_paths" => ["deps/vendored.md"] }
+    )
+    refute m.valid?
+    assert_match(
+      /auto_resolve_paths entry "deps\/vendored\.md" collides with parallelism\.repair_when \("deps\/"\)/,
+      m.errors.join("\n")
+    )
+  end
+
   # sabotage: drop the manifest-directory check in validate_rebase_entry -> red
   def test_rebase_entry_naming_the_manifest_file_blocks
     m = ManifestFixtures.load_with("valid", "rebase" => { "auto_resolve_paths" => [".claude/wurk.json"] })

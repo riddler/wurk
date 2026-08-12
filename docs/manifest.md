@@ -279,8 +279,9 @@ empty field blocks, naming the field.
 The only paths a rebase conflict may be auto-resolved in (ADR-0010). Defaults
 to `[]`, which is where every consumer starts: an empty list can never
 satisfy "every conflicting path is allowlisted", so the feature is off until
-a consumer opts in. The field has no reader in the kit yet beyond its own
-validation; `/wurk:mr`'s resolver is later work.
+a consumer opts in. `lib/conflict_paths.rb` reads it, and
+`scripts/rebase_resolve.rb` is the only caller - the resolver `/wurk:mr`
+runs when a rebase conflict is confined to allowlisted paths.
 
 Same matching rule as the gate path lists (see "Two path lists, not one"
 below): each entry is a directory prefix when it ends in `/`, and an exact
