@@ -11,7 +11,7 @@ Wurk generalizes the skill set grown in
 [predicator-ex](../predicator-ex), with
 [fixative](../fixative) (Rust + Swift, GitLab) as the cross-language target.
 Projects consume it by writing a small manifest (`.claude/wurk.json`) and
-optional per-skill extension files - they do not copy skills, so improvements
+optional markdown extension files - they do not copy skills, so improvements
 land everywhere at once.
 
 ## Status

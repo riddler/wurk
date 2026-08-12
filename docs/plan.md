@@ -128,8 +128,10 @@ Four layers:
    alongside a REFERENCE.md, mirroring the existing `present:kit` pattern.
 3. **Per-project manifest** - `.claude/wurk.json` in each consumer repo
    (ADR-0004; schema in `docs/manifest.md`).
-4. **Per-project extensions** - optional `.claude/wurk/<skill>.md` files the
-   generic skills read and honor (ADR-0004).
+4. **Per-project extensions** - optional `.claude/wurk/` markdown in two key
+   shapes: per-skill `.claude/wurk/<skill>.md` files the generic skills read
+   and honor (ADR-0004), and the per-agent-family `.claude/wurk/codebase.md`
+   forwarded into the `wurk-codebase-*` agents (ADR-0011).
 
 ## Skill rename map
 

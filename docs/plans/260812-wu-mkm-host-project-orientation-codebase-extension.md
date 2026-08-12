@@ -406,12 +406,12 @@ lists this repo's directories, not a consumer's.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
       (regression check only - this phase is doc-only, and per CLAUDE.md
       doc-only changes have no gate of their own)
-- [ ] `git grep -n 'per-skill' docs/architecture.md docs/plan.md README.md`
+- [x] `git grep -n 'per-skill' docs/architecture.md docs/plan.md README.md`
       shows no remaining claim that extensions are only per-skill
-- [ ] `git diff --stat` for this phase touches no file under
+- [x] `git diff --stat` for this phase touches no file under
       `docs/manifest.md`, `lib/`, or `skills/wurk:kit/`
 
 #### Manual Verification:
@@ -670,6 +670,27 @@ of blocking here.
 - [ ] Plain ASCII punctuation throughout the inserted prose
 - [ ] Nothing was deleted: the ADR-0008 judge scope covers
       `skills/**/SKILL.md`, and this phase only adds steps
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 3
+
+- [ ] Layer 4 reads as one seam with two key shapes, not two seams
+- [ ] The wording matches ADR-0011's framing: ADR-0004's sentence names the
+      common case, and this record extends rather than amends it
+- [ ] ADR-0004 itself is unedited
+- [ ] `docs/manifest.md` is unedited, and the diff makes that visible as a
+      deliberate property rather than an oversight
+- [ ] Plain ASCII punctuation, matching each file's existing style
+- [ ] Skill cross-references in the new prose use installed names
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
