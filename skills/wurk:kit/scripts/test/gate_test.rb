@@ -823,11 +823,11 @@ class GateTest < Minitest::Test
       end
     EX
 
-    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+    result = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
                                         file_reader: sabotage_files("test/acme/foo_test.exs" => file))
 
-    assert_equal 1, missing.length
-    assert_equal "test/acme/foo_test.exs", missing.first[:file]
+    assert_equal 1, result[:missing].length
+    assert_equal "test/acme/foo_test.exs", result[:missing].first[:file]
   end
 
   def test_sabotage_scan_accepts_a_real_mutation_note
@@ -848,10 +848,10 @@ class GateTest < Minitest::Test
       end
     EX
 
-    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+    result = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
                                         file_reader: sabotage_files("test/acme/foo_test.exs" => file))
 
-    assert_empty missing
+    assert_empty result[:missing]
   end
 
   def test_sabotage_scan_accepts_an_n_a_exemption_note
@@ -872,10 +872,10 @@ class GateTest < Minitest::Test
       end
     EX
 
-    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+    result = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
                                         file_reader: sabotage_files("test/acme/foo_test.exs" => file))
 
-    assert_empty missing
+    assert_empty result[:missing]
   end
 
   # sabotage: change `i -= 1` to `i -= 2` in sabotage_comment_block_above? ->
@@ -900,10 +900,10 @@ class GateTest < Minitest::Test
       end
     EX
 
-    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+    result = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
                                         file_reader: sabotage_files("test/acme/foo_test.exs" => file))
 
-    assert_empty missing
+    assert_empty result[:missing]
   end
 
   # sabotage: change COMMENT_LINE_RE from /\A\s*#/ to /\A\s*##/ -> red
@@ -929,10 +929,10 @@ class GateTest < Minitest::Test
       end
     EX
 
-    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+    result = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
                                         file_reader: sabotage_files("test/acme/foo_test.exs" => file))
 
-    assert_empty missing
+    assert_empty result[:missing]
   end
 
   # sabotage: change COMMENT_LINE_RE from /\A\s*#/ to /\A\s*#?/ so the blank
@@ -957,11 +957,11 @@ class GateTest < Minitest::Test
       end
     EX
 
-    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+    result = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
                                         file_reader: sabotage_files("test/acme/foo_test.exs" => file))
 
-    assert_equal 1, missing.length
-    assert_equal "test/acme/foo_test.exs", missing.first[:file]
+    assert_equal 1, result[:missing].length
+    assert_equal "test/acme/foo_test.exs", result[:missing].first[:file]
   end
 
   # sabotage: change the early-return condition in
@@ -987,11 +987,11 @@ class GateTest < Minitest::Test
       end
     EX
 
-    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+    result = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
                                         file_reader: sabotage_files("test/acme/foo_test.exs" => file))
 
-    assert_equal 1, missing.length
-    assert_equal "test/acme/foo_test.exs", missing.first[:file]
+    assert_equal 1, result[:missing].length
+    assert_equal "test/acme/foo_test.exs", result[:missing].first[:file]
   end
 
   # Regression for wu-lac, failure shape 1: the note and the test
@@ -1025,10 +1025,10 @@ class GateTest < Minitest::Test
       end
     EX
 
-    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+    result = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
                                         file_reader: sabotage_files("test/acme/foo_test.exs" => file))
 
-    assert_empty missing
+    assert_empty result[:missing]
   end
 
   # Regression for wu-lac, failure shape 2: the note is not edited at all,
@@ -1054,10 +1054,10 @@ class GateTest < Minitest::Test
       end
     EX
 
-    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+    result = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
                                         file_reader: sabotage_files("test/acme/foo_test.exs" => file))
 
-    assert_empty missing
+    assert_empty result[:missing]
   end
 
   # A genuinely note-less test still reports missing when it is EDITED, not
@@ -1079,17 +1079,18 @@ class GateTest < Minitest::Test
       end
     EX
 
-    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+    result = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
                                         file_reader: sabotage_files("test/acme/foo_test.exs" => file))
 
-    assert_equal 1, missing.length
-    assert_equal "test/acme/foo_test.exs", missing.first[:file]
+    assert_equal 1, result[:missing].length
+    assert_equal "test/acme/foo_test.exs", result[:missing].first[:file]
   end
 
   # Degenerate case: the file was deleted (or is otherwise unreadable) since
   # the diff was taken. There is nothing to verify a note against, so this
   # is treated as "can't verify", not "missing" - and it must not crash the
-  # gate.
+  # gate. It is no longer silent either: it surfaces as an unverifiable
+  # entry with reason file_unreadable.
   # sabotage: treat a nil file_reader result as "file has no note" instead
   # of "can't verify" -> red (a deleted file would flag every candidate line
   # still sitting in the stale diff)
@@ -1103,10 +1104,45 @@ class GateTest < Minitest::Test
       +  end
     DIFF
 
-    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+    result = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
                                         file_reader: sabotage_files({}))
 
-    assert_empty missing
+    assert_empty result[:missing]
+    assert_equal 1, result[:unverifiable].length
+    assert_equal "file_unreadable", result[:unverifiable].first[:reason]
+    assert_equal "test/acme/gone_test.exs", result[:unverifiable].first[:file]
+  end
+
+  # A declaration this scan cannot locate in the working-tree file at all
+  # (renamed again since the diff was taken, for example) is not a missing
+  # note - wu-lac's call - but it is no longer silent: it surfaces as an
+  # unverifiable entry with reason declaration_not_found.
+  # sabotage: fold :not_found into :noted in sabotage_note_status -> red
+  # (this candidate line, absent from the file body, would report neither
+  # missing nor unverifiable)
+  def test_sabotage_scan_reports_an_unlocatable_declaration
+    diff = <<~DIFF
+      diff --git a/test/acme/foo_test.exs b/test/acme/foo_test.exs
+      --- a/test/acme/foo_test.exs
+      +++ b/test/acme/foo_test.exs
+      @@ -10,0 +11,2 @@
+      +  test "does the renamed thing" do
+      +  end
+    DIFF
+    file = <<~EX
+      defmodule Acme.FooTest do
+        test "does the thing, renamed since the diff" do
+        end
+      end
+    EX
+
+    result = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+                                        file_reader: sabotage_files("test/acme/foo_test.exs" => file))
+
+    assert_empty result[:missing]
+    assert_equal 1, result[:unverifiable].length
+    assert_equal "declaration_not_found", result[:unverifiable].first[:reason]
+    assert_equal "test/acme/foo_test.exs", result[:unverifiable].first[:file]
   end
 
   # Degenerate case: the candidate line's exact text appears more than once
@@ -1135,10 +1171,10 @@ class GateTest < Minitest::Test
       end
     EX
 
-    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+    result = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
                                         file_reader: sabotage_files("test/acme/foo_test.exs" => file))
 
-    assert_empty missing
+    assert_empty result[:missing]
   end
 
   # sabotage: drop exempt_prefixes filtering from scan_sabotage -> red (both
@@ -1159,7 +1195,7 @@ class GateTest < Minitest::Test
       +  end
     DIFF
 
-    assert_empty Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE, exempt_prefixes: %w[test/scion_tests/ test/scxml_tests/])
+    assert_empty Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE, exempt_prefixes: %w[test/scion_tests/ test/scxml_tests/])[:missing]
   end
 
   # sabotage: hardcode /\btest\s+"/ back into scan_sabotage instead of
@@ -1178,11 +1214,11 @@ class GateTest < Minitest::Test
     file = "  def test_does_the_thing():\n      pass\n"
     reader = sabotage_files("test/acme/foo_test.py" => file)
 
-    missing = Gate.scan_sabotage(diff, test_re: python_test_re, file_reader: reader)
-    assert_equal 1, missing.length
+    result = Gate.scan_sabotage(diff, test_re: python_test_re, file_reader: reader)
+    assert_equal 1, result[:missing].length
 
     # The ExUnit pattern does not match this Python-shaped declaration at all.
-    assert_empty Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE, file_reader: reader)
+    assert_empty Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE, file_reader: reader)[:missing]
   end
 
   def test_sabotage_scan_runs_over_the_committed_diff_pathspec
@@ -1209,6 +1245,37 @@ class GateTest < Minitest::Test
       assert_equal "sabotage_note_missing", env["warnings"].first["code"]
       # A warning never blocks and never flips ok, even though applicable
       # is false here (the carve-out and the sabotage scan are independent).
+      assert_equal true, env["ok"]
+    end
+  end
+
+  # End-to-end: an unlocatable declaration reaches the envelope's
+  # `unverifiable` channel and its own warning code, without ever touching
+  # `ok`.
+  # sabotage: drop the `unverifiable: scan[:unverifiable]` key from
+  # env.data[:sabotage] in gate.rb's run -> red (the envelope key would be
+  # missing entirely)
+  def test_sabotage_scan_reports_unverifiable_through_the_envelope
+    in_tmp_cwd do
+      expect_no_elixir_diff
+      @fake.expect(
+        %w[git diff main...HEAD -U0 -- test/ :!test/scion_tests/ :!test/scxml_tests/],
+        out: "diff --git a/test/foo_test.exs b/test/foo_test.exs\n" \
+             "--- a/test/foo_test.exs\n+++ b/test/foo_test.exs\n@@ -0,0 +1,1 @@\n" \
+             "+  test \"renamed since the diff\" do\n"
+      )
+      # No file on disk carries this exact candidate text, so the working
+      # tree cannot locate it - the unverifiable path, not the missing path.
+      FileUtils.mkdir_p("test")
+      File.write("test/foo_test.exs", "  test \"already renamed\" do\nend\n")
+
+      _code, env = run_gate
+
+      assert_equal true, env["data"]["sabotage"]["enabled"]
+      assert_equal [], env["data"]["sabotage"]["missing"]
+      assert_equal 1, env["data"]["sabotage"]["unverifiable"].length
+      assert_equal "declaration_not_found", env["data"]["sabotage"]["unverifiable"].first["reason"]
+      assert_equal "sabotage_unverifiable", env["warnings"].first["code"]
       assert_equal true, env["ok"]
     end
   end

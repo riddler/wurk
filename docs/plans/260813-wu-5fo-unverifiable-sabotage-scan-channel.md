@@ -243,15 +243,15 @@ carries a `# sabotage:` note, per this repo's own discipline.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] `gate_test.rb` has a test asserting a `file_unreadable` entry with
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] `gate_test.rb` has a test asserting a `file_unreadable` entry with
       `missing` empty
-- [ ] `gate_test.rb` has a test asserting a `declaration_not_found` entry
+- [x] `gate_test.rb` has a test asserting a `declaration_not_found` entry
       with `missing` empty
-- [ ] An end-to-end `run_gate` test asserts
+- [x] An end-to-end `run_gate` test asserts
       `data.sabotage.unverifiable` is present, the warning code is
       `sabotage_unverifiable`, and `env["ok"]` is `true`
-- [ ] `grep -n "sabotage_note_in_file?" skills/wurk:kit/scripts` returns
+- [x] `grep -n "sabotage_note_in_file?" skills/wurk:kit/scripts` returns
       nothing
 
 #### Manual Verification:
@@ -479,3 +479,28 @@ of blocking here.
   `docs/adr/0008-merge-time-judge-over-generic-skill-prose.md`
 - Prior work: `docs/research/260812-wu-4r7-sabotage-scope-pathspec.md`,
   commit `a12aa0b` (wu-lac's correction note)
+
+## Deferred Manual Verification
+
+Manual verification items are deferred during looped (--loop) execution and
+surfaced here once, rather than blocking after each phase. Confirm these
+before considering the plan fully landed.
+
+### Phase 1
+
+- [ ] Reading the diff, no `unverifiable` case can reach `missing` and no
+      previously-missing case can reach `unverifiable`
+- [ ] The wu-lac reasoning for treating `:not_found` as not-missing survives
+      in the moved comment, not just in git history
+- [ ] No regression in the other sabotage tests' intent (they assert on
+      `[:missing]` and still mean what their names say)
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---

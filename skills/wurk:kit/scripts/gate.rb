@@ -61,7 +61,9 @@ require_relative "lib/manifest"
 #    docs/quality-gate-changes.md - see test/contract_test.rb. The sabotage
 #    scan itself only runs when the manifest declares `gate.sabotage`; a
 #    project that does not is reported as `enabled: false`, not silently
-#    skipped.
+#    skipped. `data.sabotage.unverifiable` is a report on the same terms as
+#    `missing`: it names declarations this scan could not check at all, and
+#    it never flips `ok` either.
 module Gate
   # Matches both accepted note forms - a real mutation
   # (`# sabotage: <what> -> red`) and a stated exemption
@@ -139,6 +141,7 @@ module Gate
     # see the module doc.
     def scan_sabotage(diff_text, test_re:, exempt_prefixes: [], file_reader: DEFAULT_SABOTAGE_FILE_READER)
       missing = []
+      unverifiable = []
       current_file = nil
       file_lines_by_path = {}
 
@@ -159,12 +162,20 @@ module Gate
         file_lines_by_path[current_file] = sabotage_file_lines(current_file, file_reader) unless
           file_lines_by_path.key?(current_file)
         file_lines = file_lines_by_path[current_file]
-        next if file_lines.nil? # file missing or unreadable - nothing to verify a note against
 
-        missing << { file: current_file, text: content.strip } unless sabotage_note_in_file?(file_lines, content)
+        if file_lines.nil?
+          unverifiable << { reason: "file_unreadable", file: current_file, text: content.strip, detail: nil }
+          next
+        end
+
+        case sabotage_note_status(file_lines, content)
+        when :unnoted then missing << { file: current_file, text: content.strip }
+        when :not_found
+          unverifiable << { reason: "declaration_not_found", file: current_file, text: content.strip, detail: nil }
+        end
       end
 
-      missing
+      { missing: missing, unverifiable: unverifiable }
     end
 
     # Reads `path` through `file_reader` and splits it into chomped lines,
@@ -183,17 +194,22 @@ module Gate
     # names, duplicated fixtures); checking every occurrence and accepting
     # if any one of them is noted is the charitable reading - it is the same
     # bar `-U0`'s old within-hunk check applied, just against the file
-    # instead of the diff. A declaration this scan cannot find in the file
+    # instead of the diff.
+    #
+    # Answers the note question three ways so the caller can tell a real
+    # missing note from a declaration this scan could not locate at all.
+    # :noted / :unnoted / :not_found. wu-lac's call stands - :not_found is
+    # not a missing note - a declaration this scan cannot find in the file
     # at all (renamed again since the diff was taken, for example) is
-    # treated as "can't verify", not "missing" - the same call as the
+    # treated as "can't verify", not "missing", the same call as the
     # missing-file case in scan_sabotage, and for the same reason: a
     # report-only scan should not manufacture a note-missing warning out of
-    # its own inability to locate the line.
-    def sabotage_note_in_file?(file_lines, content)
+    # its own inability to locate the line - but it is no longer silent.
+    def sabotage_note_status(file_lines, content)
       indices = file_lines.each_index.select { |i| file_lines[i] == content }
-      return true if indices.empty?
+      return :not_found if indices.empty?
 
-      indices.any? { |i| sabotage_comment_block_above?(file_lines, i) }
+      indices.any? { |i| sabotage_comment_block_above?(file_lines, i) } ? :noted : :unnoted
     end
 
     # Walks upward from the line directly above `idx` over the contiguous
@@ -224,11 +240,11 @@ module Gate
     # The scan is a manifest capability (gate.sabotage, see docs/manifest.md):
     # a project that never declares it gets no `git diff` shelled out for it
     # at all, and an empty [] rather than a false "nothing found".
-    def sabotage_missing(env, manifest)
-      return [] unless manifest.sabotage?
+    def sabotage_scan(env, manifest)
+      return { missing: [], unverifiable: [] } unless manifest.sabotage?
 
       diff_res = Sh.run(sabotage_diff_args(manifest), envelope: env)
-      return [] unless diff_res.success?
+      return { missing: [], unverifiable: [] } unless diff_res.success?
 
       scan_sabotage(diff_res.out,
                     test_re: manifest.sabotage_test_pattern,
@@ -355,17 +371,25 @@ module Gate
       ledger_path = manifest.gate_guard_ledger
       applicable = gate_applicable?(env, manifest)
 
-      missing = sabotage_missing(env, manifest)
+      scan = sabotage_scan(env, manifest)
       env.data[:sabotage] = {
         enabled: manifest.sabotage?,
         reason: manifest.sabotage? ? nil : "no gate.sabotage section in the manifest; the scan is off",
-        missing: missing
+        missing: scan[:missing],
+        unverifiable: scan[:unverifiable]
       }
-      missing.each do |m|
+      scan[:missing].each do |m|
         env.warn(
           code: "sabotage_note_missing",
           message: "#{m[:file]}: #{m[:text]} has no `# sabotage:` note directly above it " \
                     "(a present note is not evidence the mutation was run)"
+        )
+      end
+      scan[:unverifiable].each do |u|
+        env.warn(
+          code: "sabotage_unverifiable",
+          message: "#{u[:file]}: #{u[:text]} could not be checked for a `# sabotage:` note " \
+                   "(#{u[:reason]}) - this is not a clean result for that declaration"
         )
       end
 
