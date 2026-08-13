@@ -284,19 +284,29 @@ surface; every command is manifest data. The most constrained script here.
   `data.attested` to `false`. No `--skip`, `--quick`, or other `--profile`
   value is defined by this script's parser, so passing one is a usage error
   (exit 2), not a narrower run.
-- **`data.sabotage.missing` is a report, not a gate.** It never blocks and
-  never flips `ok`. A present `# sabotage:` note (either a real mutation or
-  a stated `n/a` exemption) is not evidence the mutation described was
-  actually run against broken code - only reading the diff by hand and
-  confirming the test failed for the right reason is. `/commit`'s own
-  Step 0 carries that judgment call; this script only reports absence. The
-  scan's scope is the manifest's `gate.sabotage.test_roots` pathspec, which
-  may enumerate individual files rather than a whole directory.
+- **`data.sabotage.missing` and `data.sabotage.unverifiable` are a report,
+  not a gate.** Neither ever blocks or flips `ok`. A present `# sabotage:`
+  note (either a real mutation or a stated `n/a` exemption) is not evidence
+  the mutation described was actually run against broken code - only reading
+  the diff by hand and confirming the test failed for the right reason is.
+  `/commit`'s own Step 0 carries that judgment call; this script only reports
+  absence. The scan's scope is the manifest's `gate.sabotage.test_roots`
+  pathspec, which may enumerate individual files rather than a whole
+  directory.
   The scan itself is a manifest capability, `gate.sabotage` (see
   `docs/manifest.md`): when a project declares no such section,
   `data.sabotage.enabled` is `false` with a `reason`, and `missing` is then
   always `[]` - absence of findings there is not evidence of discipline,
   only evidence the scan never ran.
+  `data.sabotage.scanned` is `false` only when the scan's `git diff` itself
+  failed, meaning nothing was checked that run; `data.sabotage.unverifiable`
+  holds one entry per declaration the scan could not check, each with a
+  `reason` of `diff_failed` (the whole run), `file_unreadable` (the file
+  could not be read), or `declaration_not_found` (the added line could not be
+  located in the working-tree file). A consumer that only reports the scan
+  names `unverifiable` entries alongside `missing` ones; a consumer that
+  gates on the scan decides for itself what a non-empty `unverifiable`
+  means - the kit reports, it does not make that call.
 - **`data.gate_guard` reports; it never writes.** There is no code path in
   `gate.rb` that writes `docs/quality-gate-changes.md` - `test/contract_test.rb`
   asserts that mechanically over every file under `scripts/`.

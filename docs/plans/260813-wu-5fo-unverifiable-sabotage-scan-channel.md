@@ -409,11 +409,11 @@ does not apply.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
       (this includes the consumer-vocabulary guard over skill markdown)
-- [ ] `grep -rn "unverifiable" docs/manifest.md skills/wurk:kit/REFERENCE.md
+- [x] `grep -rn "unverifiable" docs/manifest.md skills/wurk:kit/REFERENCE.md
       skills/wurk:commit/SKILL.md` returns a hit in each of the three files
-- [ ] Each of `diff_failed`, `file_unreadable`, and
+- [x] Each of `diff_failed`, `file_unreadable`, and
       `declaration_not_found` appears in `skills/wurk:kit/scripts/gate.rb`
       and in at least one of the three doc files:
       `grep -c '<value>' skills/wurk:kit/scripts/gate.rb docs/manifest.md
@@ -513,6 +513,25 @@ of blocking here.
 - [ ] A timed-out diff takes the same path as a nonzero-exit diff
       (`Sh::Result#success?` covers both) and reads sensibly in the message
 - [ ] No path added in this phase can flip `ok` or block
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 3
+
+- [ ] The docs describe the envelope `gate.rb` actually emits after phases
+      1 and 2, field for field
+- [ ] The consumer guidance states the choice without making it for the
+      consumer
+- [ ] No consumer-project constant (bead prefix, repo path, gate command,
+      label) entered the generic prose
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
