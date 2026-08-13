@@ -228,6 +228,26 @@ scan means nothing was flagged; an empty `missing` with `enabled: false`
 means the scan never ran - the two are not the same claim, and a reader must
 not collapse them.
 
+A third state sits between those two: an enabled scan that ran but could not
+check everything. `data.sabotage.scanned` is `false` only when the scan's own
+`git diff` failed, meaning nothing at all was checked that run; it is `true`
+whenever the scan otherwise completed, even if individual declarations inside
+it could not be checked. Those per-declaration cases land in
+`data.sabotage.unverifiable`, one entry per declaration, each carrying a
+`reason` of `diff_failed` (the whole run, `scanned` is also `false` here),
+`file_unreadable` (the file the declaration lives in could not be read), or
+`declaration_not_found` (the added line from the diff could not be located in
+the working-tree file). None of this ever flips `ok`; `unverifiable` is a
+report on the same terms as `missing`.
+
+A consumer that only reports the scan names the `unverifiable` entries
+alongside the `missing` ones and moves on. A consumer that promotes the scan
+to a refusal condition in its own `.claude/wurk/commit.md` must decide what a
+non-empty `unverifiable` means for it: the honest reading is that those
+declarations were not checked, so a refusal keyed on "every new test has a
+note" has not been satisfied for them. The kit reports; it does not make that
+call, and `unverifiable` never flips `ok`.
+
 - **test_roots** - git pathspecs passed verbatim to
   `git diff main...HEAD -U0 --`, i.e. where the scan looks for new test
   declarations. A directory prefix (`"test/"`) scans every test under it; an

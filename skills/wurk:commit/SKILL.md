@@ -136,6 +136,13 @@ Read the result:
   entries in the Step 4 report and move on. `data.sabotage.enabled: false`
   means the project has not configured the scan at all - an empty `missing`
   in that case says nothing, and must not be reported as a clean result.
+  A `data.sabotage.unverifiable` entry, or `scanned: false` on an enabled
+  scan, is likewise not a clean result for what it names - the declaration
+  (or, for a failed scan, the whole run) was not checked at all, not checked
+  and found clean. What to do about it is the same project policy in
+  `.claude/wurk/commit.md` as for `missing`; where the project states none,
+  name the `unverifiable` entries (and a `scanned: false` run) in the Step 4
+  report and move on.
 
 ### Step 1: Analyze changes
 
