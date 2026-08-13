@@ -29,7 +29,10 @@ Ported from statifier-ex's post-extraction form: prose organized as
 may contain no project constants - no bead prefixes, paths, gate commands,
 label vocabularies, model names, or ADR numbers of any consumer repo. Anything
 a skill needs from the project comes from the manifest (via kit scripts) or
-from an extension file.
+from an extension file. The contract test enforces this mechanically over
+`skills/wurk:*/SKILL.md` (every line) and over the command blocks of
+`skills/wurk:kit/REFERENCE.md`, which stays free to cite consumer repos as
+provenance.
 
 ### Layer 2: the kit (scripts)
 

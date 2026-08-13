@@ -422,6 +422,7 @@ end
 # catching it.
 class ContractTest < Minitest::Test
   SCRIPTS_ROOT = File.expand_path(File.join(__dir__, ".."))
+  REPO_ROOT = File.expand_path(File.join(SCRIPTS_ROOT, "..", "..", ".."))
 
   def all_ruby_files
     Dir.glob(File.join(SCRIPTS_ROOT, "**", "*.rb")).sort
@@ -500,6 +501,51 @@ class ContractTest < Minitest::Test
                  "move the value into the manifest (lib/manifest.rb) and document it in docs/manifest.md"
   end
 
+  def skill_markdown_files
+    Dir.glob(File.join(REPO_ROOT, "skills", "wurk:*", "SKILL.md")).sort
+  end
+
+  def kit_reference_file
+    File.join(REPO_ROOT, "skills", "wurk:kit", "REFERENCE.md")
+  end
+
+  # Without this, a rename or a moved directory would empty the globs and
+  # both scans below would pass by scanning nothing - the same vacuity trap
+  # test_guarded_writes_detected_for_every_fixture_declared_path guards
+  # against. Every skill directory must contribute a scanned file.
+  def test_markdown_scans_cover_every_shipped_skill
+    dirs = Dir.glob(File.join(REPO_ROOT, "skills", "wurk:*")).select { |d| File.directory?(d) }
+    refute_empty dirs, "no skill directories found - the markdown scans would be vacuous"
+
+    missing = dirs.reject { |d| File.exist?(File.join(d, "SKILL.md")) }
+    assert_empty missing.map { |d| File.basename(d) },
+                 "skill directory without a SKILL.md - the strict markdown scan would miss it"
+    assert File.exist?(kit_reference_file), "the kit REFERENCE.md moved; update this scan with it"
+  end
+
+  def test_no_consumer_vocabulary_in_skill_markdown
+    offenders = []
+    skill_markdown_files.each do |file|
+      Contract.consumer_vocabulary_anywhere(File.read(file)).each do |(lineno, label)|
+        offenders << "#{file}:#{lineno} (#{label})"
+      end
+    end
+    assert_empty offenders,
+                 "consumer vocabulary found in skill instructions: #{offenders.join(', ')} - " \
+                 "a generic skill names no consumer constant anywhere, prose included; take the " \
+                 "value from the manifest (docs/manifest.md) or an extension file, and put " \
+                 "provenance in REFERENCE.md or an ADR"
+  end
+
+  def test_no_consumer_vocabulary_in_kit_reference_command_blocks
+    offenders = Contract.consumer_vocabulary_in_shell_fences(File.read(kit_reference_file))
+                        .map { |(lineno, label)| "#{kit_reference_file}:#{lineno} (#{label})" }
+    assert_empty offenders,
+                 "consumer vocabulary in a REFERENCE.md command block: #{offenders.join(', ')} - " \
+                 "citing a consumer in prose or in a worked example is fine; telling a reader to " \
+                 "run a consumer's command is not"
+  end
+
   def test_no_hardcoded_default_branch_in_kit_source
     offenders = []
     non_test_files.each do |file|
@@ -532,6 +578,36 @@ class ContractTest < Minitest::Test
                    "the contract scan failed to catch a planted consumer-vocabulary constant"
       refute_empty Contract.hardcoded_default_branch(content),
                    "the contract scan failed to catch a planted hardcoded default-branch ref"
+    end
+  end
+
+  # The markdown half of the meta-check. Both directions matter here: a rule
+  # that flagged the REFERENCE.md citations would have been "fixed" by
+  # deleting true provenance.
+  def test_meta_the_markdown_scan_catches_planted_violations
+    Dir.mktmpdir do |dir|
+      skill = File.join(dir, "SKILL.md")
+      File.write(skill, "# Some skill\n\nRun `mix quality` in statifier-ex.\n")
+      refute_empty Contract.consumer_vocabulary_anywhere(File.read(skill)),
+                   "the markdown scan failed to catch a planted consumer constant in a SKILL.md"
+
+      reference = File.join(dir, "REFERENCE.md")
+      File.write(reference, <<~MD)
+        Extracted from statifier-ex, whose `mix quality` ran this suite.
+
+        ```json
+        "deny": ["Edit(.quality.exs)", "Edit(.credo.exs)", "Edit(coveralls.json)"]
+        ```
+
+        ```sh
+        mix quality
+        ```
+      MD
+
+      hits = Contract.consumer_vocabulary_in_shell_fences(File.read(reference))
+      refute_empty hits, "the command-block scan failed to catch a planted consumer command"
+      assert_equal ["mix gate commands"], hits.map(&:last).uniq,
+                   "the command-block scan flagged prose or a worked example, not just the command"
     end
   end
 
