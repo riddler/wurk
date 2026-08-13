@@ -240,15 +240,23 @@ module Gate
     # The scan is a manifest capability (gate.sabotage, see docs/manifest.md):
     # a project that never declares it gets no `git diff` shelled out for it
     # at all, and an empty [] rather than a false "nothing found".
+    #
+    # A failed diff means this scan checked nothing at all - a different
+    # claim from "checked everything and found nothing", and the one case
+    # where the blind spot covers the whole run rather than one declaration.
     def sabotage_scan(env, manifest)
-      return { missing: [], unverifiable: [] } unless manifest.sabotage?
+      return { scanned: false, missing: [], unverifiable: [] } unless manifest.sabotage?
 
       diff_res = Sh.run(sabotage_diff_args(manifest), envelope: env)
-      return { missing: [], unverifiable: [] } unless diff_res.success?
+      unless diff_res.success?
+        return { scanned: false, missing: [],
+                 unverifiable: [{ reason: "diff_failed", file: nil, text: nil,
+                                  detail: diff_res.err.to_s.strip }] }
+      end
 
       scan_sabotage(diff_res.out,
                     test_re: manifest.sabotage_test_pattern,
-                    exempt_prefixes: manifest.sabotage_exempt_prefixes)
+                    exempt_prefixes: manifest.sabotage_exempt_prefixes).merge(scanned: true)
     end
 
     def skipped_from(stages, project_level_re, not_applicable_re)
@@ -375,6 +383,7 @@ module Gate
       env.data[:sabotage] = {
         enabled: manifest.sabotage?,
         reason: manifest.sabotage? ? nil : "no gate.sabotage section in the manifest; the scan is off",
+        scanned: scan[:scanned],
         missing: scan[:missing],
         unverifiable: scan[:unverifiable]
       }
@@ -385,7 +394,16 @@ module Gate
                     "(a present note is not evidence the mutation was run)"
         )
       end
+      if scan[:unverifiable].any? { |u| u[:reason] == "diff_failed" }
+        env.warn(
+          code: "sabotage_scan_failed",
+          message: "the sabotage scan's git diff failed, so nothing was checked - " \
+                   "an empty missing list here is not a clean result"
+        )
+      end
       scan[:unverifiable].each do |u|
+        next if u[:reason] == "diff_failed"
+
         env.warn(
           code: "sabotage_unverifiable",
           message: "#{u[:file]}: #{u[:text]} could not be checked for a `# sabotage:` note " \
