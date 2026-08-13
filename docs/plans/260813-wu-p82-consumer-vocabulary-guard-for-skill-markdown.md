@@ -467,12 +467,12 @@ repos as provenance." Keep the file's existing ASCII punctuation.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes on the unmodified tree:
+- [x] Full quality gate passes on the unmodified tree:
       `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] Non-vacuity: `test_markdown_scans_cover_every_shipped_skill` passes and
+- [x] Non-vacuity: `test_markdown_scans_cover_every_shipped_skill` passes and
       reports 14 skill directories worth of coverage (all `skills/wurk:*` have
       a SKILL.md).
-- [ ] Planted violation caught: `test_meta_the_markdown_scan_catches_planted_violations`
+- [x] Planted violation caught: `test_meta_the_markdown_scan_catches_planted_violations`
       passes.
 
 #### Manual Verification:
@@ -568,6 +568,35 @@ before considering the plan fully landed.
 - [ ] Punctuation is plain ASCII and the style matches the surrounding file.
 - [ ] No regressions in related features: the existing `.rb` rules are
       untouched and `Contract::CONSUMER_VOCABULARY` is unchanged.
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead of
+blocking here.
+
+---
+
+### Phase 2
+
+- [ ] Sabotage check, run by hand and reverted (the "Manual Testing Steps"
+      procedure below): appending `statifier-ex` to any
+      `skills/wurk:*/SKILL.md` turns the gate red; appending `mix quality`
+      inside REFERENCE.md's existing ` ```sh ` block at :46-48 turns it red;
+      the untouched REFERENCE.md citations at :11, :12, :208, :264 and :410
+      keep it green.
+- [ ] The two failure messages tell a future author what to do (manifest or
+      extension file for a constant; REFERENCE.md or an ADR for provenance),
+      not just that a regex matched.
+- [ ] `docs/architecture.md` still reads as architecture, not as a test
+      changelog.
+- [ ] `docs/manifest.md` and `scripts/test/fixtures/plans/real_grammar_snapshot.md`
+      are untouched and unscanned, and the reason is findable at the
+      enforcement site.
+- [ ] No regressions in related features: the ADR-0006 drift check and the
+      `.rb` scans behave as before.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
