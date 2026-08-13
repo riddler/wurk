@@ -48,6 +48,10 @@ module TmuxWindow
   QUIESCE_POLL_INTERVAL_SECONDS = 1
   CLASSIFY_SAMPLE_INTERVAL_SECONDS = 3
 
+  # wu-ds2: the charge floor above which caffeinate_prefix will still wrap a
+  # seeded session on battery. Strictly greater than, not >= - see power_ok?.
+  BATTERY_FLOOR_PERCENT = 40
+
   class << self
     # Swappable sleep, the same shape as Sh.runner= - tests inject a no-op so
     # the poll loops below run at full speed against FakeSh instead of
@@ -170,23 +174,38 @@ module TmuxWindow
     # conditions both have to hold to wrap the command:
     #
     #   1. `caffeinate` exists on PATH.
-    #   2. The machine is on AC power (`pmset -g batt`'s first line names
-    #      the power source). A batch of seeded sessions holding a laptop
-    #      awake on battery for an hour can run it down before anyone is
-    #      back to notice, so the assertion is limited to the case it was
-    #      built for: a machine already plugged in and walked away from. On
-    #      battery, the OS's own judgment about when to sleep is left alone.
-    #      This checks AC-vs-battery only, not a charge percentage - a
-    #      threshold would need a number this bead has no evidence for, and
-    #      plugged-in-or-not is the sharper, defensible line.
+    #   2. The machine is on AC power, or on battery with charge strictly
+    #      above a 40% floor (see power_ok?, which
+    #      reads both from the one `pmset -g batt` shell-out). wu-esa shipped
+    #      AC-only and rejected a percentage threshold for having no evidence
+    #      behind any particular number. On 2026-08-13 that evidence arrived:
+    #      four seeded sessions launched unwrapped on battery at 71%, and the
+    #      Mac idle-slept mid-run and killed an in-flight /wurk:implement
+    #      --loop phase (wu-ds2). 40% is the settled floor from that
+    #      incident - high enough to leave real runway, low enough that
+    #      "on battery" alone is no longer read as "let it sleep." Below the
+    #      floor, the OS's own judgment about when to sleep is left alone -
+    #      that is the case wu-esa was actually protecting, and it stays
+    #      protected.
+    #
+    # Accepted limitation (wu-ds2): the probe runs once, at launch, and
+    # `caffeinate -i` is lifetime-scoped by design - it cannot re-evaluate
+    # once the child is running. Charge is a continuously falling number
+    # during the very run the assertion is holding awake, so a session
+    # seeded at 41% keeps its assertion all the way down to 0%, while one
+    # seeded at 39% never gets it at all. That is a real limit of a
+    # launch-string approach applied to a value that keeps changing after
+    # launch, not an oversight left to fix later - it is accepted rather
+    # than solved by re-probing mid-run, which this script does not do.
     #
     # Either check failing - no `caffeinate`, no `pmset` (non-macOS), on
-    # battery, or any shell-out error - degrades to the empty string, giving
-    # a launch string byte-identical to the unwrapped one. That degrade is
-    # not a warning or an error; it's the expected shape on any platform or
-    # power state this doesn't apply to.
+    # battery at or below the floor, an unparseable or missing percentage,
+    # or any shell-out error - degrades to the empty string, giving a launch
+    # string byte-identical to the unwrapped one. That degrade is not a
+    # warning or an error; it's the expected shape on any platform, power
+    # state, or charge level this doesn't apply to.
     def caffeinate_prefix
-      return "" unless caffeinate_available? && on_ac_power?
+      return "" unless caffeinate_available? && power_ok?
 
       "caffeinate -i "
     end
@@ -203,11 +222,25 @@ module TmuxWindow
       false
     end
 
-    def on_ac_power?
+    # Both lines come from the one `pmset -g batt` shell-out: the first names
+    # the power source, the second carries the percentage, e.g.
+    #   Now drawing from 'Battery Power'
+    #    -InternalBattery-0 (id=1234)\t71%; discharging; 3:21 remaining present: true
+    # AC power short-circuits true without needing the percentage at all -
+    # the floor only ever applies on battery. Any failure to shell out, or
+    # to find a `\d+%` on the second line, degrades to false, the same as
+    # every other path in this probe.
+    def power_ok?
       res = Sh.run(["pmset", "-g", "batt"])
       return false unless res.success?
 
-      res.out.to_s.lines.first.to_s.include?("AC Power")
+      lines = res.out.to_s.lines
+      return true if lines.first.to_s.include?("AC Power")
+
+      percent = lines[1].to_s[/(\d+)%/, 1]
+      return false if percent.nil?
+
+      percent.to_i > BATTERY_FLOOR_PERCENT
     rescue StandardError
       false
     end
