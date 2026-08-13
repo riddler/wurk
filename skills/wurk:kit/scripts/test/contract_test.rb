@@ -168,6 +168,85 @@ module Contract
     hits
   end
 
+  # The markdown surfaces this kit ships. The rules above answer "does a
+  # script encode a consumer constant"; these answer it for the text this
+  # repo ships as instructions - and the answer is not the same rule with a
+  # wider glob, because markdown legitimately cites consumer projects.
+  #
+  # The line between a citable mention and a violating instruction is drawn
+  # by file class and block kind, never by a per-line escape hatch: an
+  # inline "allowed here" marker is the opposite of absolute, for the same
+  # reason this file's header gives for rejecting inline citations.
+  #
+  # - skills/wurk:*/SKILL.md is instruction text end to end. A skill is
+  #   executed, not read for background, and CLAUDE.md's hard rule with
+  #   ADR-0004 puts every project constant behind the manifest or an
+  #   extension file. So every line counts, prose included: there is
+  #   nothing a generic skill needs to say about a consumer repo that is
+  #   not either a manifest field or provenance belonging in REFERENCE.md,
+  #   an ADR, or a plan document.
+  #
+  # - skills/wurk:kit/REFERENCE.md is documentation. It states where this
+  #   layer was extracted from, why a consumer's own gate should stop
+  #   measuring the kit, and what a consumer's settings.json deny list
+  #   looks like. Those are citations and worked examples and they stay
+  #   legal. What is not legal there is a command a reader is told to run
+  #   with a consumer's value baked in, so the scanned surface is exactly
+  #   the fenced blocks whose info string names a shell. A ```json or
+  #   ```ruby fence is an example of someone else's file, which carries the
+  #   same licence the prose around it has.
+  #
+  # - docs/** is out of scope entirely, docs/manifest.md included: its
+  #   per-repo table of starting values is consumer values by definition
+  #   (ADR-0004), and scripts/test/fixtures/** holds frozen consumer
+  #   documents used as test input. Both are excluded structurally by the
+  #   globs in ContractTest rather than by an exemption list.
+  #
+  # Markdown gets its own line walk rather than each_code_line: code_only
+  # strips everything after a "#", which in markdown blanks every ATX
+  # heading. Accepted false negatives, in the spirit of code_only's own
+  # note: a bare unlabelled fence reads as an example, four-space indented
+  # blocks are not detected, and a command split across lines so that none
+  # matches on its own is missed.
+  SHELL_FENCE_LANGS = %w[sh bash shell zsh console fish].freeze
+
+  # Yields [line, lineno] for each line inside a fenced block whose info
+  # string names a shell. Fence lines themselves are never yielded; a
+  # closing fence carries no info string, which is what flips the state
+  # back off.
+  def each_shell_fence_line(content)
+    fence = nil
+    content.each_line.with_index(1) do |line, lineno|
+      if (match = line.match(/^\s*(?:```|~~~)\s*([A-Za-z0-9_+-]*)\s*$/))
+        fence = fence.nil? ? match[1].downcase : nil
+        next
+      end
+      next unless fence && SHELL_FENCE_LANGS.include?(fence)
+
+      yield line, lineno
+    end
+  end
+
+  # Returns [[lineno, label], ...] for every consumer-vocabulary hit on any
+  # line. The SKILL.md rule.
+  def consumer_vocabulary_anywhere(content)
+    hits = []
+    content.each_line.with_index(1) do |line, lineno|
+      CONSUMER_VOCABULARY.each { |label, re| hits << [lineno, label] if line =~ re }
+    end
+    hits
+  end
+
+  # Returns [[lineno, label], ...] for hits inside shell command blocks
+  # only. The REFERENCE.md rule.
+  def consumer_vocabulary_in_shell_fences(content)
+    hits = []
+    each_shell_fence_line(content) do |line, lineno|
+      CONSUMER_VOCABULARY.each { |label, re| hits << [lineno, label] if line =~ re }
+    end
+    hits
+  end
+
   # A branch name spliced into a git ref on a code line. The branch every
   # comparison is made against is manifest data (repo.default_branch, ADR-0004);
   # a script that spells it is a constant that belongs in the manifest.
@@ -282,6 +361,38 @@ class ContractRulesTest < Minitest::Test
   def test_consumer_vocabulary_ignores_comments
     hits = Contract.consumer_vocabulary(%(# statifier's scion/scxml corpora and mix quality are exempt here\n))
     assert_empty hits
+  end
+
+  def test_consumer_vocabulary_anywhere_flags_prose_and_headings
+    assert_equal [[1, "consumer repo names"]],
+                 Contract.consumer_vocabulary_anywhere("Run this in statifier-ex.\n")
+    assert_equal [[1, "mix gate commands"]],
+                 Contract.consumer_vocabulary_anywhere("## Reading mix quality output\n")
+  end
+
+  def test_consumer_vocabulary_in_shell_fences_flags_only_command_blocks
+    doc = <<~MD
+      Extracted from statifier-ex first.
+
+      ```json
+      "deny": ["Edit(.quality.exs)", "Edit(.credo.exs)"]
+      ```
+
+      ```sh
+      mix quality
+      ```
+
+      Back to prose about .credo.exs.
+    MD
+
+    assert_equal [[8, "mix gate commands"]],
+                 Contract.consumer_vocabulary_in_shell_fences(doc)
+  end
+
+  def test_shell_fence_walk_stops_at_the_closing_fence
+    doc = "```bash\nmix quality\n```\nmix quality\n"
+
+    assert_equal [2], Contract.consumer_vocabulary_in_shell_fences(doc).map(&:first)
   end
 
   def test_hardcoded_default_branch_ignores_comments

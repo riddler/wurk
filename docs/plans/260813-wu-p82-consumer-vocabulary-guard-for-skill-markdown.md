@@ -322,8 +322,8 @@ assertion must name the real line, not an approximate one.)
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] The new `ContractRulesTest` tests run and pass:
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] The new `ContractRulesTest` tests run and pass:
       `ruby skills/wurk:kit/scripts/test/run.rb -n /shell_fence|vocabulary_anywhere/`
 
 #### Manual Verification:
@@ -551,3 +551,30 @@ against synthetic content, `ContractTest` for the real tree.
 - Project rules: `CLAUDE.md` hard rules, `docs/architecture.md:25-32`
 - Prior plan that added the rule being extended:
   `docs/plans/260808-wu-gd1-gate-rb-manifest-driven-constants.md`
+
+## Deferred Manual Verification
+
+Manual verification items are deferred during looped (--loop) execution and
+surfaced here once, rather than blocking after each phase. Confirm these
+before considering the plan fully landed.
+
+### Phase 1
+
+- [ ] Sabotage check, mutated by hand and reverted: changing the fence regex
+      to treat a closing fence as an opener turns
+      `test_shell_fence_walk_stops_at_the_closing_fence` red.
+- [ ] The comment block reads as the rule a future author would apply, not as
+      a description of the code beneath it.
+- [ ] Punctuation is plain ASCII and the style matches the surrounding file.
+- [ ] No regressions in related features: the existing `.rb` rules are
+      untouched and `Contract::CONSUMER_VOCABULARY` is unchanged.
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead of
+blocking here.
+
+---
