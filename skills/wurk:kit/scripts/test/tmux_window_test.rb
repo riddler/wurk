@@ -142,10 +142,13 @@ class TmuxWindowTest < Minitest::Test
     @fake.expect(["pmset", "-g", "batt"], out: "Now drawing from 'AC Power'\n -InternalBattery-0\t100%; charged;\n")
   end
 
-  def expect_caffeinate_on_battery
+  # percent defaults above the wu-ds2 40% floor - callers that need the
+  # below-floor or unparseable cases pass their own pmset second line.
+  def expect_caffeinate_on_battery(percent: 62)
     @fake.expect(%w[which caffeinate], exitstatus: 0)
     @fake.expect(["pmset", "-g", "batt"],
-                 out: "Now drawing from 'Battery Power'\n -InternalBattery-0\t62%; discharging;\n")
+                 out: "Now drawing from 'Battery Power'\n" \
+                      " -InternalBattery-0 (id=1234)\t#{percent}%; discharging; 3:21 remaining present: true\n")
   end
 
   # The main checkout is derived, not configured: every path that names a
@@ -433,12 +436,69 @@ class TmuxWindowTest < Minitest::Test
     assert_empty env["warnings"] || []
   end
 
-  # The probe doubles as the opt-out (wu-esa's settled design): on battery,
-  # the launch degrades exactly like a platform with no caffeinate at all -
-  # unwrapped, and not an error or a warning.
-  def test_open_command_is_unwrapped_when_the_probe_declines_on_battery
+  # wu-ds2: above the 40% floor, battery is treated the same as AC - the
+  # 2026-08-13 incident (four seeded sessions idle-slept unwrapped on
+  # battery at 71%) is exactly the case this closes.
+  # sabotage: `> BATTERY_FLOOR_PERCENT` changed to `>=` -> still green here
+  # (62% clears either comparison); this test only rules out the floor being
+  # ignored outright. It's the exactly-40% test below that flips on `>=`.
+  def test_open_wraps_the_command_in_caffeinate_when_on_battery_above_the_floor
     @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
-    expect_caffeinate_on_battery
+    expect_caffeinate_on_battery(percent: 62)
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=zz-session:", "-n", "zz-abc-thing",
+       "-c", "/repos/zz-worktrees/zz-abc-thing"],
+      out: "@42\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@42"], out: "")
+
+    code, env = run_tmux(["open", "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing", "zz-abc",
+                           "/wurk:work zz-abc --auto"])
+
+    keys = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }.argv[4]
+    assert_match(/\Acaffeinate -i claude --permission-mode auto/, keys)
+    assert_equal 0, code
+    assert (env["warnings"] || []).empty?
+  end
+
+  # The probe doubles as the opt-out (wu-esa's settled design), and the
+  # 40% floor (wu-ds2) keeps it that way at and below the floor: the launch
+  # degrades exactly like a platform with no caffeinate at all - unwrapped,
+  # byte-identical, and not an error or a warning. 40% itself is the pinned
+  # boundary - the bead requires strictly greater than 40, not >=.
+  # sabotage: `> BATTERY_FLOOR_PERCENT` changed to `>=` -> red (at exactly
+  # 40%, `>=` wraps the command while `>` does not; this is the one case
+  # that tells the two comparisons apart)
+  def test_open_command_is_unwrapped_when_on_battery_at_the_floor
+    @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    expect_caffeinate_on_battery(percent: 40)
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=zz-session:", "-n", "zz-abc-thing",
+       "-c", "/repos/zz-worktrees/zz-abc-thing"],
+      out: "@42\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@42"], out: "")
+
+    code, env = run_tmux(["open", "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing", "zz-abc",
+                           "/wurk:work zz-abc --auto"])
+
+    keys = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }.argv[4]
+    refute_match(/caffeinate/, keys)
+    assert_match(/\Aclaude --permission-mode auto/, keys)
+    assert_equal 0, code
+    assert (env["warnings"] || []).empty?
+  end
+
+  # sabotage: the `percent.nil?` guard in power_ok? removed -> red
+  # (percent.to_i on nil raises NoMethodError instead of degrading, or
+  # `nil.to_i` silently reads as 0 and the launch stays unwrapped for the
+  # wrong reason - either way this pins the unwrapped, byte-identical
+  # outcome for pmset output with no parseable percentage on the second
+  # line, e.g. Full Battery Charging).
+  def test_open_command_is_unwrapped_when_the_battery_percentage_is_unparseable
+    @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    @fake.expect(%w[which caffeinate], exitstatus: 0)
+    @fake.expect(["pmset", "-g", "batt"], out: "Now drawing from 'Battery Power'\n -InternalBattery-0\tno info\n")
     @fake.expect(
       ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=zz-session:", "-n", "zz-abc-thing",
        "-c", "/repos/zz-worktrees/zz-abc-thing"],
