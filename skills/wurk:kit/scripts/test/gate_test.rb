@@ -1240,6 +1240,7 @@ class GateTest < Minitest::Test
       _code, env = run_gate
 
       assert_equal true, env["data"]["sabotage"]["enabled"]
+      assert_equal true, env["data"]["sabotage"]["scanned"]
       assert_equal 1, env["data"]["sabotage"]["missing"].length
       assert_equal 1, env["warnings"].length
       assert_equal "sabotage_note_missing", env["warnings"].first["code"]
@@ -1272,6 +1273,7 @@ class GateTest < Minitest::Test
       _code, env = run_gate
 
       assert_equal true, env["data"]["sabotage"]["enabled"]
+      assert_equal true, env["data"]["sabotage"]["scanned"]
       assert_equal [], env["data"]["sabotage"]["missing"]
       assert_equal 1, env["data"]["sabotage"]["unverifiable"].length
       assert_equal "declaration_not_found", env["data"]["sabotage"]["unverifiable"].first["reason"]
@@ -1291,12 +1293,42 @@ class GateTest < Minitest::Test
 
       assert_equal false, env["data"]["sabotage"]["enabled"]
       refute_nil env["data"]["sabotage"]["reason"]
+      assert_equal false, env["data"]["sabotage"]["scanned"]
       assert_equal [], env["data"]["sabotage"]["missing"]
       assert_equal [], env["warnings"]
       assert_equal true, env["ok"]
       # No `git diff main...HEAD -U0 -- ...` call was ever registered above,
       # so if the script tried to shell out for the sabotage scan, FakeSh
       # would raise FakeSh::UnexpectedCommand and this test would fail loudly.
+    end
+  end
+
+  # End-to-end: a failed sabotage `git diff` reports `scanned: false` and a
+  # `diff_failed` entry under its own warning code, not the per-declaration
+  # `sabotage_unverifiable` code - it is a statement about the whole run,
+  # not one candidate declaration.
+  # sabotage: keep returning `scanned: true` when the diff fails -> red
+  # (scanned would be true with an empty unverifiable list instead)
+  def test_sabotage_scan_reports_scanned_false_when_the_diff_fails
+    in_tmp_cwd do
+      expect_no_elixir_diff
+      @fake.expect(
+        %w[git diff main...HEAD -U0 -- test/ :!test/scion_tests/ :!test/scxml_tests/],
+        exitstatus: 1, err: "fatal: bad revision 'main...HEAD'\n"
+      )
+
+      _code, env = run_gate
+
+      assert_equal true, env["data"]["sabotage"]["enabled"]
+      assert_equal false, env["data"]["sabotage"]["scanned"]
+      assert_equal [], env["data"]["sabotage"]["missing"]
+      assert_equal 1, env["data"]["sabotage"]["unverifiable"].length
+      entry = env["data"]["sabotage"]["unverifiable"].first
+      assert_equal "diff_failed", entry["reason"]
+      assert_equal "fatal: bad revision 'main...HEAD'", entry["detail"]
+      assert_equal 1, env["warnings"].length
+      assert_equal "sabotage_scan_failed", env["warnings"].first["code"]
+      assert_equal true, env["ok"]
     end
   end
 

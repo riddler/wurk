@@ -334,13 +334,13 @@ scan-is-off test asserts `scanned: false` with `enabled: false`.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] A `gate_test.rb` test drives a nonzero-exit sabotage `git diff` and
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] A `gate_test.rb` test drives a nonzero-exit sabotage `git diff` and
       asserts `scanned: false`, a `diff_failed` entry, `missing == []`, the
       `sabotage_scan_failed` warning code, and `ok == true`
-- [ ] A `gate_test.rb` test asserts exactly one warning is emitted for the
+- [x] A `gate_test.rb` test asserts exactly one warning is emitted for the
       failed-diff case
-- [ ] The scan-disabled test asserts `enabled: false` with `scanned: false`
+- [x] The scan-disabled test asserts `enabled: false` with `scanned: false`
       and no warning
 
 #### Manual Verification:
@@ -494,6 +494,25 @@ before considering the plan fully landed.
       in the moved comment, not just in git history
 - [ ] No regression in the other sabotage tests' intent (they assert on
       `[:missing]` and still mean what their names say)
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 2
+
+- [ ] The three `reason` values (`diff_failed`, `file_unreadable`,
+      `declaration_not_found`) are each reachable and each distinguishable
+      by a consumer reading only the envelope
+- [ ] A timed-out diff takes the same path as a nonzero-exit diff
+      (`Sh::Result#success?` covers both) and reads sensibly in the message
+- [ ] No path added in this phase can flip `ok` or block
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
