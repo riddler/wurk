@@ -168,6 +168,11 @@ class GateTest < Minitest::Test
                  "--- a/test/foo_test.exs\n+++ b/test/foo_test.exs\n@@ -0,0 +1,1 @@\n" \
                  "+  test \"missing its note\" do\n"
           )
+          # scan_sabotage checks the working-tree file, not the diff - see
+          # gate.rb - so the fixture needs one on disk with no note above
+          # the candidate line.
+          FileUtils.mkdir_p("test")
+          File.write("test/foo_test.exs", "  test \"missing its note\" do\n")
 
           _code, env = run_gate
 
@@ -795,6 +800,13 @@ class GateTest < Minitest::Test
 
   EXUNIT_TEST_RE = /\btest\s+"/.freeze
 
+  # Builds a `file_reader:` seam for scan_sabotage from an in-memory map of
+  # path => full file content, so these tests answer "is there a note in the
+  # working-tree file" against fixture text instead of real files on disk.
+  def sabotage_files(files)
+    ->(path) { files[path] }
+  end
+
   def test_sabotage_scan_flags_a_missing_note
     diff = <<~DIFF
       diff --git a/test/acme/foo_test.exs b/test/acme/foo_test.exs
@@ -804,8 +816,15 @@ class GateTest < Minitest::Test
       +  test "does the thing" do
       +  end
     DIFF
+    file = <<~EX
+      defmodule Acme.FooTest do
+        test "does the thing" do
+        end
+      end
+    EX
 
-    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE)
+    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+                                        file_reader: sabotage_files("test/acme/foo_test.exs" => file))
 
     assert_equal 1, missing.length
     assert_equal "test/acme/foo_test.exs", missing.first[:file]
@@ -821,8 +840,18 @@ class GateTest < Minitest::Test
       +  test "does the thing" do
       +  end
     DIFF
+    file = <<~EX
+      defmodule Acme.FooTest do
+        # sabotage: enter_states/2 skips the initial child -> red
+        test "does the thing" do
+        end
+      end
+    EX
 
-    assert_empty Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE)
+    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+                                        file_reader: sabotage_files("test/acme/foo_test.exs" => file))
+
+    assert_empty missing
   end
 
   def test_sabotage_scan_accepts_an_n_a_exemption_note
@@ -835,11 +864,22 @@ class GateTest < Minitest::Test
       +  test "does the thing" do
       +  end
     DIFF
+    file = <<~EX
+      defmodule Acme.FooTest do
+        # sabotage: n/a - generated corpus fixture
+        test "does the thing" do
+        end
+      end
+    EX
 
-    assert_empty Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE)
+    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+                                        file_reader: sabotage_files("test/acme/foo_test.exs" => file))
+
+    assert_empty missing
   end
 
-  # sabotage: change `idx -= 1` to `idx -= 2` in sabotage_note_above? -> red
+  # sabotage: change `i -= 1` to `i -= 2` in sabotage_comment_block_above? ->
+  # red
   def test_sabotage_scan_accepts_a_two_line_wrapped_note
     diff = <<~DIFF
       diff --git a/test/acme/foo_test.exs b/test/acme/foo_test.exs
@@ -851,8 +891,19 @@ class GateTest < Minitest::Test
       +  test "does the thing" do
       +  end
     DIFF
+    file = <<~EX
+      defmodule Acme.FooTest do
+        # sabotage: enter_states/2 skips the initial child
+        # -> red
+        test "does the thing" do
+        end
+      end
+    EX
 
-    assert_empty Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE)
+    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+                                        file_reader: sabotage_files("test/acme/foo_test.exs" => file))
+
+    assert_empty missing
   end
 
   # sabotage: change COMMENT_LINE_RE from /\A\s*#/ to /\A\s*##/ -> red
@@ -868,8 +919,20 @@ class GateTest < Minitest::Test
       +  test "does the thing" do
       +  end
     DIFF
+    file = <<~EX
+      defmodule Acme.FooTest do
+        # sabotage: enter_states/2 skips the initial
+        # child when the parent is compound and the
+        # default transition is absent -> red
+        test "does the thing" do
+        end
+      end
+    EX
 
-    assert_empty Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE)
+    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+                                        file_reader: sabotage_files("test/acme/foo_test.exs" => file))
+
+    assert_empty missing
   end
 
   # sabotage: change COMMENT_LINE_RE from /\A\s*#/ to /\A\s*#?/ so the blank
@@ -885,16 +948,25 @@ class GateTest < Minitest::Test
       +  test "does the thing" do
       +  end
     DIFF
+    file = <<~EX
+      defmodule Acme.FooTest do
+        # sabotage: enter_states/2 skips the initial child -> red
 
-    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE)
+        test "does the thing" do
+        end
+      end
+    EX
+
+    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+                                        file_reader: sabotage_files("test/acme/foo_test.exs" => file))
 
     assert_equal 1, missing.length
     assert_equal "test/acme/foo_test.exs", missing.first[:file]
   end
 
-  # sabotage: change the early-return condition in sabotage_note_above? from
-  # `added_lines[idx] =~ SABOTAGE_NOTE_RE` to `added_lines[idx] =~
-  # COMMENT_LINE_RE` (any comment counts as a note) -> red
+  # sabotage: change the early-return condition in
+  # sabotage_comment_block_above? from `file_lines[i] =~ SABOTAGE_NOTE_RE` to
+  # `file_lines[i] =~ COMMENT_LINE_RE` (any comment counts as a note) -> red
   def test_sabotage_scan_flags_a_comment_block_with_no_sabotage_note
     diff = <<~DIFF
       diff --git a/test/acme/foo_test.exs b/test/acme/foo_test.exs
@@ -906,31 +978,167 @@ class GateTest < Minitest::Test
       +  test "does the thing" do
       +  end
     DIFF
+    file = <<~EX
+      defmodule Acme.FooTest do
+        # this test covers the happy path
+        # nothing more to say here
+        test "does the thing" do
+        end
+      end
+    EX
 
-    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE)
+    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+                                        file_reader: sabotage_files("test/acme/foo_test.exs" => file))
 
     assert_equal 1, missing.length
     assert_equal "test/acme/foo_test.exs", missing.first[:file]
   end
 
-  # sabotage: drop `added_lines = []` from the `@@` hunk-boundary branch in
-  # scan_sabotage -> red
-  def test_sabotage_scan_flags_a_note_separated_by_a_hunk_boundary
+  # Regression for wu-lac, failure shape 1: the note and the test
+  # declaration are both edited, but an untouched line between them (the
+  # blank line here) puts them in separate `-U0` hunks. The old
+  # diff-only check discarded the note's hunk before ever reading the test
+  # line; the fix reads the working-tree file instead, where both lines sit
+  # three lines apart regardless of which hunk either fell in. Modeled on
+  # the real diff quoted in the bead.
+  # sabotage: drop the file_reader lookup and fall back to answering from
+  # the diff's added lines only -> red (the note's hunk is discarded before
+  # the test line is read, and this reports a false sabotage_note_missing)
+  def test_sabotage_scan_accepts_a_note_split_across_hunks_by_an_unchanged_line
     diff = <<~DIFF
       diff --git a/test/acme/foo_test.exs b/test/acme/foo_test.exs
       --- a/test/acme/foo_test.exs
       +++ b/test/acme/foo_test.exs
-      @@ -5,0 +6,1 @@
-      +  # sabotage: enter_states/2 skips the initial child -> red
-      @@ -10,0 +12,2 @@
+      @@ -277,2 +281,2 @@
+      -  # sabotage: a fourth field is added to the payload -> red
+      +  # sabotage: a fifth field is added to the payload -> red
+      @@ -280 +284 @@
+      -  test "AC7: old description" do
+      +  test "AC7: new description" do
+    DIFF
+    file = <<~EX
+      defmodule Acme.FooTest do
+        # sabotage: a fifth field is added to the payload -> red
+        #
+        test "AC7: new description" do
+        end
+      end
+    EX
+
+    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+                                        file_reader: sabotage_files("test/acme/foo_test.exs" => file))
+
+    assert_empty missing
+  end
+
+  # Regression for wu-lac, failure shape 2: the note is not edited at all,
+  # only the test declaration above it is - so the note never appears in a
+  # `-U0` diff in the first place, in any hunk. Only the file has it.
+  # sabotage: drop the file_reader lookup and fall back to answering from
+  # the diff's added lines only -> red (an unchanged note never appears in a
+  # -U0 diff, so this reports a false sabotage_note_missing)
+  def test_sabotage_scan_accepts_a_note_left_entirely_unchanged
+    diff = <<~DIFF
+      diff --git a/test/acme/foo_test.exs b/test/acme/foo_test.exs
+      --- a/test/acme/foo_test.exs
+      +++ b/test/acme/foo_test.exs
+      @@ -11 +11 @@
+      -  test "old description" do
+      +  test "new description" do
+    DIFF
+    file = <<~EX
+      defmodule Acme.FooTest do
+        # sabotage: enter_states/2 skips the initial child -> red
+        test "new description" do
+        end
+      end
+    EX
+
+    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+                                        file_reader: sabotage_files("test/acme/foo_test.exs" => file))
+
+    assert_empty missing
+  end
+
+  # A genuinely note-less test still reports missing when it is EDITED, not
+  # just when it is newly added - the fix must not turn "checks the file"
+  # into "never flags an edited test".
+  def test_sabotage_scan_flags_an_edited_test_with_no_note_at_all
+    diff = <<~DIFF
+      diff --git a/test/acme/foo_test.exs b/test/acme/foo_test.exs
+      --- a/test/acme/foo_test.exs
+      +++ b/test/acme/foo_test.exs
+      @@ -11 +11 @@
+      -  test "old description" do
+      +  test "new description" do
+    DIFF
+    file = <<~EX
+      defmodule Acme.FooTest do
+        test "new description" do
+        end
+      end
+    EX
+
+    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+                                        file_reader: sabotage_files("test/acme/foo_test.exs" => file))
+
+    assert_equal 1, missing.length
+    assert_equal "test/acme/foo_test.exs", missing.first[:file]
+  end
+
+  # Degenerate case: the file was deleted (or is otherwise unreadable) since
+  # the diff was taken. There is nothing to verify a note against, so this
+  # is treated as "can't verify", not "missing" - and it must not crash the
+  # gate.
+  # sabotage: treat a nil file_reader result as "file has no note" instead
+  # of "can't verify" -> red (a deleted file would flag every candidate line
+  # still sitting in the stale diff)
+  def test_sabotage_scan_skips_a_file_missing_from_the_working_tree
+    diff = <<~DIFF
+      diff --git a/test/acme/gone_test.exs b/test/acme/gone_test.exs
+      --- a/test/acme/gone_test.exs
+      +++ b/test/acme/gone_test.exs
+      @@ -10,0 +11,2 @@
       +  test "does the thing" do
       +  end
     DIFF
 
-    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE)
+    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+                                        file_reader: sabotage_files({}))
 
-    assert_equal 1, missing.length
-    assert_equal "test/acme/foo_test.exs", missing.first[:file]
+    assert_empty missing
+  end
+
+  # Degenerate case: the candidate line's exact text appears more than once
+  # in the file. scan_sabotage cannot tell which occurrence the diff meant,
+  # so it accepts if any occurrence is noted - the charitable reading, and
+  # the same bar the old within-hunk check applied.
+  def test_sabotage_scan_accepts_if_any_duplicate_occurrence_is_noted
+    diff = <<~DIFF
+      diff --git a/test/acme/foo_test.exs b/test/acme/foo_test.exs
+      --- a/test/acme/foo_test.exs
+      +++ b/test/acme/foo_test.exs
+      @@ -10,0 +11,2 @@
+      +  test "does the thing" do
+      +  end
+    DIFF
+    file = <<~EX
+      defmodule Acme.FooTest do
+        test "does the thing" do
+        end
+      end
+
+      defmodule Acme.FooTest.Nested do
+        # sabotage: enter_states/2 skips the initial child -> red
+        test "does the thing" do
+        end
+      end
+    EX
+
+    missing = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+                                        file_reader: sabotage_files("test/acme/foo_test.exs" => file))
+
+    assert_empty missing
   end
 
   # sabotage: drop exempt_prefixes filtering from scan_sabotage -> red (both
@@ -967,12 +1175,14 @@ class GateTest < Minitest::Test
       +  def test_does_the_thing():
       +      pass
     DIFF
+    file = "  def test_does_the_thing():\n      pass\n"
+    reader = sabotage_files("test/acme/foo_test.py" => file)
 
-    missing = Gate.scan_sabotage(diff, test_re: python_test_re)
+    missing = Gate.scan_sabotage(diff, test_re: python_test_re, file_reader: reader)
     assert_equal 1, missing.length
 
     # The ExUnit pattern does not match this Python-shaped declaration at all.
-    assert_empty Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE)
+    assert_empty Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE, file_reader: reader)
   end
 
   def test_sabotage_scan_runs_over_the_committed_diff_pathspec
@@ -984,6 +1194,12 @@ class GateTest < Minitest::Test
              "--- a/test/foo_test.exs\n+++ b/test/foo_test.exs\n@@ -0,0 +1,1 @@\n" \
              "+  test \"missing its note\" do\n"
       )
+      # scan_sabotage's default file_reader reads the real working-tree
+      # file, so the fixture needs one on disk with no note above the
+      # candidate line - this is what proves the e2e wiring, not just the
+      # unit-level file_reader seam, reaches the working tree.
+      FileUtils.mkdir_p("test")
+      File.write("test/foo_test.exs", "  test \"missing its note\" do\nend\n")
 
       _code, env = run_gate
 

@@ -111,57 +111,102 @@ module Gate
       GatePaths.gate_applicable?((diff_files + dirty_files).uniq, manifest: manifest)
     end
 
-    # Parses a -U0 unified diff for added test-declaration lines (matching
-    # `test_re`, manifest data) with no `# sabotage:` note anywhere in the
-    # contiguous comment block directly above them within the same hunk.
-    # Report-only - see the module doc.
-    def scan_sabotage(diff_text, test_re:, exempt_prefixes: [])
+    # The working-tree lookup below's default: reads the file from disk,
+    # returning nil (rather than raising) for anything that does not
+    # currently exist or cannot be read - a file deleted since the diff was
+    # taken, a permissions problem, etc. Callers treat nil the same as "can't
+    # verify" rather than "no note"; see scan_sabotage.
+    DEFAULT_SABOTAGE_FILE_READER = lambda do |path|
+      File.read(path)
+    rescue SystemCallError
+      nil
+    end
+
+    # Parses a -U0 unified diff for CANDIDATE test-declaration lines - added
+    # lines matching `test_re` (manifest data) - and, for each candidate,
+    # answers "does it have a `# sabotage:` note" against the WORKING-TREE
+    # FILE, not the diff. The diff is only good for finding which lines
+    # changed; a note's presence is a property of the file, not of the diff.
+    # Two things go wrong if the note check stays diff-only: an edit that
+    # touches the note and the test declaration but leaves an untouched line
+    # between them splits the two across separate `-U0` hunks, and a note
+    # that was not edited at all never appears in a `-U0` diff regardless of
+    # hunks. Reading the file sidesteps both - it does not care which hunk
+    # anything landed in, or whether the note changed at all.
+    #
+    # `file_reader` is an injectable seam (defaults to real disk reads) so
+    # tests can hand in file contents without touching disk. Report-only -
+    # see the module doc.
+    def scan_sabotage(diff_text, test_re:, exempt_prefixes: [], file_reader: DEFAULT_SABOTAGE_FILE_READER)
       missing = []
       current_file = nil
-      added_lines = []
+      file_lines_by_path = {}
 
       diff_text.to_s.each_line do |raw|
         line = raw.chomp
 
         if line.start_with?("+++ ")
           current_file = line.sub(%r{\A\+\+\+ (b/)?}, "")
-          added_lines = []
           next
         end
 
-        if line.start_with?("@@")
-          added_lines = []
-          next
-        end
-
-        next unless line.start_with?("+")
+        next if line.start_with?("@@") || !line.start_with?("+")
 
         content = line[1..-1].to_s
         exempt = exempt_prefixes.any? { |prefix| current_file.to_s.start_with?(prefix) }
+        next if exempt || content !~ test_re
 
-        if !exempt && content =~ test_re && !sabotage_note_above?(added_lines)
-          missing << { file: current_file, text: content.strip }
-        end
+        file_lines_by_path[current_file] = sabotage_file_lines(current_file, file_reader) unless
+          file_lines_by_path.key?(current_file)
+        file_lines = file_lines_by_path[current_file]
+        next if file_lines.nil? # file missing or unreadable - nothing to verify a note against
 
-        added_lines << content
+        missing << { file: current_file, text: content.strip } unless sabotage_note_in_file?(file_lines, content)
       end
 
       missing
     end
 
-    # Walks upward from the end of `added_lines` (the added lines seen so
-    # far in the current hunk, in file order) over the contiguous run of
-    # comment lines immediately preceding the test line, looking for a
-    # `# sabotage:` note anywhere in that block. Stops at the first
-    # non-comment line - a blank line or code line breaks contiguity, so a
-    # note separated from the test by one is treated the same as no note at
-    # all.
-    def sabotage_note_above?(added_lines)
-      idx = added_lines.length - 1
-      while idx >= 0 && added_lines[idx] =~ COMMENT_LINE_RE
-        return true if added_lines[idx] =~ SABOTAGE_NOTE_RE
+    # Reads `path` through `file_reader` and splits it into chomped lines,
+    # or nil if the file does not exist / cannot be read. One read per file
+    # per scan, regardless of how many candidate lines it contains.
+    def sabotage_file_lines(path, file_reader)
+      content = file_reader.call(path)
+      return nil if content.nil?
 
-        idx -= 1
+      content.each_line.map(&:chomp)
+    end
+
+    # Does any line in `file_lines` equal to `content` (the candidate test
+    # declaration) have a `# sabotage:` note directly above it? A
+    # declaration can appear more than once verbatim (parameterized-looking
+    # names, duplicated fixtures); checking every occurrence and accepting
+    # if any one of them is noted is the charitable reading - it is the same
+    # bar `-U0`'s old within-hunk check applied, just against the file
+    # instead of the diff. A declaration this scan cannot find in the file
+    # at all (renamed again since the diff was taken, for example) is
+    # treated as "can't verify", not "missing" - the same call as the
+    # missing-file case in scan_sabotage, and for the same reason: a
+    # report-only scan should not manufacture a note-missing warning out of
+    # its own inability to locate the line.
+    def sabotage_note_in_file?(file_lines, content)
+      indices = file_lines.each_index.select { |i| file_lines[i] == content }
+      return true if indices.empty?
+
+      indices.any? { |i| sabotage_comment_block_above?(file_lines, i) }
+    end
+
+    # Walks upward from the line directly above `idx` over the contiguous
+    # run of comment lines, looking for a `# sabotage:` note anywhere in
+    # that block. Stops at the first non-comment line - a blank line or code
+    # line breaks contiguity, so a note separated from the declaration by
+    # one is treated the same as no note at all.
+    def sabotage_comment_block_above?(file_lines, idx)
+      i = idx - 1
+      while i >= 0 && file_lines[i] =~ COMMENT_LINE_RE
+        return true if file_lines[i] =~ SABOTAGE_NOTE_RE
+
+        i -= 1
       end
       false
     end
