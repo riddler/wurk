@@ -79,11 +79,11 @@ only the first half of that unless the version came with it.
 ruby ~/.claude/skills/wurk:kit/scripts/repo_state.rb
 ```
 
-- **STOP if `data.on_default_branch`.** A release commit is a commit like any
-  other and belongs on a branch.
 - **STOP if `data.dirty`.** An uncommitted change is either unrelated to the
   release - in which case it does not belong in the release commit - or it is
-  work that needs its own commit first.
+  work that needs its own commit first. This check is unconditional and runs
+  before anything below, including on the default branch: a dirty tree is
+  never a reason to stand up a workspace.
 
 Then read the current version from the recipe's version file and confirm the
 requested version is **strictly greater** (compare major, then minor, then
@@ -92,6 +92,65 @@ wrong argument.
 
 Read the changelog's unreleased section. **STOP if it is missing, or present
 with no entries under it** - there is nothing to release.
+
+These two checks are cheap reads, and they run **before** anything is created:
+a version typo or an empty changelog should never leave behind a workspace
+that only gets thrown away.
+
+**If `data.on_default_branch`, stand up a workspace for the release and
+finish there instead of committing in place.** A release commit is a commit
+like any other and belongs on a branch; this skill no longer refuses on the
+default branch, it branches off it, the same way `/wurk:next` stands up a
+workspace before handing a bead to `/wurk:work` rather than working it in the
+main checkout.
+
+Name the workspace `release-vX.Y.Z` from the requested version (e.g.
+`release-v1.2.3`) - there is no bead id to build the name from, so the version
+is the whole name.
+
+```
+/wurk:branch release-vX.Y.Z -- /wurk:release X.Y.Z
+```
+
+- **`parallelism.model: worktree-per-issue`** (the common case) - `/wurk:branch`
+  creates a sibling worktree and opens a seeded tmux window there; this
+  session cannot simply keep going in a directory it never `cd`ed into, so it
+  **hands off** rather than continuing here. The seed re-invokes this skill
+  with the same version argument, in the new worktree, on the new branch -
+  where `data.on_default_branch` is now false, so the seeded run falls straight
+  through this paragraph to the dirty/version/changelog checks (cheap and
+  idempotent to repeat) and on into Steps 1-4. No `--auto` flag is needed and
+  none exists on this skill: nothing past Step 0 pauses for interactive
+  confirmation, so the plain seed is already unattended-safe. Once `/wurk:branch`
+  reports success, **this session's job is done** - report the workspace path
+  and the tmux window per its own reporting contract, and stop; do not also
+  try to perform Steps 1-4 here against a path this session is not in.
+
+  `/wurk:branch`'s own `<id>` for the tmux window comes from the bead id at
+  the front of the branch name, and a release name has none - pass the whole
+  workspace name (`release-vX.Y.Z`) as `<id>` rather than guessing a fake
+  bead id out of it. That `<id>` also lands in `tmux_window.rb`'s
+  `FINISH_TEMPLATE`, which appends "finish with `/wurk:commit --auto` ...
+  refuses if the tree carries changes unrelated to `<id>`" to every seed.
+  This skill's own Step 3 already makes the release commit directly, so the
+  seeded session reaches that appended clause with a clean tree and nothing
+  left to commit - it is not a second commit to make and not a reason to fold
+  anything extra in; the seeded session should simply finish once Step 3 and
+  Step 4 are done and let the appended instruction find nothing to do.
+- **`parallelism.model: branch-in-place`** - `/wurk:branch` itself refuses this
+  model as unimplemented. Surface that refusal exactly as `/wurk:branch`
+  reports it and **STOP**; do not fall back to committing on the default
+  branch anyway, and do not invent a branch-in-place path here that
+  `/wurk:branch` does not have.
+
+`worktree_create.rb` (which `/wurk:branch` runs) also blocks with
+`not_main_checkout` when it is not run from the main checkout. That case is
+not expected to be reachable here: git refuses to check the same branch out
+in two worktrees at once, so `data.on_default_branch` can only be true in the
+checkout that has the default branch checked out, which is ordinarily the
+main checkout. Report the block if it somehow fires - a manually created
+worktree pinned to the default branch is the only way it could - but do not
+treat it as a normal outcome to design around.
 
 ### Step 1: Make the mechanical edits
 
@@ -164,6 +223,12 @@ keeps a release commit from reading as a released version.
 
 - **Never tag, push, or publish.** No outcome of this skill is a trigger for
   any of them.
+- **On the default branch, this skill branches off it rather than refusing.**
+  Under `worktree-per-issue` that means handing off to a seeded session in a
+  new worktree named `release-vX.Y.Z`, not finishing the release in this
+  session - see Step 0. Under `branch-in-place`, `/wurk:branch` has no
+  implementation yet, so this skill reports that refusal and stops rather than
+  committing on the default branch.
 - **The version is always explicit input.** "Just bump the minor" is still a
   human decision to state out loud, not a default to compute.
 - **Content curation is out of scope.** This skill renames a heading and
