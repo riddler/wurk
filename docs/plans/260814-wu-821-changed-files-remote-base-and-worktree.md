@@ -289,12 +289,12 @@ that the working tree is part of the answer.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] `skills/wurk:kit/scripts/test/base_ref_test.rb` exists and its cases
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] `skills/wurk:kit/scripts/test/base_ref_test.rb` exists and its cases
       run (visible in the suite's test count)
-- [ ] `contract_test.rb`'s hardcoded-default-branch and banned-call checks
+- [x] `contract_test.rb`'s hardcoded-default-branch and banned-call checks
       pass over the new `lib/base_ref.rb`
-- [ ] `grep -n resolve_base skills/wurk:kit/scripts/judge.rb` shows no
+- [x] `grep -n resolve_base skills/wurk:kit/scripts/judge.rb` shows no
       private definition remains
 
 #### Manual Verification:
@@ -692,3 +692,27 @@ of blocking here.
 - Related ADRs: `docs/adr/0004-manifest-and-extension-seams.md`,
   `docs/adr/0006-ruby-stdlib-scripts-with-envelope-contract.md`
 - Docs to keep in sync: `docs/manifest.md:134-152`, `skills/wurk:kit/REFERENCE.md`
+
+## Deferred Manual Verification
+
+Manual verification items are deferred during looped (--loop) execution and
+surfaced here once, rather than blocking after each phase. Confirm these
+before considering the plan fully landed.
+
+### Phase 1
+
+- [ ] `ruby skills/wurk:kit/scripts/judge.rb --dry-run` in this worktree
+      still renders the same command list as before the change
+- [ ] Each new test has a `# sabotage:` note (or a stated `n/a`) per this
+      repo's convention
+- [ ] No regressions in `/wurk:mr`'s judge step run by hand
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
