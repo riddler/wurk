@@ -422,12 +422,12 @@ prose carries no branch constants).
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] `grep -n parse_status_porcelain skills/wurk:kit/scripts/repo_state.rb
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] `grep -n parse_status_porcelain skills/wurk:kit/scripts/repo_state.rb
       skills/wurk:kit/scripts/gate.rb` returns nothing
-- [ ] `repo_state_test.rb` has a case asserting the `stale_base_ref` warning
+- [x] `repo_state_test.rb` has a case asserting the `stale_base_ref` warning
       appears in `warnings` when the remote ref is absent
-- [ ] `contract_test.rb` passes (no hardcoded refs introduced)
+- [x] `contract_test.rb` passes (no hardcoded refs introduced)
 
 #### Manual Verification:
 - [ ] `ruby skills/wurk:kit/scripts/repo_state.rb` in this worktree reports a
@@ -706,6 +706,26 @@ before considering the plan fully landed.
 - [ ] Each new test has a `# sabotage:` note (or a stated `n/a`) per this
       repo's convention
 - [ ] No regressions in `/wurk:mr`'s judge step run by hand
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 2
+
+- [ ] `ruby skills/wurk:kit/scripts/repo_state.rb` in this worktree reports a
+      `changed_files` list that matches `git diff --name-only
+      origin/main...HEAD` plus `git status --porcelain` by eye
+- [ ] With an uncommitted edit to a gated path and a clean commit history,
+      `ruby skills/wurk:kit/scripts/gate.rb --dry-run` still reports the gate
+      as applicable
+- [ ] `docs/manifest.md` reads correctly against the code as landed
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,

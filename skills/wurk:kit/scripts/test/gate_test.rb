@@ -46,23 +46,33 @@ class GateTest < Minitest::Test
     end
   end
 
+  # Stubs the base-ref ladder's remote-first rung as a hit, so BaseRef.resolve
+  # picks `ref` (default "origin/main") without falling back or warning.
+  def expect_base_ref(ref: "origin/main")
+    @fake.expect(["git", "rev-parse", "--verify", "--quiet", ref], exitstatus: 0)
+  end
+
   def expect_no_elixir_diff
-    @fake.expect(%w[git diff --name-only main...HEAD], out: "docs/plans/x.md\n")
+    expect_base_ref
+    @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "docs/plans/x.md\n")
     @fake.expect(%w[git status --porcelain], out: "")
   end
 
   def expect_elixir_diff
-    @fake.expect(%w[git diff --name-only main...HEAD], out: "lib/acme/foo.ex\n")
+    expect_base_ref
+    @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "lib/acme/foo.ex\n")
     @fake.expect(%w[git status --porcelain], out: "")
   end
 
   def expect_scripts_only_diff
-    @fake.expect(%w[git diff --name-only main...HEAD], out: ".claude/scripts/gate.rb\n")
+    expect_base_ref
+    @fake.expect(%w[git diff --name-only origin/main...HEAD], out: ".claude/scripts/gate.rb\n")
     @fake.expect(%w[git status --porcelain], out: "")
   end
 
   def expect_skills_only_diff
-    @fake.expect(%w[git diff --name-only main...HEAD], out: ".claude/skills/commit/SKILL.md\n")
+    expect_base_ref
+    @fake.expect(%w[git diff --name-only origin/main...HEAD], out: ".claude/skills/commit/SKILL.md\n")
     @fake.expect(%w[git status --porcelain], out: "")
   end
 
@@ -131,7 +141,8 @@ class GateTest < Minitest::Test
     with_manifest(other) do
       Dir.mktmpdir do |dir|
         Dir.chdir(dir) do
-          @fake.expect(%w[git diff --name-only trunk...HEAD], out: "lib/acme/foo.ex\n")
+          expect_base_ref(ref: "origin/trunk")
+          @fake.expect(%w[git diff --name-only origin/trunk...HEAD], out: "lib/acme/foo.ex\n")
           @fake.expect(%w[git status --porcelain], out: "")
           @fake.expect(
             %w[git diff trunk...HEAD -U0 -- test/ :!test/scion_tests/ :!test/scxml_tests/],
@@ -160,7 +171,8 @@ class GateTest < Minitest::Test
     with_manifest(other) do
       Dir.mktmpdir do |dir|
         Dir.chdir(dir) do
-          @fake.expect(%w[git diff --name-only trunk...HEAD], out: "docs/plans/x.md\n")
+          expect_base_ref(ref: "origin/trunk")
+          @fake.expect(%w[git diff --name-only origin/trunk...HEAD], out: "docs/plans/x.md\n")
           @fake.expect(%w[git status --porcelain], out: "")
           @fake.expect(
             %w[git diff trunk...HEAD -U0 -- test/ :!test/scion_tests/ :!test/scxml_tests/],
@@ -188,7 +200,8 @@ class GateTest < Minitest::Test
   # became configurable -> red
   def test_no_base_ref_warning_when_the_diff_fails
     in_tmp_cwd do
-      @fake.expect(%w[git diff --name-only main...HEAD], exitstatus: 1, err: "fatal: bad revision\n")
+      expect_base_ref
+      @fake.expect(%w[git diff --name-only origin/main...HEAD], exitstatus: 1, err: "fatal: bad revision\n")
       @fake.expect(%w[git status --porcelain], out: "")
       expect_no_sabotage_diff
 

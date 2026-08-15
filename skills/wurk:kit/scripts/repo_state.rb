@@ -7,6 +7,7 @@ require_relative "lib/cli"
 require_relative "lib/refs"
 require_relative "lib/gate_paths"
 require_relative "lib/manifest"
+require_relative "lib/base_ref"
 
 # RepoState answers "where am I, and what's uncommitted or unpushed here" -
 # replacing /wurk:work Step 0.5 (locate-self), /wurk:mr Step 1 (establish
@@ -17,16 +18,6 @@ module RepoState
   UNPUSHED_RECORD_SEP = "\x1e"
 
   class << self
-    def parse_status_porcelain(out)
-      out.to_s.each_line.map do |line|
-        line = line.chomp
-        next nil if line.empty?
-
-        path = line[3..-1].to_s
-        path.include?(" -> ") ? path.split(" -> ").last : path
-      end.compact
-    end
-
     # statifier-ex ADR-0010 makes the branch name a creation-time label, not an
     # authority, so this never ships as a bare id - always wrapped with the
     # strategy/confidence pair that marks it as a weak guess.
@@ -95,8 +86,7 @@ module RepoState
       # default branch by definition, so it reads false rather than nil.
       on_default_branch = !branch.nil? && branch == manifest.default_branch
 
-      status_res = Sh.run(%w[git status --porcelain], envelope: env)
-      dirty_files = parse_status_porcelain(status_res.out)
+      dirty_files = BaseRef.working_files(env)
       dirty = !dirty_files.empty?
 
       upstream_res = Sh.run(%w[git rev-parse --abbrev-ref --symbolic-full-name @{upstream}], envelope: env)
@@ -120,20 +110,14 @@ module RepoState
         env.warn(code: "no_upstream", message: "branch #{branch.inspect} has no upstream tracking branch")
       end
 
-      # Three-dot diff against the merge base with the manifest's default
-      # branch, matching /wurk:commit Step 0 and /wurk:mr's gate step
-      # exactly - see lib/gate_paths.rb.
-      base = manifest.default_branch
-      diff_res = Sh.run(["git", "diff", "--name-only", "#{base}...HEAD"], envelope: env)
-      diff_files =
-        if diff_res.success?
-          diff_res.out.to_s.each_line.map(&:strip).reject(&:empty?)
-        else
-          env.warn(code: "no_base_ref", message: "could not diff against local #{base}")
-          []
-        end
-
-      changed_files = (diff_files + dirty_files).uniq.sort
+      # Three-dot diff against the resolved base - origin/<default_branch>
+      # first, the local default branch as a warned fallback (BaseRef.resolve)
+      # - matching /wurk:commit Step 0 and /wurk:mr's gate step exactly, and
+      # unioned with the working tree so uncommitted edits are never
+      # invisible to area labeling or the gate carve-out. See lib/gate_paths.rb
+      # and lib/base_ref.rb.
+      changed = BaseRef.changed_files(env, manifest: manifest, working: dirty_files)
+      changed_files = changed[:files]
       touches_build = GatePaths.touches_build?(changed_files, manifest: manifest)
       plan_docs = under_dir(changed_files, manifest.plans_dir)
       changelog_fragments = under_dir(changed_files, manifest.changelog_dir)
@@ -146,6 +130,7 @@ module RepoState
       env.data[:is_main] = is_main
       env.data[:on_default_branch] = on_default_branch
       env.data[:default_branch] = manifest.default_branch
+      env.data[:base_ref] = changed[:base]
       env.data[:dirty] = dirty
       env.data[:dirty_files] = dirty_files
       env.data[:upstream] = upstream
