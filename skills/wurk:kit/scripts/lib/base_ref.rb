@@ -48,6 +48,19 @@ module BaseRef
       end.compact
     end
 
+    # The untracked subset of the working tree - `??`-status porcelain lines
+    # only. A separate shell-out (not a filter over `working_files`, which
+    # discards the status prefix) because the sabotage scan needs to tell an
+    # untracked path apart from a tracked-dirty one: the former appears in no
+    # diff at all, even the two-dot form, and needs its own `unverifiable`
+    # report (see gate.rb).
+    def untracked_files(env)
+      res = Sh.run(%w[git status --porcelain], envelope: env)
+      res.out.to_s.each_line.map(&:chomp).reject(&:empty?).select { |l| l.start_with?("??") }.map do |line|
+        line[3..-1].to_s
+      end
+    end
+
     # Every path this branch touched: the three-dot diff against the
     # resolved base, unioned with the working tree. An unresolvable base
     # warns and degrades to the working tree alone rather than reporting

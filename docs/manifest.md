@@ -158,7 +158,10 @@ Setting `repo.default_branch` moves several behaviors at once, all reading
 the same field:
 
 - the commit carve-out (`gate.rb`'s `gate_applicable?`, `/wurk:commit` Step 0)
-- the sabotage mutation-testing pathspec (`gate.rb`'s `sabotage_diff_args`)
+- the sabotage mutation-testing pathspec (`gate.rb`'s `sabotage_diff_args`) -
+  a **two-dot** diff against `BaseRef.merge_base(resolved base, HEAD)`, not
+  the three-dot form the other sites use, so uncommitted tracked edits reach
+  the scan too (see `gate.sabotage` below)
 - plan-document bead resolution (`bead.rb`'s `resolve_plan_doc_bead`)
 - worktree rebasing and staleness checks (`rebase_onto.rb`, `worktree_refresh.rb`,
   `worktree_survey.rb`, `worktree_create.rb`'s base-ref ladder)
@@ -248,16 +251,21 @@ means the scan never ran - the two are not the same claim, and a reader must
 not collapse them.
 
 A third state sits between those two: an enabled scan that ran but could not
-check everything. `data.sabotage.scanned` is `false` only when the scan's own
-`git diff` failed, meaning nothing at all was checked that run; it is `true`
-whenever the scan otherwise completed, even if individual declarations inside
-it could not be checked. Those per-declaration cases land in
-`data.sabotage.unverifiable`, one entry per declaration, each carrying a
-`reason` of `diff_failed` (the whole run, `scanned` is also `false` here),
-`file_unreadable` (the file the declaration lives in could not be read), or
-`declaration_not_found` (the added line from the diff could not be located in
-the working-tree file). None of this ever flips `ok`; `unverifiable` is a
-report on the same terms as `missing`.
+check everything. `data.sabotage.scanned` is `false` only when the scan had
+nothing to diff against at all - either the diff-base ladder never resolved
+(`reason: "no_base_ref"`) or the scan's own `git diff` failed
+(`reason: "diff_failed"`) - meaning nothing at all was checked that run; it
+is `true` whenever the scan otherwise completed, even if individual
+declarations inside it could not be checked. Those per-declaration cases land
+in `data.sabotage.unverifiable` too, one entry per declaration, each carrying
+a `reason` of `no_base_ref` or `diff_failed` (the whole run, `scanned` is
+also `false` for both), `file_unreadable` (the file the declaration lives in
+could not be read), `declaration_not_found` (the added line from the diff
+could not be located in the working-tree file), or `untracked` (a path under
+a `test_roots` prefix that `git status --porcelain` reports as untracked -
+invisible to any diff, committed or not, so it is reported rather than
+silently skipped). None of this ever flips `ok`; `unverifiable` is a report
+on the same terms as `missing`.
 
 A consumer that only reports the scan names the `unverifiable` entries
 alongside the `missing` ones and moves on. A consumer that promotes the scan
@@ -268,8 +276,12 @@ note" has not been satisfied for them. The kit reports; it does not make that
 call, and `unverifiable` never flips `ok`.
 
 - **test_roots** - git pathspecs passed verbatim to
-  `git diff main...HEAD -U0 --`, i.e. where the scan looks for new test
-  declarations. A directory prefix (`"test/"`) scans every test under it; an
+  `git diff <merge-base sha> -U0 --` (the merge base of the resolved
+  `repo.default_branch` ref and `HEAD` - see `repo.default_branch` above),
+  i.e. where the scan looks for new test declarations. The two-dot form
+  against that sha, not a three-dot diff against the branch name, is what
+  lets an uncommitted tracked edit reach the scan. A directory prefix
+  (`"test/"`) scans every test under it; an
   exact file path or bare glob scopes the scan to enumerated binding tests.
   Entries must not start with `:` - exclusions belong in `exempt_prefixes`,
   the single definition site for what is exempt. Scoping trap: with

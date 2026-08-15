@@ -209,36 +209,67 @@ module Gate
       false
     end
 
-    # One definition site for the corpus exemptions: the pathspec keeps them
-    # out of the diff at the git level, and scan_sabotage filters them again
-    # in case it is ever handed diff text from elsewhere. Both read the same
-    # manifest list.
-    def sabotage_diff_args(manifest)
-      ["git", "diff", "#{manifest.default_branch}...HEAD", "-U0", "--"] +
+    # Two-dot against the merge-base sha, not `<base>...HEAD`: the two-dot
+    # form includes uncommitted tracked edits, and an unproved test
+    # declaration is likeliest to be exactly that. Same shape as judge.rb.
+    # The pathspec keeps the corpus exemptions out at the git level.
+    def sabotage_diff_args(manifest, base_sha)
+      ["git", "diff", base_sha, "-U0", "--"] +
         manifest.sabotage_test_roots +
         manifest.sabotage_exempt_prefixes.map { |prefix| ":!#{prefix}" }
+    end
+
+    # An untracked path is invisible to any diff, two-dot included - it has
+    # no committed side to diff against at all. Rather than silently skip it,
+    # every untracked path under a sabotage test root (and outside the exempt
+    # prefixes) is reported through the same `unverifiable` channel as a
+    # declaration the diff-based scan could not check, report-only like every
+    # other entry there.
+    def sabotage_untracked_unverifiable(env, manifest)
+      roots = manifest.sabotage_test_roots
+      exempt = manifest.sabotage_exempt_prefixes
+      BaseRef.untracked_files(env).select do |path|
+        roots.any? { |root| path.start_with?(root) } && exempt.none? { |prefix| path.start_with?(prefix) }
+      end.map { |path| { reason: "untracked", file: path, text: nil, detail: nil } }
     end
 
     # The scan is a manifest capability (gate.sabotage, see docs/manifest.md):
     # a project that never declares it gets no `git diff` shelled out for it
     # at all, and an empty [] rather than a false "nothing found".
     #
+    # `base` is the ref `run` already resolved once via `BaseRef.changed_files`
+    # (see run) - this method calls only `BaseRef.merge_base` itself, never the
+    # ladder again, so one `gate.rb` invocation emits at most one
+    # `stale_base_ref` warning. A `nil` base (no default-branch ref resolved)
+    # or a `nil` merge base degrades to the existing `{scanned: false, ...}`
+    # shape, with an `unverifiable` entry of `reason: "no_base_ref"` - the same
+    # precedent as `diff_failed` below: the whole run, not one declaration,
+    # went unchecked.
+    #
     # A failed diff means this scan checked nothing at all - a different
     # claim from "checked everything and found nothing", and the one case
     # where the blind spot covers the whole run rather than one declaration.
-    def sabotage_scan(env, manifest)
+    def sabotage_scan(env, manifest, base)
       return { scanned: false, missing: [], unverifiable: [] } unless manifest.sabotage?
 
-      diff_res = Sh.run(sabotage_diff_args(manifest), envelope: env)
+      merge_base = BaseRef.merge_base(env, base)
+      if merge_base.nil?
+        return { scanned: false, missing: [],
+                 unverifiable: [{ reason: "no_base_ref", file: nil, text: nil, detail: nil }] }
+      end
+
+      diff_res = Sh.run(sabotage_diff_args(manifest, merge_base), envelope: env)
       unless diff_res.success?
         return { scanned: false, missing: [],
                  unverifiable: [{ reason: "diff_failed", file: nil, text: nil,
                                   detail: diff_res.err.to_s.strip }] }
       end
 
-      scan_sabotage(diff_res.out,
-                    test_re: manifest.sabotage_test_pattern,
-                    exempt_prefixes: manifest.sabotage_exempt_prefixes).merge(scanned: true)
+      result = scan_sabotage(diff_res.out,
+                              test_re: manifest.sabotage_test_pattern,
+                              exempt_prefixes: manifest.sabotage_exempt_prefixes).merge(scanned: true)
+      result[:unverifiable] += sabotage_untracked_unverifiable(env, manifest)
+      result
     end
 
     def skipped_from(stages, project_level_re, not_applicable_re)
@@ -362,7 +393,7 @@ module Gate
       changed = BaseRef.changed_files(env, manifest: manifest)
       applicable = gate_applicable?(manifest, changed)
 
-      scan = sabotage_scan(env, manifest)
+      scan = sabotage_scan(env, manifest, changed[:base])
       env.data[:sabotage] = {
         enabled: manifest.sabotage?,
         reason: manifest.sabotage? ? nil : "no gate.sabotage section in the manifest; the scan is off",
@@ -384,8 +415,15 @@ module Gate
                    "an empty missing list here is not a clean result"
         )
       end
+      if scan[:unverifiable].any? { |u| u[:reason] == "no_base_ref" }
+        env.warn(
+          code: "sabotage_scan_failed",
+          message: "the sabotage scan had no base ref to diff against, so nothing was checked - " \
+                   "an empty missing list here is not a clean result"
+        )
+      end
       scan[:unverifiable].each do |u|
-        next if u[:reason] == "diff_failed"
+        next if u[:reason] == "diff_failed" || u[:reason] == "no_base_ref"
 
         env.warn(
           code: "sabotage_unverifiable",
