@@ -6,6 +6,7 @@ require_relative "lib/envelope"
 require_relative "lib/sh"
 require_relative "lib/cli"
 require_relative "lib/manifest"
+require_relative "lib/base_ref"
 
 # Judge is the merge-time model judge over judgment-bearing prose (ADR-0008,
 # docs/adr/0008-merge-time-judge-over-generic-skill-prose.md): a registry
@@ -80,15 +81,6 @@ module Judge
     # propose pass saw.
     def render_hunks(chunks)
       chunks.map { |c| c[:body] }.join("\n")
-    end
-
-    # The first of --base, the manifest's remote default branch, and its
-    # local default branch for which `git rev-parse --verify --quiet`
-    # succeeds. nil when none resolve.
-    def resolve_base(env, base_override, manifest)
-      [base_override, manifest.remote_default_branch, manifest.default_branch].compact.find do |ref|
-        Sh.run(["git", "rev-parse", "--verify", "--quiet", ref], envelope: env).success?
-      end
     end
 
     # --- prompts ---------------------------------------------------------
@@ -225,13 +217,13 @@ module Judge
         return skip(env, "no_cli", "the `#{CLI}` CLI is not on PATH")
       end
 
-      base = resolve_base(env, base_override, manifest)
+      base = BaseRef.resolve(env, manifest: manifest, override: base_override)
       unless base
         tried = [base_override, manifest.remote_default_branch, manifest.default_branch].compact.join(", ")
         return skip(env, "no_base_ref", "none of #{tried} resolved to a git ref")
       end
 
-      base_sha = Sh.run(["git", "merge-base", base, "HEAD"], envelope: env).out.to_s.strip
+      base_sha = BaseRef.merge_base(env, base)
       diff_out = Sh.run(["git", "diff", base_sha] + DIFF_FLAGS, envelope: env).out.to_s
       chunks = split_chunks(diff_out)
 

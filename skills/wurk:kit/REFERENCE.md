@@ -220,6 +220,22 @@ measuring something outside the build has to be reflected in the predicate
 that decides whether the gate runs at all, or it never fires on the branches
 it exists for.
 
+`lib/base_ref.rb` is the one answer every script gives to "what did this
+branch change" (wu-821). `BaseRef.resolve` is the ladder: the caller's
+override, then the manifest's remote default branch
+(`origin/<repo.default_branch>`), then the local default branch, taking the
+first `git rev-parse --verify --quiet` accepts and warning `stale_base_ref`
+only when it falls back to the local branch without an override - an
+explicit override is never a fallback, so it never warns. `BaseRef.changed_files`
+answers the whole question: the three-dot diff against the resolved base,
+unioned with `BaseRef.working_files` (the single `git status --porcelain`
+parse - tracked-dirty plus untracked). The working tree is part of the
+answer on purpose: a diff alone misses uncommitted and untracked changes,
+which is exactly the gap this helper closes. `BaseRef.merge_base` gives
+callers that want a two-dot diff (which additionally includes uncommitted
+tracked edits, judge.rb's own pattern) the merge-base sha instead of a name
+list.
+
 ### Fixture manifests
 
 **A test never reads a consumer repo's real `.claude/wurk.json`.**
