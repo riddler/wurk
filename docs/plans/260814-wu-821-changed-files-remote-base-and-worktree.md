@@ -496,10 +496,10 @@ untracked `docs/plans/260814-zz-abc-....md` and the bead still resolves with
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] A `bead_test.rb` case resolves a `plan_doc` candidate from an untracked
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] A `bead_test.rb` case resolves a `plan_doc` candidate from an untracked
       plan file with no committed diff
-- [ ] `grep -n 'default_branch}\.\.\.HEAD' skills/wurk:kit/scripts/bead.rb`
+- [x] `grep -n 'default_branch}\.\.\.HEAD' skills/wurk:kit/scripts/bead.rb`
       returns nothing
 
 #### Manual Verification:
@@ -726,6 +726,23 @@ of blocking here.
       `ruby skills/wurk:kit/scripts/gate.rb --dry-run` still reports the gate
       as applicable
 - [ ] `docs/manifest.md` reads correctly against the code as landed
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 3
+
+- [ ] In this worktree, before committing a new plan document,
+      `ruby skills/wurk:kit/scripts/bead.rb resolve` reports the plan's bead
+      as the strong candidate
+- [ ] Resolution still prefers a seeded bead over the plan document
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,

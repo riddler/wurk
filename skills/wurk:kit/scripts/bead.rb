@@ -8,6 +8,7 @@ require_relative "lib/cli"
 require_relative "lib/manifest"
 require_relative "lib/refs"
 require_relative "lib/beads"
+require_relative "lib/base_ref"
 
 # Bead is the bd wrapper: `bd show` is parsed as prose in at least four
 # skills today, so this is the single biggest parsing win in the extraction
@@ -420,11 +421,14 @@ module Bead
       env.emit(io)
     end
 
+    # `files` is the sorted union of the committed diff and the working
+    # tree (BaseRef.changed_files), so a branch touching two plan documents
+    # resolves to the lexicographically first one rather than git's diff
+    # order. That's fine: the multi-plan-document case is already
+    # ambiguous, and Beads.rank_candidates - not this order - is what
+    # disambiguates candidates.
     def resolve_plan_doc_bead(env, manifest)
-      diff_res = Sh.run(["git", "diff", "#{manifest.default_branch}...HEAD", "--name-only"], envelope: env)
-      return nil unless diff_res.success?
-
-      files = diff_res.out.to_s.each_line.map(&:strip).reject(&:empty?)
+      files = BaseRef.changed_files(env, manifest: manifest)[:files]
       files.each do |f|
         m = File.basename(f).match(/\A\d{6}-(#{Refs.bead_id})-/)
         return m[1] if m
