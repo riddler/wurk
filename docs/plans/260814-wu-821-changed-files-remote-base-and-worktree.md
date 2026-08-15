@@ -609,15 +609,15 @@ two-dot diff against the merge base with the resolved ref, and so the
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] `gate_test.rb` has a case where an uncommitted, un-noted test
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] `gate_test.rb` has a case where an uncommitted, un-noted test
       declaration appears in `data.sabotage.missing`
-- [ ] `gate_test.rb` has a case where an untracked test file yields exactly
+- [x] `gate_test.rb` has a case where an untracked test file yields exactly
       one `unverifiable` entry with `reason: "untracked"` and `ok` stays true
-- [ ] `gate_test.rb` asserts a full run makes exactly one
+- [x] `gate_test.rb` asserts a full run makes exactly one
       `git rev-parse --verify --quiet` call and emits at most one
       `stale_base_ref` warning
-- [ ] `grep -rn 'default_branch}\.\.\.HEAD' skills/wurk:kit/scripts` returns
+- [x] `grep -rn 'default_branch}\.\.\.HEAD' skills/wurk:kit/scripts` returns
       nothing
 
 #### Manual Verification:
@@ -743,6 +743,24 @@ of blocking here.
       `ruby skills/wurk:kit/scripts/bead.rb resolve` reports the plan's bead
       as the strong candidate
 - [ ] Resolution still prefers a seeded bead over the plan document
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 4
+
+- [ ] Add an un-noted test to this repo's suite without committing it, run
+      `ruby skills/wurk:kit/scripts/gate.rb`, and confirm it is reported
+- [ ] Create the same test as a brand-new untracked file and confirm it
+      appears as `unverifiable`/`untracked` rather than as a false green
+- [ ] The `unverifiable` report reads clearly enough for a human to act on
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,

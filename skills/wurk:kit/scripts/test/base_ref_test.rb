@@ -206,6 +206,31 @@ class BaseRefTest < Minitest::Test
     end
   end
 
+  # --- untracked_files --------------------------------------------------------
+
+  # sabotage: drop the `select { |l| l.start_with?("??") }` filter -> the
+  # tracked-modified line would leak into the result -> red
+  def test_untracked_files_returns_only_double_question_mark_lines
+    out = <<~OUT
+       M lib/foo.rb
+      A  lib/bar.rb
+      ?? lib/new_file.rb
+      ?? test/new_test.exs
+    OUT
+    @fake.expect(%w[git status --porcelain], out: out)
+
+    assert_equal %w[lib/new_file.rb test/new_test.exs], BaseRef.untracked_files(@env)
+  end
+
+  # sabotage: widen the filter to accept any status prefix (e.g. drop the
+  # "??" check entirely) -> the staged-added line would leak in -> red
+  def test_untracked_files_excludes_tracked_modified_and_staged_added_lines
+    out = " M lib/foo.rb\nA  lib/bar.rb\n"
+    @fake.expect(%w[git status --porcelain], out: out)
+
+    assert_equal [], BaseRef.untracked_files(@env)
+  end
+
   # --- merge_base ---------------------------------------------------------------
 
   # sabotage: shell out to `git merge-base` even when base is nil -> FakeSh

@@ -76,11 +76,20 @@ class GateTest < Minitest::Test
     @fake.expect(%w[git status --porcelain], out: "")
   end
 
-  def expect_no_sabotage_diff(out: "")
+  # Stubs the sabotage scan's shell-outs on top of an already-stubbed
+  # base-ref resolution (expect_base_ref, via expect_*_diff above): the
+  # merge-base of the resolved remote ref and HEAD, the two-dot diff against
+  # that sha, and (once the diff succeeds) the untracked-file lookup the
+  # scan runs afterward to report untracked test-root paths. `sabotage_scan`
+  # calls only `BaseRef.merge_base` - never the ladder again - so this never
+  # adds a second `rev-parse --verify` stub.
+  def expect_no_sabotage_diff(out: "", ref: "origin/main", base_sha: "abc1234", status_out: "")
+    @fake.expect(["git", "merge-base", ref, "HEAD"], out: "#{base_sha}\n")
     @fake.expect(
-      %w[git diff main...HEAD -U0 -- test/ :!test/scion_tests/ :!test/scxml_tests/],
+      ["git", "diff", base_sha, "-U0", "--", "test/", ":!test/scion_tests/", ":!test/scxml_tests/"],
       out: out
     )
+    @fake.expect(%w[git status --porcelain], out: status_out)
   end
 
   GREEN_REPORT = {
@@ -144,10 +153,7 @@ class GateTest < Minitest::Test
           expect_base_ref(ref: "origin/trunk")
           @fake.expect(%w[git diff --name-only origin/trunk...HEAD], out: "lib/acme/foo.ex\n")
           @fake.expect(%w[git status --porcelain], out: "")
-          @fake.expect(
-            %w[git diff trunk...HEAD -U0 -- test/ :!test/scion_tests/ :!test/scxml_tests/],
-            out: ""
-          )
+          expect_no_sabotage_diff(ref: "origin/trunk")
           @fake.expect(%w[make report], out: JSON.generate(GREEN_REPORT))
           @fake.expect(%w[make attest], out: "Full gate green: scope all, no profile, 2 stages considered.\n")
 
@@ -174,8 +180,8 @@ class GateTest < Minitest::Test
           expect_base_ref(ref: "origin/trunk")
           @fake.expect(%w[git diff --name-only origin/trunk...HEAD], out: "docs/plans/x.md\n")
           @fake.expect(%w[git status --porcelain], out: "")
-          @fake.expect(
-            %w[git diff trunk...HEAD -U0 -- test/ :!test/scion_tests/ :!test/scxml_tests/],
+          expect_no_sabotage_diff(
+            ref: "origin/trunk",
             out: "diff --git a/test/foo_test.exs b/test/foo_test.exs\n" \
                  "--- a/test/foo_test.exs\n+++ b/test/foo_test.exs\n@@ -0,0 +1,1 @@\n" \
                  "+  test \"missing its note\" do\n"
@@ -1237,8 +1243,7 @@ class GateTest < Minitest::Test
   def test_sabotage_scan_runs_over_the_committed_diff_pathspec
     in_tmp_cwd do
       expect_no_elixir_diff
-      @fake.expect(
-        %w[git diff main...HEAD -U0 -- test/ :!test/scion_tests/ :!test/scxml_tests/],
+      expect_no_sabotage_diff(
         out: "diff --git a/test/foo_test.exs b/test/foo_test.exs\n" \
              "--- a/test/foo_test.exs\n+++ b/test/foo_test.exs\n@@ -0,0 +1,1 @@\n" \
              "+  test \"missing its note\" do\n"
@@ -1272,8 +1277,7 @@ class GateTest < Minitest::Test
   def test_sabotage_scan_reports_unverifiable_through_the_envelope
     in_tmp_cwd do
       expect_no_elixir_diff
-      @fake.expect(
-        %w[git diff main...HEAD -U0 -- test/ :!test/scion_tests/ :!test/scxml_tests/],
+      expect_no_sabotage_diff(
         out: "diff --git a/test/foo_test.exs b/test/foo_test.exs\n" \
              "--- a/test/foo_test.exs\n+++ b/test/foo_test.exs\n@@ -0,0 +1,1 @@\n" \
              "+  test \"renamed since the diff\" do\n"
@@ -1325,9 +1329,10 @@ class GateTest < Minitest::Test
   def test_sabotage_scan_reports_scanned_false_when_the_diff_fails
     in_tmp_cwd do
       expect_no_elixir_diff
+      @fake.expect(%w[git merge-base origin/main HEAD], out: "abc1234\n")
       @fake.expect(
-        %w[git diff main...HEAD -U0 -- test/ :!test/scion_tests/ :!test/scxml_tests/],
-        exitstatus: 1, err: "fatal: bad revision 'main...HEAD'\n"
+        %w[git diff abc1234 -U0 -- test/ :!test/scion_tests/ :!test/scxml_tests/],
+        exitstatus: 1, err: "fatal: bad revision 'abc1234'\n"
       )
 
       _code, env = run_gate
@@ -1338,10 +1343,131 @@ class GateTest < Minitest::Test
       assert_equal 1, env["data"]["sabotage"]["unverifiable"].length
       entry = env["data"]["sabotage"]["unverifiable"].first
       assert_equal "diff_failed", entry["reason"]
-      assert_equal "fatal: bad revision 'main...HEAD'", entry["detail"]
+      assert_equal "fatal: bad revision 'abc1234'", entry["detail"]
       assert_equal 1, env["warnings"].length
       assert_equal "sabotage_scan_failed", env["warnings"].first["code"]
       assert_equal true, env["ok"]
+    end
+  end
+
+  # --- wu-821 Phase 4: sabotage scan sees the working tree ---
+
+  # The two-dot diff (against the merge-base sha, not `<base>...HEAD`) is
+  # what makes an uncommitted, tracked edit visible to the scan at all - a
+  # test declaration that was only ever edited in the working tree, never
+  # committed, still reaches `missing` here.
+  # sabotage: revert sabotage_diff_args to a three-dot `<base>...HEAD` form
+  # -> red (FakeSh raises UnexpectedCommand: no stub registered for that shape)
+  def test_uncommitted_test_declaration_with_no_note_lands_in_missing
+    in_tmp_cwd do
+      expect_no_elixir_diff
+      expect_no_sabotage_diff(
+        out: "diff --git a/test/foo_test.exs b/test/foo_test.exs\n" \
+             "--- a/test/foo_test.exs\n+++ b/test/foo_test.exs\n@@ -0,0 +1,1 @@\n" \
+             "+  test \"an uncommitted declaration\" do\n"
+      )
+      FileUtils.mkdir_p("test")
+      File.write("test/foo_test.exs", "  test \"an uncommitted declaration\" do\nend\n")
+
+      _code, env = run_gate
+
+      assert_equal 1, env["data"]["sabotage"]["missing"].length
+      assert_equal "test/foo_test.exs", env["data"]["sabotage"]["missing"].first["file"]
+      assert_equal true, env["ok"]
+    end
+  end
+
+  # An untracked file appears in no diff at all, two-dot included - it has
+  # no committed side. Rather than a silent blind spot, one path under a
+  # sabotage test root produces exactly one `untracked` unverifiable entry,
+  # and `ok` stays true - report-only, same as every other unverifiable entry.
+  # sabotage: drop the `sabotage_untracked_unverifiable` merge in
+  # `sabotage_scan` -> red (the untracked path would go unreported)
+  def test_untracked_file_under_a_test_root_produces_one_untracked_unverifiable_entry
+    in_tmp_cwd do
+      expect_no_elixir_diff
+      expect_no_sabotage_diff(status_out: "?? test/new_test.exs\n")
+
+      _code, env = run_gate
+
+      assert_equal true, env["data"]["sabotage"]["scanned"]
+      entries = env["data"]["sabotage"]["unverifiable"]
+      assert_equal 1, entries.length
+      assert_equal "untracked", entries.first["reason"]
+      assert_equal "test/new_test.exs", entries.first["file"]
+      assert_equal true, env["ok"]
+      assert_includes env["warnings"].map { |w| w["code"] }, "sabotage_unverifiable"
+    end
+  end
+
+  # An untracked path under an exempt prefix is exempt from the untracked
+  # report too, the same as it is from the diff-based scan.
+  # sabotage: drop the `exempt.none? { ... }` half of the filter in
+  # `sabotage_untracked_unverifiable` -> red
+  def test_untracked_file_under_an_exempt_prefix_produces_no_untracked_entry
+    in_tmp_cwd do
+      expect_no_elixir_diff
+      expect_no_sabotage_diff(status_out: "?? test/scion_tests/new_test.exs\n")
+
+      _code, env = run_gate
+
+      assert_equal [], env["data"]["sabotage"]["unverifiable"]
+      assert_equal true, env["ok"]
+    end
+  end
+
+  # A base that never resolves (neither rung of the ladder) means the
+  # sabotage scan has nothing to diff against at all - the same
+  # whole-run blind spot as a failed diff, reported the same way:
+  # `scanned: false` plus one `no_base_ref` unverifiable entry, never a
+  # per-declaration one.
+  # sabotage: have sabotage_scan treat a nil base as an empty scan (`{scanned:
+  # true, missing: [], unverifiable: []}`) instead of the no_base_ref shape
+  # -> red
+  def test_unresolvable_base_reports_scanned_false_with_no_base_ref_unverifiable
+    in_tmp_cwd do
+      @fake.expect(%w[git rev-parse --verify --quiet origin/main], exitstatus: 1)
+      @fake.expect(%w[git rev-parse --verify --quiet main], exitstatus: 1)
+      @fake.expect(%w[git status --porcelain], out: "")
+
+      _code, env = run_gate
+
+      assert_equal true, env["data"]["sabotage"]["enabled"]
+      assert_equal false, env["data"]["sabotage"]["scanned"]
+      assert_equal [], env["data"]["sabotage"]["missing"]
+      entries = env["data"]["sabotage"]["unverifiable"]
+      assert_equal 1, entries.length
+      assert_equal "no_base_ref", entries.first["reason"]
+      assert_equal true, env["ok"]
+      codes = env["warnings"].map { |w| w["code"] }
+      assert_equal 1, codes.count("no_base_ref")
+      assert_equal 1, codes.count("sabotage_scan_failed")
+    end
+  end
+
+  # The single-resolution guarantee (Phase 2, carried forward here):
+  # `sabotage_scan` takes the already-resolved base rather than running the
+  # ladder a second time, so a full run shells `git rev-parse --verify`
+  # exactly once even though `run` asks "what changed" for both the carve-out
+  # and the sabotage scan, and the envelope never carries more than one
+  # `stale_base_ref` warning.
+  # sabotage: have sabotage_scan call BaseRef.resolve (or BaseRef.changed_files)
+  # itself instead of accepting `base` -> FakeSh raises UnexpectedCommand (only
+  # one rev-parse stub is registered) -> red
+  def test_full_run_shells_rev_parse_verify_exactly_once
+    in_tmp_cwd do
+      expect_elixir_diff
+      expect_no_sabotage_diff
+      @fake.expect(%w[make report], out: JSON.generate(GREEN_REPORT))
+      @fake.expect(%w[make attest], out: "Full gate green: scope all, no profile, 2 stages considered.\n")
+
+      code, env = run_gate
+
+      assert_equal 0, code
+      rev_parse_calls = @fake.calls.select { |c| c.argv[0, 3] == %w[git rev-parse --verify] }
+      assert_equal 1, rev_parse_calls.length
+      stale_base_ref_warnings = env["warnings"].select { |w| w["code"] == "stale_base_ref" }
+      assert_equal 0, stale_base_ref_warnings.length
     end
   end
 

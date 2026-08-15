@@ -234,7 +234,11 @@ answer on purpose: a diff alone misses uncommitted and untracked changes,
 which is exactly the gap this helper closes. `BaseRef.merge_base` gives
 callers that want a two-dot diff (which additionally includes uncommitted
 tracked edits, judge.rb's own pattern) the merge-base sha instead of a name
-list.
+list. `BaseRef.untracked_files` is the `??`-only subset of the working tree,
+for a caller (`gate.rb`'s sabotage scan) that needs to tell an untracked path
+apart from a tracked-dirty one - an untracked path appears in no diff at all,
+even the two-dot form, so it needs its own reporting channel rather than
+being silently invisible.
 
 ### Fixture manifests
 
@@ -314,15 +318,21 @@ surface; every command is manifest data. The most constrained script here.
   `data.sabotage.enabled` is `false` with a `reason`, and `missing` is then
   always `[]` - absence of findings there is not evidence of discipline,
   only evidence the scan never ran.
-  `data.sabotage.scanned` is `false` only when the scan's `git diff` itself
-  failed, meaning nothing was checked that run; `data.sabotage.unverifiable`
-  holds one entry per declaration the scan could not check, each with a
-  `reason` of `diff_failed` (the whole run), `file_unreadable` (the file
-  could not be read), or `declaration_not_found` (the added line could not be
-  located in the working-tree file). A consumer that only reports the scan
-  names `unverifiable` entries alongside `missing` ones; a consumer that
-  gates on the scan decides for itself what a non-empty `unverifiable`
-  means - the kit reports, it does not make that call.
+  `data.sabotage.scanned` is `false` when the scan had nothing to diff
+  against at all - the diff-base ladder never resolved
+  (`reason: "no_base_ref"`) or the scan's own `git diff` itself failed
+  (`reason: "diff_failed"`) - meaning nothing was checked that run;
+  `data.sabotage.unverifiable` holds one entry per declaration the scan
+  could not check, each with a `reason` of `no_base_ref` or `diff_failed`
+  (the whole run, both cases), `file_unreadable` (the file could not be
+  read), `declaration_not_found` (the added line could not be located in
+  the working-tree file), or `untracked` (a path under a `test_roots`
+  prefix that `git status --porcelain` reports as untracked - invisible to
+  any diff, so it is reported rather than silently skipped). A consumer
+  that only reports the scan names `unverifiable` entries alongside
+  `missing` ones; a consumer that gates on the scan decides for itself what
+  a non-empty `unverifiable` means - the kit reports, it does not make that
+  call.
 - **`data.gate_guard` reports; it never writes.** There is no code path in
   `gate.rb` that writes `docs/quality-gate-changes.md` - `test/contract_test.rb`
   asserts that mechanically over every file under `scripts/`.
