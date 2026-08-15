@@ -133,12 +133,29 @@ defaults are listed under "Defaults" below.
 
 ## `repo.default_branch`
 
-The branch every "what did this branch change" three-dot diff is taken
-against: `git diff <repo.default_branch>...HEAD`. This is *not* the remote
-name - the remote is always `origin`, unconfigurable - only the branch name on
-it changes. Defaults to `"main"`.
+The branch every "what did this branch change" comparison is ultimately taken
+against. It names the *local* branch (defaults to `"main"`); the diff base
+itself is a small ladder, not that name directly - see `lib/base_ref.rb`
+(`BaseRef.resolve`/`BaseRef.changed_files`):
 
-Setting it moves several behaviors at once, all reading the same field:
+1. `origin/<repo.default_branch>` - the remote-tracking ref, tried first,
+   because under worktree-per-issue the local branch is routinely behind
+   origin (sibling worktrees merge and push without every checkout
+   fetching). This is *not* configurable by remote name - the remote is
+   always `origin` - only the branch name on it changes.
+2. `<repo.default_branch>` (the local branch) - the fallback when the remote
+   ref does not resolve (`git rev-parse --verify --quiet` fails, for example
+   in a shallow clone with no `origin` configured). Falling back here warns
+   (`stale_base_ref`) rather than silently diffing against a ref that may be
+   stale.
+
+The change set a caller acts on is the three-dot diff against whichever ref
+resolved, unioned with the working tree (`git status --porcelain`'s modified,
+added, and untracked paths) - so uncommitted edits are never invisible to
+area labeling, the gate carve-out, or the sabotage scan.
+
+Setting `repo.default_branch` moves several behaviors at once, all reading
+the same field:
 
 - the commit carve-out (`gate.rb`'s `gate_applicable?`, `/wurk:commit` Step 0)
 - the sabotage mutation-testing pathspec (`gate.rb`'s `sabotage_diff_args`)
@@ -146,6 +163,8 @@ Setting it moves several behaviors at once, all reading the same field:
 - worktree rebasing and staleness checks (`rebase_onto.rb`, `worktree_refresh.rb`,
   `worktree_survey.rb`, `worktree_create.rb`'s base-ref ladder)
 - the merge-time judge's base ref
+- `repo_state.rb`'s `changed_files`/`dirty_files`, reported alongside the
+  resolved ref itself (`data.base_ref`)
 
 A consumer whose default branch is `master`, `trunk`, or `develop` sets this
 field once instead of getting silently wrong diffs from every site above.

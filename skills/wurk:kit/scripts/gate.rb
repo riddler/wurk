@@ -7,6 +7,7 @@ require_relative "lib/sh"
 require_relative "lib/cli"
 require_relative "lib/gate_paths"
 require_relative "lib/manifest"
+require_relative "lib/base_ref"
 
 # Gate runs the consumer's own gate commands (gate.full, gate.loop,
 # gate.report, gate.report_loop, gate.attest) and reports which tier of
@@ -81,36 +82,17 @@ module Gate
   COMMENT_LINE_RE = /\A\s*#/.freeze
 
   class << self
-    def parse_status_porcelain(out)
-      out.to_s.each_line.map do |line|
-        line = line.chomp
-        next nil if line.empty?
-
-        path = line[3..-1].to_s
-        path.include?(" -> ") ? path.split(" -> ").last : path
-      end.compact
-    end
-
     # The carve-out predicate (see lib/gate_paths.rb) so /wurk:commit's Step 0
     # and this script cannot drift apart the way the trailer extraction once
     # did. Note this is `gate_applicable?`, not `touches_build?`: it is wider
     # than repo_state.rb's `touches_build` because a gate stage may measure
     # paths that touch no build at all.
-    def gate_applicable?(env, manifest)
-      base = manifest.default_branch
-      diff_res = Sh.run(["git", "diff", "--name-only", "#{base}...HEAD"], envelope: env)
-      diff_files =
-        if diff_res.success?
-          diff_res.out.to_s.each_line.map(&:strip).reject(&:empty?)
-        else
-          env.warn(code: "no_base_ref", message: "could not diff against local #{base}")
-          []
-        end
-
-      status_res = Sh.run(%w[git status --porcelain], envelope: env)
-      dirty_files = parse_status_porcelain(status_res.out)
-
-      GatePaths.gate_applicable?((diff_files + dirty_files).uniq, manifest: manifest)
+    #
+    # `changed` is resolved once per run (see run) and threaded in: the
+    # ladder shells out, warns on fallback, and gate.rb asks this question
+    # twice per invocation.
+    def gate_applicable?(manifest, changed)
+      GatePaths.gate_applicable?(changed[:files], manifest: manifest)
     end
 
     # The working-tree lookup below's default: reads the file from disk,
@@ -377,7 +359,8 @@ module Gate
       return env.emit(io) unless manifest
 
       ledger_path = manifest.gate_guard_ledger
-      applicable = gate_applicable?(env, manifest)
+      changed = BaseRef.changed_files(env, manifest: manifest)
+      applicable = gate_applicable?(manifest, changed)
 
       scan = sabotage_scan(env, manifest)
       env.data[:sabotage] = {

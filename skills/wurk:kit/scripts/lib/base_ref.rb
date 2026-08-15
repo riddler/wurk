@@ -52,7 +52,12 @@ module BaseRef
     # resolved base, unioned with the working tree. An unresolvable base
     # warns and degrades to the working tree alone rather than reporting
     # [] - "nothing changed" would be a lie the callers act on.
-    def changed_files(env, manifest: Manifest.current, override: nil)
+    #
+    # `working:` lets a caller that already has the working-tree list (e.g.
+    # repo_state.rb, which needs it separately for `dirty_files`) hand it in
+    # rather than have this method shell out `git status --porcelain` again.
+    # nil (the default) derives it here, same as before.
+    def changed_files(env, manifest: Manifest.current, override: nil, working: nil)
       base = resolve(env, manifest: manifest, override: override)
       diff_files =
         if base
@@ -68,7 +73,8 @@ module BaseRef
           []
         end
 
-      { base: base, diff_files: diff_files, files: (diff_files + working_files(env)).uniq.sort }
+      working_list = working || working_files(env)
+      { base: base, diff_files: diff_files, files: (diff_files + working_list).uniq.sort }
     end
 
     # merge-base of the resolved base and HEAD, for callers that want a

@@ -191,6 +191,21 @@ class BaseRefTest < Minitest::Test
     end
   end
 
+  # sabotage: ignore the `working:` argument and always derive the union via
+  # `working_files(env)` -> FakeSh raises UnexpectedCommand (no second
+  # `git status --porcelain` stub registered here) -> red
+  def test_changed_files_reuses_a_precomputed_working_list_without_reshelling_status
+    with_manifest(FIXTURE) do |manifest|
+      @fake.expect(%w[git rev-parse --verify --quiet origin/main], exitstatus: 0)
+      @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "b.rb\n")
+
+      result = BaseRef.changed_files(@env, manifest: manifest, working: %w[a.rb])
+
+      assert_equal %w[a.rb b.rb], result[:files]
+      refute(@fake.calls.any? { |c| c.argv == %w[git status --porcelain] })
+    end
+  end
+
   # --- merge_base ---------------------------------------------------------------
 
   # sabotage: shell out to `git merge-base` even when base is nil -> FakeSh

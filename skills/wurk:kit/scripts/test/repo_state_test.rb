@@ -38,6 +38,12 @@ class RepoStateTest < Minitest::Test
     @fake.expect(%w[git rev-parse --show-toplevel], out: "#{toplevel}\n")
   end
 
+  # Stubs the base-ref ladder's remote-first rung as a hit, so BaseRef.resolve
+  # picks `ref` (default "origin/main") without falling back or warning.
+  def expect_base_ref(ref: "origin/main")
+    @fake.expect(["git", "rev-parse", "--verify", "--quiet", ref], exitstatus: 0)
+  end
+
   def test_worktree_checkout_is_detected_and_branch_bead_is_weak
     expect_locate
     @fake.expect(%w[git branch --show-current], out: "zz-abc-exit-sets\n")
@@ -49,7 +55,8 @@ class RepoStateTest < Minitest::Test
     @fake.expect(["git", "rev-list", "--count", "origin/zz-abc-exit-sets..HEAD"], out: "1\n")
     @fake.expect(["git", "rev-list", "--count", "HEAD..origin/zz-abc-exit-sets"], out: "0\n")
     @fake.expect(%w[git log], out: "")
-    @fake.expect(%w[git diff --name-only main...HEAD], out: "")
+    expect_base_ref
+    @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "")
 
     code, env = run_repo_state
 
@@ -77,7 +84,8 @@ class RepoStateTest < Minitest::Test
     @fake.expect(["git", "rev-list", "--count"], out: "0\n")
     @fake.expect(["git", "rev-list", "--count"], out: "0\n")
     @fake.expect(%w[git log], out: "")
-    @fake.expect(%w[git diff --name-only main...HEAD], out: "")
+    expect_base_ref
+    @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "")
 
     code, env = run_repo_state
 
@@ -103,7 +111,8 @@ class RepoStateTest < Minitest::Test
     @fake.expect(["git", "rev-list", "--count", "origin/zz-abc-x..HEAD"], out: "1\n")
     @fake.expect(["git", "rev-list", "--count", "HEAD..origin/zz-abc-x"], out: "0\n")
     @fake.expect(%w[git log], out: "")
-    @fake.expect(%w[git diff --name-only main...HEAD], out: "")
+    expect_base_ref
+    @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "")
 
     code, env = run_repo_state
 
@@ -121,7 +130,8 @@ class RepoStateTest < Minitest::Test
       ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
       exitstatus: 1, err: "fatal: no upstream configured\n"
     )
-    @fake.expect(%w[git diff --name-only main...HEAD], out: "")
+    expect_base_ref
+    @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "")
 
     code, env = run_repo_state
 
@@ -148,7 +158,8 @@ class RepoStateTest < Minitest::Test
 
     record = "abc1234full\x1fAdds retry backoff\x1fAdds retry backoff\n\nRefs: zz-abc\n\x1e"
     @fake.expect(%w[git log], out: record)
-    @fake.expect(%w[git diff --name-only main...HEAD], out: "")
+    expect_base_ref
+    @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "")
 
     code, env = run_repo_state
 
@@ -169,8 +180,9 @@ class RepoStateTest < Minitest::Test
       ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
       exitstatus: 1
     )
+    expect_base_ref
     @fake.expect(
-      %w[git diff --name-only main...HEAD],
+      %w[git diff --name-only origin/main...HEAD],
       out: "docs/plans/260806-zz-00p-x.md\nchangelog.d/zz-00p.md\ndocs/adr/0011.md\n"
     )
 
@@ -202,8 +214,9 @@ class RepoStateTest < Minitest::Test
     @fake.expect(%w[git branch --show-current], out: "zz-abc-x\n")
     @fake.expect(%w[git status --porcelain], out: "")
     @fake.expect(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], exitstatus: 1)
+    expect_base_ref
     @fake.expect(
-      %w[git diff --name-only main...HEAD],
+      %w[git diff --name-only origin/main...HEAD],
       out: "thoughts/shared/plans/260806-zz-abc.md\nnotes/unreleased/zz-abc.md\ndocs/plans/260806-zz-abc.md\n"
     )
 
@@ -223,7 +236,8 @@ class RepoStateTest < Minitest::Test
     @fake.expect(%w[git branch --show-current], out: "zz-abc-x\n")
     @fake.expect(%w[git status --porcelain], out: "")
     @fake.expect(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], exitstatus: 1)
-    @fake.expect(%w[git diff --name-only main...HEAD], out: "changelog.d/zz-abc.md\n")
+    expect_base_ref
+    @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "changelog.d/zz-abc.md\n")
 
     _code, env = run_repo_state
 
@@ -236,11 +250,13 @@ class RepoStateTest < Minitest::Test
     @fake.expect(%w[git branch --show-current], out: "zz-abc-x\n")
     @fake.expect(%w[git status --porcelain], out: "")
     @fake.expect(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], exitstatus: 1)
-    @fake.expect(%w[git diff --name-only main...HEAD], out: "")
+    expect_base_ref
+    @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "")
 
     _code, env = run_repo_state
 
     assert_equal "main", env["data"]["default_branch"]
+    assert_equal "origin/main", env["data"]["base_ref"]
   end
 
   # sabotage: read a hardcoded "main...HEAD" instead of manifest.default_branch
@@ -253,12 +269,33 @@ class RepoStateTest < Minitest::Test
     @fake.expect(%w[git branch --show-current], out: "zz-abc-x\n")
     @fake.expect(%w[git status --porcelain], out: "")
     @fake.expect(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], exitstatus: 1)
-    @fake.expect(%w[git diff --name-only trunk...HEAD], out: "docs/plans/260806-zz-abc.md\n")
+    expect_base_ref(ref: "origin/trunk")
+    @fake.expect(%w[git diff --name-only origin/trunk...HEAD], out: "docs/plans/260806-zz-abc.md\n")
 
     _code, env = run_repo_state
 
     assert_equal "trunk", env["data"]["default_branch"]
+    assert_equal "origin/trunk", env["data"]["base_ref"]
     assert_equal ["docs/plans/260806-zz-abc.md"], env["data"]["plan_docs"]
+  end
+
+  # sabotage: drop the `working:` param wiring in repo_state.rb (call
+  # BaseRef.changed_files without `working: dirty_files`) -> BaseRef derives
+  # its own union via a second `git status --porcelain` call, which FakeSh
+  # has no second stub for here -> UnexpectedCommand
+  def test_remote_ref_miss_falls_back_to_local_branch_with_warning
+    expect_locate
+    @fake.expect(%w[git branch --show-current], out: "zz-abc-x\n")
+    @fake.expect(%w[git status --porcelain], out: "")
+    @fake.expect(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], exitstatus: 1)
+    @fake.expect(%w[git rev-parse --verify --quiet origin/main], exitstatus: 1)
+    @fake.expect(%w[git rev-parse --verify --quiet main], exitstatus: 0)
+    @fake.expect(%w[git diff --name-only main...HEAD], out: "")
+
+    _code, env = run_repo_state
+
+    assert_equal "main", env["data"]["base_ref"]
+    assert(env["warnings"].any? { |w| w["code"] == "stale_base_ref" })
   end
 
   def test_not_a_git_repo_blocks_with_needs_human
