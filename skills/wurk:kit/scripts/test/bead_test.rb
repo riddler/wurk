@@ -218,6 +218,12 @@ class BeadCliTest < Minitest::Test
     [code, JSON.parse(io.string)]
   end
 
+  # Stubs the base-ref ladder's remote-first rung as a hit, so BaseRef.resolve
+  # picks `ref` (default "origin/main") without falling back or warning.
+  def expect_base_ref(ref: "origin/main")
+    @fake.expect(["git", "rev-parse", "--verify", "--quiet", ref], exitstatus: 0)
+  end
+
   # --- show --------------------------------------------------------------
 
   def test_show_unwraps_array_and_splits_notes_into_a_list
@@ -413,7 +419,9 @@ class BeadCliTest < Minitest::Test
   # --- resolve ----------------------------------------------------------------
 
   def test_resolve_without_seeded_bead_prefers_plan_doc_over_branch_prefix
-    @fake.expect(%w[git diff main...HEAD --name-only], out: "docs/plans/260806-zz-hzf-skill-mechanics-scripts.md\n")
+    expect_base_ref
+    @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "docs/plans/260806-zz-hzf-skill-mechanics-scripts.md\n")
+    @fake.expect(%w[git status --porcelain], out: "")
     @fake.expect(%w[git branch --show-current], out: "zz-oth-some-other-branch\n")
     @fake.expect(%w[bd show zz-hzf --json], out: JSON.generate([{ "id" => "zz-hzf", "status" => "in_progress" }]))
     @fake.expect(%w[bd show zz-oth --json], out: JSON.generate([{ "id" => "zz-oth", "status" => "open" }]))
@@ -427,7 +435,9 @@ class BeadCliTest < Minitest::Test
   end
 
   def test_resolve_ranks_seeded_bead_first_when_given
-    @fake.expect(%w[git diff main...HEAD --name-only], out: "docs/plans/260806-zz-hzf-skill-mechanics-scripts.md\n")
+    expect_base_ref
+    @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "docs/plans/260806-zz-hzf-skill-mechanics-scripts.md\n")
+    @fake.expect(%w[git status --porcelain], out: "")
     @fake.expect(%w[git branch --show-current], out: "zz-oth-some-other-branch\n")
     @fake.expect(%w[bd show zz-seed --json], out: JSON.generate([{ "id" => "zz-seed", "status" => "open" }]))
     @fake.expect(%w[bd show zz-hzf --json], out: JSON.generate([{ "id" => "zz-hzf", "status" => "in_progress" }]))
@@ -443,7 +453,9 @@ class BeadCliTest < Minitest::Test
   end
 
   def test_resolve_surfaces_closed_bead_as_a_warning_never_silently
-    @fake.expect(%w[git diff main...HEAD --name-only], out: "\n")
+    expect_base_ref
+    @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "\n")
+    @fake.expect(%w[git status --porcelain], out: "")
     @fake.expect(%w[git branch --show-current], out: "zz-xyz-something\n")
     @fake.expect(%w[bd show zz-xyz --json], out: JSON.generate([{ "id" => "zz-xyz", "status" => "closed" }]))
 
@@ -456,13 +468,16 @@ class BeadCliTest < Minitest::Test
     assert env["warnings"].any? { |w| w["code"] == "bead_unavailable" }
   end
 
-  # sabotage: read a hardcoded "main...HEAD" in resolve_plan_doc_bead instead
-  # of manifest.default_branch -> red (FakeSh::UnexpectedCommand: no stub for
-  # "main...HEAD" here, only "trunk...HEAD")
+  # sabotage: read a hardcoded "origin/main...HEAD" in resolve_plan_doc_bead
+  # instead of BaseRef's manifest-derived base -> red (FakeSh::
+  # UnexpectedCommand: no stub for "origin/main...HEAD" here, only
+  # "origin/trunk...HEAD")
   def test_resolve_with_trunk_override_diffs_against_trunk
     other = manifest_with("valid", "repo" => { "default_branch" => "trunk" })
 
-    @fake.expect(%w[git diff trunk...HEAD --name-only], out: "docs/plans/260806-zz-hzf-skill-mechanics-scripts.md\n")
+    expect_base_ref(ref: "origin/trunk")
+    @fake.expect(%w[git diff --name-only origin/trunk...HEAD], out: "docs/plans/260806-zz-hzf-skill-mechanics-scripts.md\n")
+    @fake.expect(%w[git status --porcelain], out: "")
     @fake.expect(%w[git branch --show-current], out: "zz-oth-some-other-branch\n")
     @fake.expect(%w[bd show zz-hzf --json], out: JSON.generate([{ "id" => "zz-hzf", "status" => "in_progress" }]))
     @fake.expect(%w[bd show zz-oth --json], out: JSON.generate([{ "id" => "zz-oth", "status" => "open" }]))
@@ -475,6 +490,26 @@ class BeadCliTest < Minitest::Test
     assert_equal 0, code
     assert_equal "zz-hzf", env["data"]["resolved"]["id"]
     assert_equal "plan_doc", env["data"]["resolved"]["strategy"]
+  end
+
+  # sabotage: make resolve_plan_doc_bead scan only the committed diff
+  # (drop BaseRef.changed_files' working-tree union) -> red
+  # (FakeSh::UnexpectedCommand: no stub for "git status --porcelain"
+  # returning the untracked plan path here, or resolved bead comes back nil)
+  def test_resolve_finds_plan_doc_in_untracked_file_with_no_committed_diff
+    expect_base_ref
+    @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "")
+    @fake.expect(%w[git status --porcelain], out: "?? docs/plans/260814-zz-abc-untitled.md\n")
+    @fake.expect(%w[git branch --show-current], out: "zz-oth-some-other-branch\n")
+    @fake.expect(%w[bd show zz-abc --json], out: JSON.generate([{ "id" => "zz-abc", "status" => "in_progress" }]))
+    @fake.expect(%w[bd show zz-oth --json], out: JSON.generate([{ "id" => "zz-oth", "status" => "open" }]))
+
+    code, env = run_bead(%w[resolve])
+
+    assert_equal 0, code
+    assert_equal "zz-abc", env["data"]["resolved"]["id"]
+    assert_equal "plan_doc", env["data"]["resolved"]["strategy"]
+    assert_equal "strong", env["data"]["resolved"]["confidence"]
   end
 
   # --- no close subcommand ------------------------------------------------
