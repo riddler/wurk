@@ -136,8 +136,10 @@ fact.
 
    One call lists candidates, surveys live workspaces for the areas they
    already hold, annotates every candidate with a verdict, and runs the greedy
-   priority-ordered walk. **Nothing is claimed by this call** - it only
-   reports.
+   priority-ordered walk. **In manual mode, nothing is claimed by this call -
+   it only reports.** Under `--auto`, the script claims each bead atomically
+   at the moment its walk takes it, so `data.recommended` in auto mode means
+   "recommended and claimed" (ADR-0012).
 
    The live-workspace survey does not simply trust that step 0.5 ran and
    succeeded: for every live workspace it also asks the forge whether that
@@ -175,10 +177,16 @@ fact.
      not a risk to accept but pure waste with no cleanup path (an upstream
      bead opens no request, so `/wurk:cleanup` never reaps it). See
      ADR-0009.
-   - **`data.recommended`** - the greedy pick. Label it the **recommended
-     batch**: an option to present, not the outcome to report.
+   - **`data.recommended`** - the greedy pick. In manual mode, label it the
+     **recommended batch**: an option to present, not the outcome to report.
+     Under `--auto`, it is already claimed (ADR-0012): the script claimed
+     each bead at the moment its walk took it, so this list is the outcome,
+     not an option.
    - **`data.skipped`** - id plus reason for everything not recommended,
-     including explicit ceiling reasoning ("asked for 4, took 2").
+     including explicit ceiling reasoning ("asked for 4, took 2"). Under
+     `--auto`, a skip reason can also be a contended claim - a bead another
+     session claimed between listing and the walk reaching it - flagged with
+     a `claim_contended` warning alongside the skip.
    - **`data.ceiling_hit`** - true when more legal candidates existed than `n`
      allowed. Surface it explicitly.
    - **`data.alternatives`** - override options, manual mode only; always
@@ -244,8 +252,11 @@ fact.
 
    **Auto mode:** skip the picker. Take `data.recommended` as-is - a live
    collision is already a hard skip inside the script's walk, and
-   `data.alternatives` is empty, so there is no override to consider. Print the
-   picked and skipped lists and proceed without confirming.
+   `data.alternatives` is empty, so there is no override to consider. The
+   beads in `data.recommended` are already claimed (ADR-0012): the script
+   claimed each one at the moment its walk took it. Print the picked and
+   skipped lists and proceed straight to step 3, skipping step 4's claim loop
+   entirely.
 
 3. **Compute a branch name per bead**: `<id>-<slug>`, the slug 2-4
    distinctive kebab-case words from the title, not a full transcription.
@@ -255,8 +266,10 @@ fact.
    Each name is fixed at creation and never renamed afterwards, even if the
    branch grows to carry more beads.
 
-4. **Claim every bead in the chosen batch - all of them, before any workspace
-   exists.**
+4. **Claim every bead in the chosen batch (manual mode) - all of them, before
+   any workspace exists.** Under `--auto`, this claim already happened inside
+   selection (ADR-0012): skip straight to this step's `bead.rb sync push` and
+   run nothing else here.
 
    ```bash
    ruby ~/.claude/skills/wurk:kit/scripts/bead.rb claim <id>   # once per bead
@@ -354,7 +367,8 @@ fact.
   that shows constraints without subjects has failed the same way.
 - **Claim the whole batch before creating any workspace**, not per-bead
   claim-then-workspace - that leaves workspaces for beads whose claim later
-  fails.
+  fails. Under `--auto`, the claim happens earlier still, inside selection
+  (ADR-0012) - that strengthens this rule rather than relaxing it.
 - Sync and cleanup steps are best-effort and must never gate a claim. Offline
   is not a reason to abort a pickup.
 - **Areas are about file collision, not subject matter.** Two beads both
