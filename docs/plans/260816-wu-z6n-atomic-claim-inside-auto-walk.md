@@ -553,14 +553,14 @@ Commit title: `Reports auto claims from the envelope` (36 chars).
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes (`ruby skills/wurk:kit/scripts/test/run.rb`)
-- [ ] `grep -n "Nothing is claimed by this call" skills/wurk:next/SKILL.md`
+- [x] Full quality gate passes (`ruby skills/wurk:kit/scripts/test/run.rb`)
+- [x] `grep -n "Nothing is claimed by this call" skills/wurk:next/SKILL.md`
       returns nothing (the unqualified sentence is gone)
-- [ ] `grep -n "bd_claim_failed" skills/wurk:next/SKILL.md` still returns the
+- [x] `grep -n "bd_claim_failed" skills/wurk:next/SKILL.md` still returns the
       manual-mode fallback
-- [ ] `grep -n "ADR-0012" skills/wurk:next/SKILL.md` returns at least one
+- [x] `grep -n "ADR-0012" skills/wurk:next/SKILL.md` returns at least one
       line
-- [ ] `git diff` for the phase touches only `skills/wurk:next/SKILL.md`
+- [x] `git diff` for the phase touches only `skills/wurk:next/SKILL.md`
 
 #### Manual Verification:
 - [ ] `/wurk:next --auto` end to end: the beads reported as claimed are
@@ -694,6 +694,30 @@ of blocking here.
       else, confirmed with `bd show` on both a taken and a skipped id
 - [ ] No regressions in the verdict table: epic, unlabeled, upstream, and
       live-worktree-collision beads are still skipped and still unclaimed
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 3
+
+- [ ] `/wurk:next --auto` end to end: the beads reported as claimed are
+      claimed, contended beads are reported as skipped with their reason,
+      and no bead is claimed twice or left claimed without a workspace being
+      attempted
+- [ ] `/wurk:next` (manual) still presents the candidate table, claims
+      nothing before the pick, and drops a `bd_claim_failed` bead from the
+      batch while keeping the rest
+- [ ] `bead.rb sync push` still runs once per batch in both modes
+- [ ] The merge-time judge (`/wurk:mr`) does not flag the skill diff; if it
+      does, the finding is answered on its merits rather than by deleting
+      the judged prose
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
