@@ -94,6 +94,60 @@ class DocMetaLibTest < Minitest::Test
     assert_match(/^tags: \[a, b\]$/, rendered)
   end
 
+  # sabotage: restore render_value's old `.inspect` branch for topic -> the
+  # escaped backslash gains a second level of escaping and this goes red
+  def test_topic_with_embedded_double_quotes_round_trips
+    topic = 'Research on type="scxml" attribute handling'
+
+    rendered = DocMeta.render_value("topic", topic)
+
+    assert_equal topic, DocMeta.parse_value(rendered)
+  end
+
+  def test_topic_with_a_literal_backslash_round_trips
+    topic = 'Windows path C:\\Users\\name and a "quoted" segment'
+
+    rendered = DocMeta.render_value("topic", topic)
+
+    assert_equal topic, DocMeta.parse_value(rendered)
+  end
+
+  # sabotage: drop the unescape in parse_value -> each apply_follow_up call
+  # adds another level of backslash escaping to the quoted topic, so the
+  # third run's frontmatter differs from a fresh render of the same fields
+  # and this goes red
+  def test_repeated_follow_up_runs_leave_frontmatter_byte_identical
+    original = <<~DOC
+      ---
+      date: 2026-08-01T10:00:00-0600
+      researcher: Claude
+      git_commit: aaa1111
+      branch: main
+      repository: statifier-ex
+      topic: "Topic quoting an XML attribute type=\\"scxml\\" here"
+      tags: [research]
+      status: complete
+      last_updated: 2026-08-01
+      last_updated_by: Claude
+      ---
+
+      body
+    DOC
+    topic = 'Topic quoting an XML attribute type="scxml" here'
+
+    once = DocMeta.apply_follow_up(original, date_iso: "2026-08-02T00:00:00-0600", note: "same note")
+    twice = DocMeta.apply_follow_up(once, date_iso: "2026-08-03T00:00:00-0600", note: "same note")
+    thrice = DocMeta.apply_follow_up(twice, date_iso: "2026-08-04T00:00:00-0600", note: "same note")
+
+    fm_twice = twice[/\A---\n.*?\n---\n/m]
+    fm_thrice = thrice[/\A---\n.*?\n---\n/m]
+
+    # last_updated is the only field that changes call to call; strip it
+    # before comparing so the assertion is purely about escaping stability
+    assert_equal fm_twice.sub(/^last_updated: .*$/, ""), fm_thrice.sub(/^last_updated: .*$/, "")
+    assert_equal topic, DocMeta.parse_frontmatter(fm_thrice)["topic"]
+  end
+
   # --- the follow-up mutation is additive -----------------------------------
 
   def test_apply_follow_up_bumps_last_updated_and_adds_note_and_heading
