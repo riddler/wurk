@@ -17,9 +17,12 @@ require_relative "worktree_survey"
 # .claude/skills/next-issues/SKILL.md's Steps 1-3 (the verdict table lives at
 # SKILL.md:170-185).
 #
-# This script never claims a bead and never creates a worktree - selection is
-# the only thing it does. `recommended` is a recommendation, not an outcome:
-# the envelope always carries `mode`, and only sets `requires_user_choice` in
+# Manual mode claims nothing, and this script creates no worktree in
+# either mode - selection is the only thing it does. In auto mode
+# (ADR-0012) the greedy walk claims each bead at the moment it takes it, so
+# `data.recommended` means "recommended and claimed". `recommended` is a
+# recommendation, not an outcome: the
+# envelope always carries `mode`, and only sets `requires_user_choice` in
 # manual mode, so a calling model cannot read `recommended` as the decision.
 # The picker itself stays in the skill. The `upstream` verdict is how it
 # keeps /wurk:next from claiming or standing up a worktree for a bead whose
@@ -63,7 +66,7 @@ module SelectBatch
       held_areas = held_areas_map(env)
 
       candidates = issues.map { |issue| annotate(issue, held_areas) }
-      walked = walk(candidates, options[:n])
+      walked = walk(candidates, options[:n], env, claim: options[:auto], dry_run: options[:dry_run])
 
       env.data["candidates"] = candidates.map { |c| public_candidate(c) }
       env.data["recommended"] = walked[:recommended]
@@ -127,7 +130,7 @@ module SelectBatch
     end
 
     def usage
-      "usage: select_batch.rb [--n N] [--auto] [<bead-id> ...] [bd-ready-flags...]"
+      "usage: select_batch.rb [--n N] [--auto] [--dry-run] [<bead-id> ...] [bd-ready-flags...]"
     end
 
     # --- candidate listing --------------------------------------------------
@@ -276,14 +279,44 @@ module SelectBatch
       }
     end
 
+    # --- claim at take (ADR-0012, auto mode only) ---------------------------
+    #
+    # Returns nil when the bead is (or would be) claimed, and the failure
+    # message when the claim was refused. In manual mode it is never called.
+    # --dry-run is passed straight through to bead.rb claim, which renders
+    # the command into its own `commands` without shelling out - that is
+    # what makes a dry auto run claim nothing while still reporting what it
+    # would claim.
+    def claim_take(id, env, dry_run:)
+      argv = ["claim", id]
+      argv << "--dry-run" if dry_run
+
+      io = StringIO.new
+      Bead.run(argv, io: io)
+      parsed = JSON.parse(io.string)
+      env.commands.concat(parsed["commands"] || [])
+      return nil if parsed["ok"]
+
+      message = (parsed["blocked"] || []).map { |b| b["message"] }.join("; ")
+      message.empty? ? "bd update --claim failed" : message
+    end
+
+    def contention_reason(failure)
+      "claim failed - taken by another session since listing (bd: #{failure})"
+    end
+
     # --- the greedy walk (.claude/skills/next-issues/SKILL.md Step 3) -------
     #
     # Highest priority first (bd ready's own order): skip epic / unlabeled /
     # live-worktree-collision, area:build takes the batch alone, otherwise
     # take and union in areas, skip on collides-in-batch. Stops at n beads
-    # or the end of the list - n is a ceiling, not a target.
+    # or the end of the list - n is a ceiling, not a target. In auto mode
+    # (ADR-0012), the take step for "lands-alone" and "free" claims the bead
+    # via claim_take before it is committed to `recommended` or unioned into
+    # `batch_areas`; a contended claim is a named skip and the walk
+    # continues.
 
-    def walk(candidates, n)
+    def walk(candidates, n, env, claim: false, dry_run: false)
       recommended = []
       skipped = []
       batch_areas = []
@@ -299,17 +332,32 @@ module SelectBatch
           skipped << { "id" => c[:id], "reason" => c[:reason] }
         when "lands-alone"
           if recommended.empty?
-            recommended << c[:id]
-            alone = true
-            break
+            failure = claim ? claim_take(c[:id], env, dry_run: dry_run) : nil
+            if failure
+              # A contended lands-alone candidate does not take the batch:
+              # the alone state is never entered and the walk resumes
+              # normally (ADR-0012's implementation detail).
+              skipped << { "id" => c[:id], "reason" => contention_reason(failure) }
+              env.warn(code: "claim_contended", message: "#{c[:id]}: #{failure}")
+            else
+              recommended << c[:id]
+              alone = true
+              break
+            end
           else
             skipped << { "id" => c[:id], "reason" => "area:build lands alone; batch already holds other beads" }
           end
         else # "free"
           overlap = batch_areas & c[:areas]
           if overlap.empty?
-            recommended << c[:id]
-            batch_areas |= c[:areas]
+            failure = claim ? claim_take(c[:id], env, dry_run: dry_run) : nil
+            if failure
+              skipped << { "id" => c[:id], "reason" => contention_reason(failure) }
+              env.warn(code: "claim_contended", message: "#{c[:id]}: #{failure}")
+            else
+              recommended << c[:id]
+              batch_areas |= c[:areas]
+            end
           else
             holder = recommended.last
             skipped << { "id" => c[:id], "reason" => "collides in-batch: #{overlap.join(', ')} (already taken by #{holder})" }

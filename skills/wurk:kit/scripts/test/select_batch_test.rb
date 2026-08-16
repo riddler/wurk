@@ -71,6 +71,17 @@ class SelectBatchTest < Minitest::Test
     @fake.expect(["bd", "ready", "--json"] + filters, out: JSON.generate(issues))
   end
 
+  # Auto mode claims at take (ADR-0012), so every auto test whose walk takes
+  # a bead must authorize that bead's claim. Registering it per id rather
+  # than as a blanket prefix keeps FakeSh's "unauthorized command" raise as
+  # the check that the script claims exactly what it took and nothing else.
+  def expect_claim(*ids, exitstatus: 0, err: "")
+    ids.each do |id|
+      @fake.expect(["bd", "update", id, "--claim"],
+                   out: JSON.generate([{ "id" => id }]), err: err, exitstatus: exitstatus)
+    end
+  end
+
   def issue(id, priority:, labels:, issue_type: "chore", description: "Description for #{id}.")
     { "id" => id, "title" => "title for #{id}", "priority" => priority, "issue_type" => issue_type, "labels" => labels,
       "description" => description }
@@ -84,6 +95,7 @@ class SelectBatchTest < Minitest::Test
                    issue("zz-int", priority: 2, labels: ["area:alpha"])
                  ])
     expect_empty_survey
+    expect_claim("zz-bld")
 
     _code, env = run_select(["--auto"])
 
@@ -149,6 +161,7 @@ class SelectBatchTest < Minitest::Test
                    issue("zz-up", priority: 2, labels: ["upstream"])
                  ])
     expect_empty_survey
+    expect_claim("zz-fst")
 
     _code, env = run_select(["--n", "1", "--auto"])
 
@@ -174,6 +187,7 @@ class SelectBatchTest < Minitest::Test
   def test_stale_worktree_areas_do_not_block
     expect_ready([issue("zz-new", priority: 1, labels: ["area:alpha"])])
     expect_survey_with_worktree(branch: "zz-old-thing", bead_id: "zz-old", labels: ["area:alpha"], merged: true)
+    expect_claim("zz-new")
 
     _code, env = run_select(["--auto"])
 
@@ -190,6 +204,7 @@ class SelectBatchTest < Minitest::Test
   def test_2026_08_05_phantom_collision_regression
     expect_ready([issue("zz-d9g", priority: 1, labels: ["area:gamma"])])
     expect_survey_with_worktree(branch: "zz-o9a-corpus-thing", bead_id: "zz-o9a", labels: ["area:gamma"], merged: true)
+    expect_claim("zz-d9g")
 
     _code, env = run_select(["--auto"])
 
@@ -219,6 +234,7 @@ class SelectBatchTest < Minitest::Test
                    issue("zz-child", priority: 2, labels: ["area:gamma"])
                  ])
     expect_empty_survey
+    expect_claim("zz-child")
 
     _code, env = run_select(["--auto"])
 
@@ -244,6 +260,7 @@ class SelectBatchTest < Minitest::Test
                    issue("zz-b", priority: 2, labels: ["area:beta"])
                  ])
     expect_empty_survey
+    expect_claim("zz-a", "zz-b")
 
     _code, env = run_select(["--n", "3", "--auto"])
 
@@ -258,6 +275,7 @@ class SelectBatchTest < Minitest::Test
                    issue("zz-c", priority: 3, labels: ["area:delta"])
                  ])
     expect_empty_survey
+    expect_claim("zz-a", "zz-b")
 
     _code, env = run_select(["--n", "2", "--auto"])
 
@@ -312,6 +330,7 @@ class SelectBatchTest < Minitest::Test
                    issue("zz-b", priority: 2, labels: ["area:alpha"])
                  ])
     expect_empty_survey
+    expect_claim("zz-a")
 
     _code, env = run_select(["-l", "area:epsilon", "--auto"])
 
@@ -340,6 +359,7 @@ class SelectBatchTest < Minitest::Test
                                  description: "Extends the parser's guard clause. More detail follows.")
                  ])
     expect_empty_survey
+    expect_claim("zz-a", "zz-b")
 
     _code, env = run_select(["--auto"])
 
@@ -365,6 +385,7 @@ class SelectBatchTest < Minitest::Test
       }])
     )
     expect_empty_survey
+    expect_claim("zz-trm")
 
     _code, env = run_select(["zz-trm", "--auto"])
 
@@ -377,6 +398,7 @@ class SelectBatchTest < Minitest::Test
   def test_candidate_with_empty_description_carries_summary_key_with_nil_value
     expect_ready([issue("zz-nod", priority: 1, labels: ["area:alpha"], description: "")])
     expect_empty_survey
+    expect_claim("zz-nod")
 
     _code, env = run_select(["--auto"])
 
@@ -401,6 +423,7 @@ class SelectBatchTest < Minitest::Test
                      "description" => "plan_state_test.rb's real-plan fixture assumes an always-incomplete phase." }
                  ])
     expect_empty_survey
+    expect_claim("zz-trm", "zz-tgv")
 
     _code, env = run_select(["--auto"])
 
@@ -408,5 +431,111 @@ class SelectBatchTest < Minitest::Test
     tgv = env["data"]["candidates"].find { |c| c["id"] == "zz-tgv" }
     assert_equal trm["title"], tgv["title"]
     refute_equal trm["summary"], tgv["summary"]
+  end
+
+  # --- claim at take (ADR-0012, wu-z6n phase 2) ---------------------------
+
+  # sabotage: drop the claim_take call from the "free" branch -> red, no
+  # bd update call is recorded for either recommended bead
+  def test_auto_claims_exactly_the_beads_the_walk_took
+    expect_ready([
+                   issue("zz-a", priority: 1, labels: ["area:alpha"]),
+                   issue("zz-b", priority: 2, labels: ["area:beta"]),
+                   issue("zz-c", priority: 3, labels: ["area:alpha"])
+                 ])
+    expect_empty_survey
+    expect_claim("zz-a", "zz-b")
+
+    _code, env = run_select(["--auto"])
+
+    assert_equal %w[zz-a zz-b], env["data"]["recommended"]
+    claimed_ids = @fake.calls.select { |c| c.argv[0, 2] == %w[bd update] }.map { |c| c.argv[2] }
+    assert_equal %w[zz-a zz-b], claimed_ids
+  end
+
+  # sabotage: treat a failed claim as a take (ignore claim_take's return)
+  # -> red, the contended bead appears in recommended
+  def test_contended_claim_skips_and_the_walk_continues
+    expect_ready([
+                   issue("zz-a", priority: 1, labels: ["area:alpha"]),
+                   issue("zz-b", priority: 2, labels: ["area:beta"])
+                 ])
+    expect_empty_survey
+    expect_claim("zz-a", exitstatus: 1, err: "already claimed by another session")
+    expect_claim("zz-b")
+
+    code, env = run_select(["--auto"])
+
+    assert_equal ["zz-b"], env["data"]["recommended"]
+    skipped = env["data"]["skipped"].find { |s| s["id"] == "zz-a" }
+    assert_match(/claim failed/, skipped["reason"])
+    assert_match(/already claimed by another session/, skipped["reason"])
+    assert env["warnings"].any? { |w| w["code"] == "claim_contended" && w["message"].include?("zz-a") }
+    assert_equal true, env["ok"]
+    assert_equal 0, code
+  end
+
+  # sabotage: union zz-a's areas into batch_areas before the claim ->
+  # red, zz-b (sharing an area with zz-a) is skipped as an in-batch
+  # collision instead of being taken
+  def test_contended_bead_does_not_consume_the_batch_area_budget
+    expect_ready([
+                   issue("zz-a", priority: 1, labels: ["area:alpha"]),
+                   issue("zz-b", priority: 2, labels: ["area:alpha"])
+                 ])
+    expect_empty_survey
+    expect_claim("zz-a", exitstatus: 1, err: "already claimed by another session")
+    expect_claim("zz-b")
+
+    _code, env = run_select(["--auto"])
+
+    assert_equal ["zz-b"], env["data"]["recommended"]
+    skipped = env["data"]["skipped"].find { |s| s["id"] == "zz-a" }
+    assert_match(/claim failed/, skipped["reason"])
+  end
+
+  # sabotage: on a contended lands-alone candidate, still set alone = true
+  # and break -> red, the following free bead is never taken
+  def test_contended_lands_alone_candidate_voids_alone_and_the_walk_resumes
+    expect_ready([
+                   issue("zz-bld", priority: 1, labels: ["area:build"]),
+                   issue("zz-int", priority: 2, labels: ["area:alpha"])
+                 ])
+    expect_empty_survey
+    expect_claim("zz-bld", exitstatus: 1, err: "already claimed by another session")
+    expect_claim("zz-int")
+
+    _code, env = run_select(["--auto"])
+
+    assert_equal ["zz-int"], env["data"]["recommended"]
+    skipped = env["data"]["skipped"].find { |s| s["id"] == "zz-bld" }
+    assert_match(/claim failed/, skipped["reason"])
+    refute_match(/lands alone/, skipped["reason"])
+  end
+
+  # sabotage: drop the `--dry-run` passthrough in claim_take -> red,
+  # FakeSh raises on an unauthorized bd update
+  def test_dry_run_auto_claims_nothing_and_renders_the_claim_commands
+    expect_ready([issue("zz-a", priority: 1, labels: ["area:alpha"])])
+    expect_empty_survey
+
+    _code, env = run_select(["--auto", "--dry-run"])
+
+    assert_equal ["zz-a"], env["data"]["recommended"]
+    refute @fake.calls.any? { |c| c.argv[0, 2] == %w[bd update] }
+    assert env["commands"].any? { |c| c.include?("bd update zz-a --claim --json") }
+  end
+
+  # sabotage: call claim_take unconditionally (drop the `claim` guard) ->
+  # red, FakeSh raises on an unauthorized bd update in manual mode
+  def test_manual_mode_executes_no_claim
+    expect_ready([issue("zz-a", priority: 1, labels: ["area:alpha"])])
+    expect_empty_survey
+
+    _code, env = run_select([])
+
+    assert_equal "manual", env["data"]["mode"]
+    refute @fake.calls.any? { |c| c.argv[0, 2] == %w[bd update] }
+    assert_equal ["zz-a"], env["data"]["recommended"]
   end
 end
