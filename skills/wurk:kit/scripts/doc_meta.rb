@@ -57,7 +57,8 @@ module DocMeta
 
     # Renders the frontmatter block, "---" delimiters included, in field
     # order - skipping any optional field whose value is nil/empty. topic is
-    # double-quoted; tags renders as a bracketed, comma-separated list.
+    # double-quoted, with backslashes and double quotes escaped; tags renders
+    # as a bracketed, comma-separated list.
     def render_frontmatter(fields)
       lines = ["---"]
       FRONTMATTER_FIELDS.each do |key|
@@ -74,7 +75,7 @@ module DocMeta
     def render_value(key, value)
       case key
       when "topic"
-        value.to_s.include?('"') ? value.to_s.inspect : "\"#{value}\""
+        "\"#{escape_topic(value.to_s)}\""
       when "tags"
         "[#{Array(value).join(', ')}]"
       else
@@ -83,9 +84,9 @@ module DocMeta
     end
 
     # Parses a frontmatter block (leading/trailing "---" included) back into
-    # a plain string-keyed hash - the inverse of render_frontmatter. Good
-    # enough for this codebase's controlled format; not a general YAML
-    # parser.
+    # a plain string-keyed hash - the inverse of render_frontmatter, including
+    # unescaping a quoted topic's backslashes and double quotes. Good enough
+    # for this codebase's controlled format; not a general YAML parser.
     def parse_frontmatter(text)
       inner = text.to_s.sub(/\A---\s*\n/, "").sub(/\n---\s*\n?\z/, "")
       fields = {}
@@ -105,10 +106,24 @@ module DocMeta
       if raw.start_with?("[") && raw.end_with?("]")
         raw[1..-2].split(",").map(&:strip).reject(&:empty?)
       elsif raw.start_with?('"') && raw.end_with?('"') && raw.length >= 2
-        raw[1..-2]
+        unescape_topic(raw[1..-2])
       else
         raw
       end
+    end
+
+    # render_value's topic escaping: backslash first, then double quote, so
+    # the two substitutions don't feed each other (escaping the quote first
+    # would have its inserted backslash re-escaped by the backslash pass).
+    def escape_topic(text)
+      text.gsub("\\", "\\\\\\\\").gsub('"', "\\\"")
+    end
+
+    # The inverse of escape_topic: unescape double quotes then backslashes,
+    # the reverse order of escape_topic's passes, so a literal \" round-trips
+    # to a literal double quote rather than staying escaped.
+    def unescape_topic(text)
+      text.gsub('\\"', '"').gsub("\\\\", "\\")
     end
 
     # The follow-up mutation named in .claude/skills/research-codebase/
