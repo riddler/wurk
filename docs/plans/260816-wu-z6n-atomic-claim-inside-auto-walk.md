@@ -456,17 +456,17 @@ Commit title: `Claims at take inside the auto walk` (34 chars).
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes (`ruby skills/wurk:kit/scripts/test/run.rb`)
-- [ ] `contract_test.rb` passes unchanged - no rule edited, no banned
+- [x] Full quality gate passes (`ruby skills/wurk:kit/scripts/test/run.rb`)
+- [x] `contract_test.rb` passes unchanged - no rule edited, no banned
       operation introduced (`bd update` is on no banned list)
-- [ ] `ruby skills/wurk:kit/scripts/select_batch.rb --help` prints a usage
+- [x] `ruby skills/wurk:kit/scripts/select_batch.rb --help` prints a usage
       line containing `--dry-run` and exits 0
-- [ ] The six new `select_batch_test.rb` cases exist and pass, and each
+- [x] The six new `select_batch_test.rb` cases exist and pass, and each
       carries a `# sabotage:` note
-- [ ] Every pre-existing auto-mode test that takes a bead now registers that
+- [x] Every pre-existing auto-mode test that takes a bead now registers that
       bead's claim: no `FakeSh::UnexpectedCommand` anywhere in the suite
       output
-- [ ] `grep -c "never claims a bead" skills/wurk:kit/scripts/select_batch.rb`
+- [x] `grep -c "never claims a bead" skills/wurk:kit/scripts/select_batch.rb`
       returns 0 (the unqualified sentence is gone)
 
 #### Manual Verification:
@@ -668,6 +668,32 @@ before considering the plan fully landed.
 - [ ] ADR-0012's committed text is identical to the accepted version - no
       incidental edits rode along
 - [ ] The commit contains only these two documents
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 2
+
+- [ ] Each sabotage note was actually exercised: the described mutation was
+      applied, the suite watched go red for the stated reason, and the
+      mutation reverted
+- [ ] `ruby skills/wurk:kit/scripts/select_batch.rb --n 2 --auto --dry-run`
+      in a live checkout lists the `bd update <id> --claim --json` commands
+      in `commands` and leaves every bead's status unchanged
+      (`bd show <id>` before and after)
+- [ ] `ruby skills/wurk:kit/scripts/select_batch.rb --n 2` (manual) leaves
+      every bead's status unchanged
+- [ ] A real `--auto` run claims exactly the recommended beads and nothing
+      else, confirmed with `bd show` on both a taken and a skipped id
+- [ ] No regressions in the verdict table: epic, unlabeled, upstream, and
+      live-worktree-collision beads are still skipped and still unclaimed
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
