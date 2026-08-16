@@ -308,6 +308,81 @@ class TmuxWindowTest < Minitest::Test
     refute_includes keys, "Refs trailer"
   end
 
+  # wu-hu2: --no-finish suppresses the appended finishing clause entirely -
+  # the seeded command is the seed alone, with no /wurk:commit instruction
+  # tacked on. This is the shape a release seed (which makes its own commit)
+  # or a workspace with no bead id needs.
+  def test_open_no_finish_suppresses_the_finishing_clause
+    @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    expect_no_caffeinate
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=zz-session:", "-n", "release-v1.2.3",
+       "-c", "/repos/zz-worktrees/release-v1.2.3"],
+      out: "@42\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@42"], out: "")
+
+    code, env = run_tmux([
+                            "open", "--no-finish", "release-v1.2.3",
+                            "/repos/zz-worktrees/release-v1.2.3",
+                            "release-v1.2.3", "/wurk:release 1.2.3"
+                          ])
+
+    assert_equal 0, code
+    assert_equal true, env["data"]["no_finish"]
+
+    keys = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }.argv[4]
+    assert_includes keys, "claude --permission-mode auto --model fakemodel"
+    assert_includes keys, "/wurk:release 1.2.3"
+    refute_includes keys, "/wurk:commit --auto"
+    refute_includes keys, "finish with"
+  end
+
+  # Default (no --no-finish) stays byte-for-byte the existing behavior:
+  # data.no_finish reports false and the clause is present, unchanged.
+  def test_open_default_still_appends_the_finishing_clause
+    @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    expect_no_caffeinate
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=zz-session:", "-n", "zz-abc-thing",
+       "-c", "/repos/zz-worktrees/zz-abc-thing"],
+      out: "@42\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@42"], out: "")
+
+    code, env = run_tmux([
+                            "open", "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing",
+                            "zz-abc", "/wurk:work zz-abc --auto"
+                          ])
+
+    assert_equal 0, code
+    assert_equal false, env["data"]["no_finish"]
+
+    keys = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }.argv[4]
+    assert_includes keys, "/wurk:commit --auto"
+    assert_includes keys, "finish with /wurk:commit --auto"
+    assert_includes keys, "unrelated to zz-abc"
+  end
+
+  # dry-run must render the suppressed command line too, not just the live path.
+  def test_open_dry_run_with_no_finish_renders_no_finishing_clause
+    @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    expect_no_caffeinate
+
+    code, env = run_tmux([
+                            "open", "--no-finish", "--dry-run", "release-v1.2.3",
+                            "/repos/zz-worktrees/release-v1.2.3",
+                            "release-v1.2.3", "/wurk:release 1.2.3"
+                          ])
+
+    assert_equal 0, code
+    send_line = env["commands"].find { |c| c.include?("send-keys") }
+    refute_nil send_line
+    assert_includes send_line, "/wurk:release 1.2.3"
+    refute_includes send_line, "/wurk:commit --auto"
+    assert_equal true, env["data"]["no_finish"]
+  end
+
   def test_open_skips_when_window_name_already_exists
     @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "zz-abc-thing\n")
     # No new-window or send-keys expectation - a name hit must not create a
