@@ -663,11 +663,21 @@ Manual verification items are deferred during looped (--loop) execution and
 surfaced here once, rather than blocking after each phase. Confirm these
 before considering the plan fully landed.
 
+Verified 2026-08-16, after the loop finished. Seven boxes are confirmed
+below; four are left open with the reason recorded on each. The four open
+ones share one root cause: at verification time only one bead was ready
+(`wu-hu2`), and it skips as a live-worktree collision against this very
+worktree (`area:kit`, held by `wu-z6n`), so the walk had nothing takeable
+and the positive claim path could not be exercised live.
+
 ### Phase 1
 
-- [ ] ADR-0012's committed text is identical to the accepted version - no
-      incidental edits rode along
-- [ ] The commit contains only these two documents
+- [x] ADR-0012's committed text is identical to the accepted version - no
+      incidental edits rode along. `git diff e2cda01..HEAD` on the ADR is
+      empty; the later touches to this plan are the loop ticking its own
+      automated boxes and appending this section.
+- [x] The commit contains only these two documents - `e2cda01` is exactly
+      two files, 789 insertions
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
@@ -681,19 +691,44 @@ of blocking here.
 
 ### Phase 2
 
-- [ ] Each sabotage note was actually exercised: the described mutation was
+- [x] Each sabotage note was actually exercised: the described mutation was
       applied, the suite watched go red for the stated reason, and the
-      mutation reverted
-- [ ] `ruby skills/wurk:kit/scripts/select_batch.rb --n 2 --auto --dry-run`
+      mutation reverted. All six: dropping the claim from the free branch
+      gives 4 failures, ignoring the claim's return 2, unioning areas before
+      the claim 1, and the lands-alone, `--dry-run`-passthrough and
+      `claim`-guard mutations each fail in exactly their named test. Tree
+      clean after every revert.
+      Note: the lands-alone mutation only goes red when applied as written,
+      `alone = true` *and* `break`. Setting `alone = true` alone is
+      unobservable in that fixture, since nothing follows the taken bead.
+- [x] `ruby skills/wurk:kit/scripts/select_batch.rb --n 2 --auto --dry-run`
       in a live checkout lists the `bd update <id> --claim --json` commands
       in `commands` and leaves every bead's status unchanged
       (`bd show <id>` before and after)
-- [ ] `ruby skills/wurk:kit/scripts/select_batch.rb --n 2` (manual) leaves
-      every bead's status unchanged
+      Verified indirectly: the live run had nothing takeable, so its
+      `commands` was legitimately empty. The passthrough was confirmed one
+      level down instead - `bead.rb claim wu-hu2 --dry-run` renders
+      `bd update wu-hu2 --claim --json` and leaves the bead `open`,
+      unassigned - plus the unit case that pins the rendering into
+      `commands`.
+- [x] `ruby skills/wurk:kit/scripts/select_batch.rb --n 2` (manual) leaves
+      every bead's status unchanged - no `--claim` in `commands`, `wu-hu2`
+      still `open`/unassigned
 - [ ] A real `--auto` run claims exactly the recommended beads and nothing
       else, confirmed with `bd show` on both a taken and a skipped id
+      **Half done.** A real (non-dry) `--auto` run was made: `recommended`
+      was empty, no claim executed, and the skipped `wu-hu2` was `open`
+      before and after - so the skipped-id half holds under a genuinely
+      mutating run. The taken-id half is unexercised because nothing was
+      takeable. Explicit ids do not help: `annotate` computes the collision
+      verdict for every candidate regardless of how it was listed. Exercising
+      it needs a ready bead whose areas no live worktree holds.
 - [ ] No regressions in the verdict table: epic, unlabeled, upstream, and
       live-worktree-collision beads are still skipped and still unclaimed
+      **Partial.** live-worktree-collision confirmed live and unclaimed.
+      epic, unlabeled and upstream had no live instances at verification
+      time and rest on unit coverage only. They never reach the take step,
+      so they can never be claimed, which is why this is a low-risk gap.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
@@ -711,13 +746,27 @@ of blocking here.
       claimed, contended beads are reported as skipped with their reason,
       and no bead is claimed twice or left claimed without a workspace being
       attempted
-- [ ] `/wurk:next` (manual) still presents the candidate table, claims
+      **Not run** - same blocker as phase 2's real-`--auto` box: no takeable
+      bead. Worth running deliberately the first time a non-colliding ready
+      bead exists, rather than meeting it in anger.
+- [x] `/wurk:next` (manual) still presents the candidate table, claims
       nothing before the pick, and drops a `bd_claim_failed` bead from the
       batch while keeping the rest
-- [ ] `bead.rb sync push` still runs once per batch in both modes
+      Verified structurally in `skills/wurk:next/SKILL.md`: step 2 keeps
+      "Nothing is claimed until the user picks" mode-qualified to manual,
+      and step 4 keeps the `bd_claim_failed` drop-and-report intact. Not
+      exercised interactively.
+- [x] `bead.rb sync push` still runs once per batch in both modes - step 4's
+      push sits after the auto path's "skip straight to this step's
+      `bead.rb sync push`" jump, so both modes land on the one call
 - [ ] The merge-time judge (`/wurk:mr`) does not flag the skill diff; if it
       does, the finding is answered on its merits rather than by deleting
       the judged prose
+      **Deferred to `/wurk:mr` by decision** - the judge runs there anyway,
+      so it was not run twice. Expect it to raise this diff: a claim step
+      moving from skill prose into a script is the shape ADR-0008's judge
+      hunts. The answer on merits is ADR-0012, cited by number at four
+      points in the skill.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
