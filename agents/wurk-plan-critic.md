@@ -59,6 +59,9 @@ that cannot go green alone stalls the loop.
   Y and confirm it lands in Z" is.
 - Is anything in the Automated list actually manual, or vice versa? Miscategorizing
   a manual check as automated means the loop advances past something nobody checked.
+- Also settled decisions: while you are in these sections, apply check 3 (ADR
+  and standing-rule contradiction) to each criterion, not only whether it is
+  verifiable.
 
 ### 3. Does anything contradict a settled decision?
 
@@ -69,6 +72,14 @@ Silently contradicting one is the finding.
 
 Check the same way against standing rules in `CLAUDE.md` and the project's
 architecture docs.
+
+This pass covers the whole document, not just the narrative: read the
+Automated Verification, Manual Verification, Deferred Manual Verification, and
+Success Criteria sections against the same ADRs and standing rules. A
+verification item that instructs an ADR-prohibited action is worse than prose
+that merely describes one - it carries the same authority over the
+implementer, and it is the last thing read before a phase is called done. An
+implementer who satisfies the item as written ships the violation.
 
 ### 4. Do open questions survive anywhere in the document?
 
