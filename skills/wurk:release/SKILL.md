@@ -109,7 +109,7 @@ Name the workspace `release-vX.Y.Z` from the requested version (e.g.
 is the whole name.
 
 ```
-/wurk:branch release-vX.Y.Z -- /wurk:release X.Y.Z
+/wurk:branch release-vX.Y.Z --no-finish -- /wurk:release X.Y.Z
 ```
 
 - **`parallelism.model: worktree-per-issue`** (the common case) - `/wurk:branch`
@@ -129,14 +129,9 @@ is the whole name.
   `/wurk:branch`'s own `<id>` for the tmux window comes from the bead id at
   the front of the branch name, and a release name has none - pass the whole
   workspace name (`release-vX.Y.Z`) as `<id>` rather than guessing a fake
-  bead id out of it. That `<id>` also lands in `tmux_window.rb`'s
-  `FINISH_TEMPLATE`, which appends "finish with `/wurk:commit --auto` ...
-  refuses if the tree carries changes unrelated to `<id>`" to every seed.
-  This skill's own Step 3 already makes the release commit directly, so the
-  seeded session reaches that appended clause with a clean tree and nothing
-  left to commit - it is not a second commit to make and not a reason to fold
-  anything extra in; the seeded session should simply finish once Step 3 and
-  Step 4 are done and let the appended instruction find nothing to do.
+  bead id out of it. Pass `--no-finish` too: this skill's own Step 3 already
+  makes the release commit directly, so the seeded session has no bead-linked
+  finishing clause to reach and nothing left over to commit.
 - **`parallelism.model: branch-in-place`** - `/wurk:branch` itself refuses this
   model as unimplemented. Surface that refusal exactly as `/wurk:branch`
   reports it and **STOP**; do not fall back to committing on the default

@@ -154,9 +154,9 @@ module TmuxWindow
     # skill's invocation once a session is already running, and does not
     # govern the CLI session itself being launched here. The value is
     # `tmux.model` from the manifest; the flag must not be "simplified" away.
-    def claude_command(model, seed, id, trailer_key)
-      finish = format(FINISH_TEMPLATE, id: id, trailer: trailer_key)
-      "#{caffeinate_prefix}claude --permission-mode auto --model #{model} '#{seed}.#{finish}'"
+    def claude_command(model, seed, id, trailer_key, no_finish: false)
+      body = no_finish ? seed : "#{seed}.#{format(FINISH_TEMPLATE, id: id, trailer: trailer_key)}"
+      "#{caffeinate_prefix}claude --permission-mode auto --model #{model} '#{body}'"
     end
 
     # wu-esa: keep the machine from idle-sleeping out from under a seeded
@@ -338,7 +338,14 @@ module TmuxWindow
     # --- open --------------------------------------------------------------
 
     def open_window(argv, io)
-      parser, options = Cli.build("tmux_window.rb open [options] <name> <path> <id> <seed>")
+      options = { no_finish: false }
+      parser, options = Cli.build("tmux_window.rb open [options] <name> <path> <id> <seed>", options) do |opts|
+        opts.on("--no-finish", "seed the session with no appended /wurk:commit finishing clause " \
+                                "(a seed that makes its own commit, or a workspace whose name " \
+                                "carries no bead id)") do
+          options[:no_finish] = true
+        end
+      end
       args = Cli.parse!(parser, argv)
       name, path, id, seed = args
       if [name, path, id, seed].any? { |a| blank?(a) }
@@ -368,7 +375,7 @@ module TmuxWindow
         return env.emit(io)
       end
 
-      keys = claude_command(model, seed, id, manifest.trailer_key)
+      keys = claude_command(model, seed, id, manifest.trailer_key, no_finish: options[:no_finish])
       new_argv = ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "#{session_target(session)}:", "-n", name, "-c", path]
 
       if dry_run
@@ -377,6 +384,7 @@ module TmuxWindow
         env.data["name"] = name
         env.data["path"] = path
         env.data["model"] = model
+        env.data["no_finish"] = options[:no_finish]
         env.data["skipped"] = false
         return env.emit(io)
       end
@@ -403,6 +411,7 @@ module TmuxWindow
       env.data["name"] = name
       env.data["path"] = path
       env.data["model"] = model
+      env.data["no_finish"] = options[:no_finish]
       env.data["skipped"] = false
       env.emit(io)
     end

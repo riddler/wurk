@@ -42,8 +42,11 @@ grammar, a project's warm-cache expectations, what to check after
 
 ## Input
 
-`$ARGUMENTS` = the branch name, optionally followed by `--` and the command to
-seed the new session with.
+`$ARGUMENTS` = optionally `--no-finish`, then the branch name, optionally
+followed by `--` and the command to seed the new session with.
+
+**`--no-finish`** (optional) is passed straight through to `tmux_window.rb
+open` in step 2 - see there for when to use it.
 
 **Branch name** is also the worktree directory name under
 `worktree-per-issue`: `<bead-id>-<slug>`, e.g. `zz-00p.3-regression-ratchet`.
@@ -98,13 +101,21 @@ restated description goes stale the moment the bead is edited.
 
    ```bash
    ruby ~/.claude/skills/wurk:kit/scripts/tmux_window.rb ensure-session
-   ruby ~/.claude/skills/wurk:kit/scripts/tmux_window.rb open <name> <path> <id> <seed>
+   ruby ~/.claude/skills/wurk:kit/scripts/tmux_window.rb open [--no-finish] <name> <path> <id> <seed>
    ```
 
    `<path>` comes from step 1's `data.path`. `<id>` is the bead id at the
    front of the branch name (`zz-lzn` from `zz-lzn-tmux-window-per-worktree`,
    `zz-00p.3` from `zz-00p.3-regression-ratchet`). `<seed>` is the seed
-   command, passed through verbatim including its leading slash.
+   command, passed through verbatim including its leading slash. `<id>` is
+   still required even when passing `--no-finish` below - the arity check
+   stays strict.
+
+   Pass **`--no-finish`** when the seed makes its own commit (a release seed
+   that runs its own commit step, for example), or when the workspace name
+   carries no bead id at all - in either case the appended finishing clause
+   would either find nothing to commit or name something that is not a bead.
+   Every other seed keeps the default appended clause.
 
    The session's model comes from the manifest's `tmux.model`, passed
    explicitly by the script rather than left to whatever default the launched
@@ -175,7 +186,8 @@ that under worktree-per-issue the worktree is removed at merge by
   editing one template reaches every seeded session. It names
   `/wurk:commit --auto` rather than bare `/wurk:commit` because a seeded
   session runs unattended: an interactive approval step would stall with
-  nobody watching the window to answer it.
+  nobody watching the window to answer it. Pass `--no-finish` (see step 2) to
+  suppress it for a seed that does not want it.
 
   That does not grant commit authority beyond what the project's authority
   table already grants. It routes the same authority through the skill that
