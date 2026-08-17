@@ -34,11 +34,35 @@ class Sh
     def timed_out?
       @timed_out
     end
+
+    # True when the child process never started at all - a missing
+    # executable or a chdir directory that does not exist - as opposed to a
+    # process that ran and exited nonzero. Callers that only check
+    # #success? get the right answer either way; this is for callers that
+    # need to tell the two apart to report a diagnosable cause instead of an
+    # ordinary command failure.
+    def start_failed?
+      status.is_a?(StartFailureStatus)
+    end
   end
 
   # A fake, successful Process::Status-alike for the timeout case, where no
   # real child status is available.
   class TimeoutStatus
+    def success?
+      false
+    end
+
+    def exitstatus
+      nil
+    end
+  end
+
+  # A fake Process::Status-alike for when Open3.popen3 could not start the
+  # child at all (Errno::ENOENT: missing executable or missing chdir
+  # directory). Same shape as TimeoutStatus - no real exitstatus exists -
+  # kept as its own class so Result#start_failed? can tell the two apart.
+  class StartFailureStatus
     def success?
       false
     end
@@ -118,9 +142,34 @@ class Sh
       end
 
       Result.new(out: out, err: err, status: status, timed_out: timed_out)
+    rescue SystemCallError => e
+      # Open3.popen3 raises before a child ever exists when the executable is
+      # missing from PATH (Errno::ENOENT) or chdir names a directory that does
+      # not exist (also Errno::ENOENT) or is not accessible/not a directory
+      # (Errno::EACCES / Errno::ENOTDIR). Rescued narrowly - SystemCallError,
+      # not StandardError - so this is the one primitive every script shells
+      # out through, and a too-wide rescue here would silently eat unrelated
+      # bugs from every caller at once. Every other exception still escapes.
+      #
+      # Returned as a normal failed Result, never raised: the caller (gate.rb
+      # among others) gets something to build an envelope from instead of a
+      # bare Ruby traceback on stderr, which is what broke the kit's one
+      # JSON-envelope-on-stdout contract in the first place.
+      Result.new(out: "", err: start_failure_message(argv, chdir, e), status: StartFailureStatus.new)
     end
 
     private
+
+    # Names the concrete cause in the same message a reader sees in
+    # Result#err: which executable could not be run, and (when chdir was
+    # passed) which directory - so a typo'd gate.cwd is distinguishable from
+    # a gate command simply missing from PATH without a traceback.
+    def start_failure_message(argv, chdir, error)
+      command = argv.first
+      detail = chdir ? "#{error.message} (command: #{command.inspect}, chdir: #{chdir.inspect})"
+                     : "#{error.message} (command: #{command.inspect})"
+      "could not start command - #{detail}"
+    end
 
     def kill_process_group(pid)
       Process.kill("TERM", pid)

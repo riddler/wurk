@@ -42,8 +42,12 @@ class FakeSh
 
   # Registers a fake response for the next call whose argv starts with
   # argv_prefix. Expectations are consumed in FIFO order among matches.
-  def expect(argv_prefix, out: "", err: "", exitstatus: 0, timed_out: false)
-    @expectations << { prefix: argv_prefix, out: out, err: err, exitstatus: exitstatus, timed_out: timed_out }
+  # start_failed: true simulates Sh::RealRunner's rescued SystemCallError
+  # case (missing executable / bad chdir) instead of an ordinary exit -
+  # exitstatus/timed_out are meaningless together with it and are ignored.
+  def expect(argv_prefix, out: "", err: "", exitstatus: 0, timed_out: false, start_failed: false)
+    @expectations << { prefix: argv_prefix, out: out, err: err, exitstatus: exitstatus,
+                        timed_out: timed_out, start_failed: start_failed }
     self
   end
 
@@ -57,6 +61,10 @@ class FakeSh
     end
 
     exp = @expectations.delete_at(index)
+    if exp[:start_failed]
+      return Sh::Result.new(out: exp[:out], err: exp[:err], status: Sh::StartFailureStatus.new)
+    end
+
     Sh::Result.new(
       out: exp[:out],
       err: exp[:err],

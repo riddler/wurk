@@ -606,7 +606,12 @@ gate commands run at the root of the checkout being gated.
   number, a float, and a non-numeric value all block.
 - **`gate.cwd` must be a relative subdirectory path.** An absolute path,
   `.`, `""`, a non-string, or any `..` segment blocks. Existence is
-  deliberately not checked; see "`gate.cwd`" above.
+  deliberately not checked; see "`gate.cwd`" above. A `gate.cwd` that does
+  not exist (or a gate command missing from `PATH`) is instead caught when
+  the gate command tries to start: `gate.rb` reports it as a `blocked`
+  envelope entry (`gate_command_could_not_start` / `gate_attest_could_not_start`)
+  naming the command and the resolved directory, exit code 1 - never a raw
+  traceback (wu-8eh).
 
 `ruby skills/wurk:kit/scripts/lib/manifest.rb check [--file PATH]` is the
 standalone lint. It emits the usual envelope and exits 1 on an invalid

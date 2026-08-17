@@ -472,6 +472,39 @@ module Gate
       end
 
       res, report = run_quality(env, manifest, loop_mode)
+
+      # The gate command itself never got a chance to run: a typo'd gate.cwd
+      # or a gate command missing from PATH (Sh::Result#start_failed?, see
+      # lib/sh.rb). This is a misconfiguration for a human to fix, not a
+      # failing test run, so it reads as blocked - with the concrete cause
+      # (command and directory) named in the message - rather than as an
+      # ordinary tier-0 failure that would say nothing about why. No stage
+      # detail exists to report, so this returns early the same way the
+      # carve-out path does.
+      if res.start_failed?
+        env.data[:ran] = loop_mode ? "loop" : "all"
+        env.data[:tier] = 0
+        env.data[:status] = nil
+        env.data[:scope] = nil
+        env.data[:profile] = nil
+        env.data[:stages] = []
+        env.data[:skipped_stages] = []
+        env.data[:gate_guard] = gate_guard_from([], ledger_path, manifest.checkout_root)
+        env.data[:gate_cwd] = manifest.gate_chdir
+        env.data[:attested] = false
+        env.data[:attestation_message] = nil
+        # res.err is already the self-describing sentence Sh emits (see
+        # lib/sh.rb's start_failure_message) - naming the command and, when
+        # set, the chdir - so it becomes the message as-is rather than
+        # getting a second "could not start" wrapped around it.
+        env.block!(
+          code: "gate_command_could_not_start",
+          message: res.err,
+          needs: "human"
+        )
+        return env.emit(io)
+      end
+
       tier = report.nil? ? 0 : 1
       report ||= {}
       stages = report["stages"] || []
@@ -497,9 +530,24 @@ module Gate
       elsif manifest.gate_attest
         verify_res = Sh.run(manifest.gate_attest, chdir: manifest.gate_chdir, envelope: env,
                             timeout: manifest.gate_timeout_seconds)
-        env.data[:attested] = verify_res.success?
-        env.data[:attestation_message] =
-          (verify_res.success? || verify_res.err.to_s.strip.empty? ? verify_res.out : verify_res.err).to_s.strip
+        if verify_res.start_failed?
+          # Same misconfiguration class as the quality-run case above, just
+          # discovered one step later (gate.full itself started fine; the
+          # attest command is the one that could not).
+          env.data[:attested] = false
+          env.data[:attestation_message] = verify_res.err
+          # Same reasoning as the quality-run branch above: verify_res.err is
+          # already self-describing, so it is the message as-is.
+          env.block!(
+            code: "gate_attest_could_not_start",
+            message: verify_res.err,
+            needs: "human"
+          )
+        else
+          env.data[:attested] = verify_res.success?
+          env.data[:attestation_message] =
+            (verify_res.success? || verify_res.err.to_s.strip.empty? ? verify_res.out : verify_res.err).to_s.strip
+        end
       else
         # Tier 0/1 without attestation (docs/gate-contract.md): "prove it was
         # a full gate" degrades to "this run of gate.full exited zero". Say
