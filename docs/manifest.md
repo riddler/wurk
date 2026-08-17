@@ -424,8 +424,10 @@ walked every kit consumer of a repo-root-relative manifest path:
 ```
 matched against git's own output (`git diff --name-only` and
 `git status --porcelain` both print repo-root-relative paths regardless of
-the process cwd - lib/base_ref.rb is the only source of these lists - so
-these are unaffected by gate.cwd and by the process cwd):
+the process cwd - whether the list comes from lib/base_ref.rb, as the
+changed-file lists do, or from a script's own diff, as the conflicted-file
+list in rebase_resolve.rb does - so these are unaffected by gate.cwd and by
+the process cwd):
   gate.build_paths, gate.also_gated_paths - lib/gate_paths.rb, consumed by
     gate.rb's carve-out and repo_state.rb's touches_build
   gate.moving_files, gate.guard_ledger, parallelism.repair_when,
