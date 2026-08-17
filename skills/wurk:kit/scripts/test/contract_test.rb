@@ -272,6 +272,32 @@ module Contract
     end
     hits
   end
+
+  # Forge-CLI vocabulary leaking into the kit's own words. A forge CLI's name
+  # may appear in an argv the Forge.guard! seam protects (pr_state.rb's
+  # ["gh", "pr", "list", ...]) and in a diagnostic message naming what
+  # failed; it may not appear in an envelope code, a data key, or a
+  # synthesized value, because those are the kit's vocabulary and outlive the
+  # forge they were written against.
+  #
+  # Narrow on purpose, the same tightening HARDCODED_REFS needed: `gh` as a
+  # bare word is a legitimate argv element, so the rule keys off the
+  # identifier shape `gh_`/`glab_` and off GitHub's quoted request-state
+  # enum, neither of which has any innocent spelling in this tree.
+  FORGE_VOCABULARY = {
+    "forge CLI in kit vocabulary" => /\b(?:gh|glab)_[a-z]\w*/,
+    "forge request-state literal" => /"(?:MERGED|OPEN|CLOSED|DRAFT)"/
+  }.freeze
+
+  # Returns [[lineno, label], ...] for every forge-vocabulary hit found in
+  # content.
+  def forge_vocabulary(content)
+    hits = []
+    each_code_line(content) do |code, lineno|
+      FORGE_VOCABULARY.each { |label, re| hits << [lineno, label] if code =~ re }
+    end
+    hits
+  end
 end
 
 class ContractRulesTest < Minitest::Test
@@ -414,6 +440,24 @@ class ContractRulesTest < Minitest::Test
   def test_hardcoded_default_branch_ignores_worktree_vocabulary
     assert_empty Contract.hardcoded_default_branch(%(Manifest.main_checkout\n))
     assert_empty Contract.hardcoded_default_branch(%(checkout = is_main ? "main" : "worktree"\n))
+  end
+
+  # sabotage: widen the identifier regex to /\bgh\b/ -> the legitimate
+  # guarded argv below starts failing
+  def test_forge_vocabulary_catches_cli_named_vocabulary
+    assert_equal [[1, "forge CLI in kit vocabulary"]],
+                 Contract.forge_vocabulary(%(env.block!(code: "gh_unavailable", message: m)\n))
+    assert_equal [[1, "forge CLI in kit vocabulary"]],
+                 Contract.forge_vocabulary(%(env.data[:gh_available] = true\n))
+    assert_equal [[1, "forge request-state literal"]],
+                 Contract.forge_vocabulary(%(pr = { state: "MERGED" }\n))
+  end
+
+  def test_forge_vocabulary_permits_guarded_argv_and_comments
+    assert_empty Contract.forge_vocabulary(%(Sh.run(["gh", "pr", "list", "--state", "merged"])\n))
+    assert_empty Contract.forge_vocabulary(%(IMPLEMENTED = %w[github].freeze\n))
+    assert_empty Contract.forge_vocabulary(%(REQUEST_MERGED = "merged"\n))
+    assert_empty Contract.forge_vocabulary(%(# the gh_unavailable code was renamed in wu-mya.1\n))
   end
 end
 
@@ -558,6 +602,20 @@ class ContractTest < Minitest::Test
                  "build the ref from Manifest#default_branch / #remote_default_branch instead"
   end
 
+  def test_no_forge_vocabulary_in_kit_source
+    offenders = []
+    non_test_files.each do |file|
+      Contract.forge_vocabulary(File.read(file)).each do |(lineno, label)|
+        offenders << "#{file}:#{lineno} (#{label})"
+      end
+    end
+    assert_empty offenders,
+                 "forge-CLI vocabulary found outside comments: #{offenders.join(', ')} - " \
+                 "the kit's own forge-neutral vocabulary is defined once in lib/forge.rb; " \
+                 "reference it instead of naming a forge CLI in an envelope code, a data key, " \
+                 "or a synthesized value"
+  end
+
   # A meta-check on the guardrail itself: prove the scan is not vacuously
   # green just because no scripts exist yet in Phase 1. A fixture file with a
   # violation, dropped into a temp copy of the tree shape, must be caught.
@@ -568,6 +626,8 @@ class ContractTest < Minitest::Test
                  %(Sh.run(["git", "push", "origin", "main"])\nFile.write(".credo.exs", weakened)\n) \
                  "EXEMPT = [\"test/scion_tests/\"]\n")
       File.write(planted, %(Sh.run(["git", "diff", "main...HEAD"])\n), mode: "a")
+      File.write(planted, %(env.data[:gh_available] = true\n), mode: "a")
+      File.write(planted, %(pr = { state: "MERGED" }\n), mode: "a")
 
       content = File.read(planted)
 
@@ -578,6 +638,8 @@ class ContractTest < Minitest::Test
                    "the contract scan failed to catch a planted consumer-vocabulary constant"
       refute_empty Contract.hardcoded_default_branch(content),
                    "the contract scan failed to catch a planted hardcoded default-branch ref"
+      refute_empty Contract.forge_vocabulary(content),
+                   "the contract scan failed to catch a planted forge-CLI vocabulary leak"
     end
   end
 

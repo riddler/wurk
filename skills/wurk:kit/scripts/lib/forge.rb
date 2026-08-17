@@ -12,6 +12,14 @@ require_relative "manifest"
 # every entry point that depends on the forge stops here with a named block
 # rather than half-working - a `gh` call against a GitLab repo fails with a
 # message about authentication, which sends the reader somewhere useless.
+#
+# This module is also the definition site for the kit's forge-neutral
+# vocabulary - envelope codes, data keys, and synthesized values like
+# `REQUEST_MERGED` below name no forge CLI, so they stay meaningful once a
+# second forge adapter lands. `test/contract_test.rb`'s `FORGE_VOCABULARY`
+# rule is what keeps that true: it fails the gate if a `gh_`/`glab_`-shaped
+# identifier or a forge's own quoted state literal (`"MERGED"`, ...) shows up
+# anywhere in `scripts/` outside a comment or an argv behind `guard!`.
 module Forge
   # Forges these scripts implement today. Growing this list is the phase-4
   # work, not a configuration change.

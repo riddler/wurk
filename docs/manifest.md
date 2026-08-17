@@ -31,7 +31,11 @@ defaults are listed under "Defaults" below.
 
   "forge": {
     "kind": "github",                 // or "gitlab"; picks gh/glab, PR/MR wording,
-                                      // permalink format, close-line syntax
+                                      // permalink format, close-line syntax.
+                                      // The enum accepts "gitlab" today, but
+                                      // only "github" is implemented; see
+                                      // Forge::IMPLEMENTED in
+                                      // skills/wurk:kit/scripts/lib/forge.rb.
     "labels": {}                      // (opt) e.g. {"agent_filed": "agent-filed"}
   },
 
