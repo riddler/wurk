@@ -606,6 +606,40 @@ class TmuxWindowTest < Minitest::Test
     assert_equal "@2", env["data"]["window_id"]
   end
 
+  # Under window-per-issue, session is always nil and session_scoped false -
+  # find has no session to report, and none of its matching logic changes.
+  def test_find_reports_session_and_session_scoped_under_window_per_issue
+    @fake.expect(
+      ["tmux", "list-panes", "-a", "-F", '#{window_id} #{window_name} #{pane_current_path}'],
+      out: "@2 zz-abc-thing /repos/zz-worktrees/zz-abc-thing\n"
+    )
+
+    code, env = run_tmux(["find", "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing"])
+
+    assert_equal 0, code
+    assert_nil env["data"]["session"]
+    assert_equal false, env["data"]["session_scoped"]
+  end
+
+  # A project with no tmux section at all (the "worktree" fixture) must
+  # behave exactly as today - byte-identical list-panes format, no block on
+  # the missing section, and no session-scoping. find's no-block posture is
+  # what keeps /wurk:cleanup safe on projects that never opted into tmux.
+  def test_find_with_no_tmux_section_behaves_as_today_and_does_not_block
+    @fake.expect(
+      ["tmux", "list-panes", "-a", "-F", '#{window_id} #{window_name} #{pane_current_path}'],
+      out: "@2 zz-abc-thing /repos/zz-worktrees/zz-abc-thing\n"
+    )
+
+    code, env = run_tmux(["find", "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing"], fixture: "worktree")
+
+    assert_equal 0, code
+    assert_empty env["blocked"]
+    assert_equal true, env["data"]["found"]
+    assert_equal "@2", env["data"]["window_id"]
+    assert_equal false, env["data"]["session_scoped"]
+  end
+
   def test_find_no_match_is_not_an_error
     @fake.expect(
       ["tmux", "list-panes", "-a", "-F", '#{window_id} #{window_name} #{pane_current_path}'],
@@ -776,6 +810,21 @@ class TmuxWindowTest < Minitest::Test
     assert_equal 1, code
     assert_equal "empty_window_id", env["blocked"].first["code"]
     assert_empty @fake.calls
+  end
+
+  # Without --session, close stays byte-identical to today: no has-session,
+  # no list-panes -s, no kill-session, nothing session-shaped in the calls
+  # or the data.
+  def test_close_without_session_issues_no_session_command_at_all
+    @fake.expect(["tmux", "list-panes", "-t", "@2", "-F", '#{pane_current_command}'], out: "fish\n")
+    @fake.expect(["tmux", "kill-window", "-t", "@2"], out: "")
+
+    code, env = run_tmux(["close", "@2"])
+
+    assert_equal 0, code
+    assert_equal true, env["data"]["closed"]
+    refute env["data"].key?("session_closed")
+    refute(@fake.calls.any? { |c| c.argv.include?("has-session") || c.argv.include?("kill-session") })
   end
 
   # --- source-level guarantees ------------------------------------------
@@ -1083,5 +1132,129 @@ class TmuxWindowSessionPerIssueTest < Minitest::Test
     assert_equal true, env["data"]["skipped"]
     assert_empty @fake.calls
     assert_empty env["commands"]
+  end
+
+  # --- find: layout-aware, claude window only -----------------------------
+
+  # The editor window shares the claude window's pane path (same worktree),
+  # so name+path alone can't discriminate under this layout - the session
+  # name plus CLAUDE_WINDOW_NAME must. find must return the claude window,
+  # never the editor's, even though both windows list the same path.
+  def test_find_returns_the_claude_window_not_the_editor_window_sharing_a_pane_path
+    out = "@1 #{NAME} nvim #{PATH}\n@2 #{NAME} claude #{PATH}\n"
+    @fake.expect(
+      ["tmux", "list-panes", "-a", "-F", '#{window_id} #{session_name} #{window_name} #{pane_current_path}'],
+      out: out
+    )
+
+    code, env = run_tmux(["find", NAME, PATH])
+
+    assert_equal 0, code
+    assert_equal true, env["data"]["found"]
+    assert_equal "@2", env["data"]["window_id"]
+  end
+
+  def test_find_still_blocks_ambiguous_window_match_on_two_matching_claude_windows
+    out = "@2 #{NAME} claude #{PATH}\n@3 #{NAME} claude #{PATH}\n"
+    @fake.expect(
+      ["tmux", "list-panes", "-a", "-F", '#{window_id} #{session_name} #{window_name} #{pane_current_path}'],
+      out: out
+    )
+
+    code, env = run_tmux(["find", NAME, PATH])
+
+    assert_equal 1, code
+    assert_equal "ambiguous_window_match", env["blocked"].first["code"]
+  end
+
+  def test_find_reports_session_and_session_scoped_under_session_per_issue
+    out = "@2 #{NAME} claude #{PATH}\n"
+    @fake.expect(
+      ["tmux", "list-panes", "-a", "-F", '#{window_id} #{session_name} #{window_name} #{pane_current_path}'],
+      out: out
+    )
+
+    code, env = run_tmux(["find", NAME, PATH])
+
+    assert_equal 0, code
+    assert_equal true, env["data"]["session_scoped"]
+    assert_equal NAME, env["data"]["session"]
+  end
+
+  # --- close --session: teardown inherits the all-bare-shell precondition -
+
+  def test_close_session_kills_the_session_when_every_remaining_pane_is_a_bare_shell
+    @fake.expect(["tmux", "list-panes", "-t", "@2", "-F", '#{pane_current_command}'], out: "fish\n")
+    @fake.expect(["tmux", "kill-window", "-t", "@2"], out: "")
+    @fake.expect(["tmux", "has-session", "-t", "=#{NAME}"], exitstatus: 0)
+    @fake.expect(["tmux", "list-panes", "-s", "-t", "=#{NAME}", "-F", '#{pane_current_command}'], out: "fish\n")
+    @fake.expect(["tmux", "kill-session", "-t", "=#{NAME}"], out: "")
+
+    code, env = run_tmux(["close", "--session", NAME, "@2"])
+
+    assert_equal 0, code
+    assert_equal true, env["data"]["closed"]
+    assert_equal true, env["data"]["session_closed"]
+  end
+
+  def test_close_session_keeps_the_session_when_a_remaining_pane_is_an_editor
+    @fake.expect(["tmux", "list-panes", "-t", "@2", "-F", '#{pane_current_command}'], out: "fish\n")
+    @fake.expect(["tmux", "kill-window", "-t", "@2"], out: "")
+    @fake.expect(["tmux", "has-session", "-t", "=#{NAME}"], exitstatus: 0)
+    @fake.expect(["tmux", "list-panes", "-s", "-t", "=#{NAME}", "-F", '#{pane_current_command}'], out: "nvim\n")
+    # No kill-session expectation - a live editor pane must keep the session.
+
+    code, env = run_tmux(["close", "--session", NAME, "@2"])
+
+    assert_equal 0, code
+    assert_equal true, env["data"]["closed"]
+    assert_equal false, env["data"]["session_closed"]
+    assert_match(/session kept, other windows busy/, env["data"]["reason"])
+  end
+
+  # The last window going with the window kill is not a failure to detect -
+  # has-session simply comes back false, and no kill-session is issued
+  # against a session that is already gone.
+  def test_close_session_reports_session_ended_with_its_last_window_and_issues_no_kill_session
+    @fake.expect(["tmux", "list-panes", "-t", "@2", "-F", '#{pane_current_command}'], out: "fish\n")
+    @fake.expect(["tmux", "kill-window", "-t", "@2"], out: "")
+    @fake.expect(["tmux", "has-session", "-t", "=#{NAME}"], exitstatus: 1)
+    # No list-panes -s or kill-session expectation.
+
+    code, env = run_tmux(["close", "--session", NAME, "@2"])
+
+    assert_equal 0, code
+    assert_equal true, env["data"]["session_closed"]
+    assert_match(/session ended with its last window/, env["data"]["reason"])
+  end
+
+  # close --session must never issue any session command when the window
+  # kill itself did not happen - a busy window keeps everything untouched.
+  def test_close_session_never_issues_a_session_command_when_the_window_kill_did_not_happen
+    @fake.expect(["tmux", "list-panes", "-t", "@2", "-F", '#{pane_current_command}'], out: "2.1.220\n")
+    # No kill-window, has-session, list-panes -s, or kill-session expectation.
+
+    code, env = run_tmux(["close", "--session", NAME, "@2"])
+
+    assert_equal 0, code
+    assert_equal false, env["data"]["closed"]
+    refute env["data"].key?("session_closed")
+  end
+
+  def test_close_session_dry_run_renders_list_panes_and_conditional_kill_session_executing_nothing
+    @fake.expect(["tmux", "list-panes", "-t", "@2", "-F", '#{pane_current_command}'], out: "fish\n")
+
+    code, env = run_tmux(["close", "--session", NAME, "--dry-run", "@2"])
+
+    assert_equal 0, code
+    assert_equal false, env["data"]["closed"]
+    assert_equal false, env["data"]["session_closed"]
+    kill_window_line = env["commands"].find { |c| c.include?("kill-window") }
+    list_panes_s_line = env["commands"].find { |c| c.include?("list-panes") && c.include?("-s") }
+    kill_session_line = env["commands"].find { |c| c.include?("kill-session") }
+    refute_nil kill_window_line
+    refute_nil list_panes_s_line
+    refute_nil kill_session_line
+    refute(@fake.calls.any? { |c| %w[kill-window has-session kill-session].include?(c.argv[1]) })
   end
 end

@@ -18,7 +18,9 @@ require_relative "lib/manifest"
 # Never kill-pane, never `kill -9`/SIGKILL, no code path that does - a
 # quiesce timeout is reported `blocked`, not escalated. (`kill-window` on a
 # window every one of whose panes is already a bare shell, in `close`, is not
-# this rule - it targets nothing alive.)
+# this rule - it targets nothing alive. `close --session`'s `kill-session` is
+# the same carve-out one level up: issued only when every pane of every
+# remaining window in the session is also a bare shell.)
 #
 # `tmux.layout` (manifest) selects between two topologies. Under
 # `window-per-issue` (the default) `ensure-session` and `open` address one
@@ -571,6 +573,13 @@ module TmuxWindow
 
     # --- find ----------------------------------------------------------------
 
+    # find stays non-blocking on purpose: /wurk:cleanup calls it on every
+    # candidate, including in projects with no tmux section at all, and a
+    # block there would stop a sweep that has nothing to do with tmux. The
+    # only thing it needs from the manifest is the layout, so it reads
+    # through Manifest.require! directly rather than tmux_manifest, which
+    # blocks on an absent tmux section - the right posture for
+    # ensure-session/open, wrong here.
     def find_window(argv, io)
       parser, = Cli.build("tmux_window.rb find [options] <name> <path>")
       args = Cli.parse!(parser, argv)
@@ -578,30 +587,56 @@ module TmuxWindow
       usage_error!("tmux_window.rb find <name> <path>", parser) if blank?(name) || blank?(path)
 
       env = Envelope.new(script: "tmux_window_find")
-      list_argv = ["tmux", "list-panes", "-a", "-F", '#{window_id} #{window_name} #{pane_current_path}']
+      manifest = Manifest.require!(env)
+      layout = manifest&.tmux? ? manifest.tmux_layout : "window-per-issue"
+      session_scoped = layout == "session-per-issue"
+
+      if session_scoped
+        # The claude window is named CLAUDE_WINDOW_NAME in every per-issue
+        # session and the editor window shares its pane path, so name+path
+        # no longer discriminates. The session name does: it is the
+        # workspace name. Matching the session and the window name together
+        # returns the claude window and never the editor's.
+        list_argv = ["tmux", "list-panes", "-a", "-F",
+                     '#{window_id} #{session_name} #{window_name} #{pane_current_path}']
+      else
+        list_argv = ["tmux", "list-panes", "-a", "-F", '#{window_id} #{window_name} #{pane_current_path}']
+      end
       res = Sh.run(list_argv, envelope: env)
 
       unless res.success?
         env.data["found"] = false
         env.data["window_id"] = nil
+        env.data["session"] = nil
+        env.data["session_scoped"] = session_scoped
         env.warn(code: "list_panes_failed", message: err_or(res, "tmux list-panes failed"))
         return env.emit(io)
       end
 
-      # Match on name and path together - matching on name alone would close
-      # a window a human renamed onto something else; matching on path alone
-      # would close a stray shell someone happened to cd there.
-      matches = res.out.to_s.each_line.map(&:chomp).reject(&:empty?)
-                   .map { |l| l.split(" ", 3) }
-                   .select { |_wid, wname, wpath| wname == name && wpath == path }
+      if session_scoped
+        matches = res.out.to_s.each_line.map(&:chomp).reject(&:empty?)
+                     .map { |l| l.split(" ", 4) }
+                     .select { |_wid, sname, wname, wpath| sname == name && wname == CLAUDE_WINDOW_NAME && wpath == path }
+      else
+        # Match on name and path together - matching on name alone would
+        # close a window a human renamed onto something else; matching on
+        # path alone would close a stray shell someone happened to cd there.
+        matches = res.out.to_s.each_line.map(&:chomp).reject(&:empty?)
+                     .map { |l| l.split(" ", 3) }
+                     .select { |_wid, wname, wpath| wname == name && wpath == path }
+      end
+
+      env.data["session_scoped"] = session_scoped
 
       case matches.length
       when 0
         env.data["found"] = false
         env.data["window_id"] = nil
+        env.data["session"] = nil
       when 1
         env.data["found"] = true
         env.data["window_id"] = matches.first[0]
+        env.data["session"] = session_scoped ? name : nil
       else
         env.block!(
           code: "ambiguous_window_match",
@@ -723,7 +758,13 @@ module TmuxWindow
     # --- close ---------------------------------------------------------------
 
     def close_window(argv, io)
-      parser, options = Cli.build("tmux_window.rb close [options] <window_id>")
+      options = { session: nil }
+      parser, options = Cli.build("tmux_window.rb close [options] <window_id>", options) do |opts|
+        opts.on("--session NAME", "also tear down this session once its window kill succeeds, " \
+                                   "if every pane left in it is a bare shell (session-per-issue only)") do |v|
+          options[:session] = v
+        end
+      end
       args = Cli.parse!(parser, argv)
       window_id = args.first
 
@@ -748,12 +789,19 @@ module TmuxWindow
       end
 
       kill_argv = ["tmux", "kill-window", "-t", window_id]
+      session = options[:session]
 
       if options[:dry_run]
         env.commands << Sh.render(kill_argv)
         env.data["window_id"] = window_id
         env.data["closed"] = false
         env.data["reason"] = "all panes bare shell, would close"
+        if session
+          env.commands << Sh.render(["tmux", "list-panes", "-s", "-t", session_target(session), "-F", '#{pane_current_command}'])
+          env.commands << "(only if the session still exists and all remaining panes are bare shells) " +
+                           Sh.render(["tmux", "kill-session", "-t", session_target(session)])
+          env.data["session_closed"] = false
+        end
         return env.emit(io)
       end
 
@@ -767,7 +815,43 @@ module TmuxWindow
 
       env.data["window_id"] = window_id
       env.data["closed"] = true
+
+      close_session(session, env) if session
+
       env.emit(io)
+    end
+
+    # Session teardown is the same carve-out kill-window already has, one
+    # level up: it is only ever issued against a session with nothing alive
+    # in it. `tmux list-panes -s -t =<session> -F '#{pane_current_command}'`
+    # covers every pane of every remaining window; bare_shell_panes? is
+    # reused, not reimplemented, so the definition of "nothing alive" cannot
+    # fork. A pane running an editor is not a bare shell, which is exactly
+    # why an editor with unsaved buffers keeps its session. Only ever called
+    # after a successful kill-window - close_window returns before this if
+    # the kill itself did not happen.
+    def close_session(session, env)
+      has_res = Sh.run(["tmux", "has-session", "-t", session_target(session)], envelope: env)
+      unless has_res.success?
+        env.data["session_closed"] = true
+        env.data["reason"] = "session ended with its last window"
+        return
+      end
+
+      panes_argv = ["tmux", "list-panes", "-s", "-t", session_target(session), "-F", '#{pane_current_command}']
+      panes_res = Sh.run(panes_argv, envelope: env)
+      unless bare_shell_panes?(panes_res)
+        env.data["session_closed"] = false
+        env.data["reason"] = "session kept, other windows busy"
+        return
+      end
+
+      kill_session_res = Sh.run(["tmux", "kill-session", "-t", session_target(session)], envelope: env)
+      unless kill_session_res.success?
+        env.warn(code: "kill_session_failed", message: err_or(kill_session_res, "tmux kill-session failed for #{session}"))
+      end
+
+      env.data["session_closed"] = true
     end
 
     # --- shared helpers ------------------------------------------------------
