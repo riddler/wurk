@@ -105,6 +105,38 @@ class WorktreeRefreshTest < Minitest::Test
     assert_equal "rebased onto deadbeef, lock unchanged, loop green", wt2["result"]
   end
 
+  # wu-ik8: a gate command that never got a chance to run (missing
+  # executable, or a gate.cwd typo) must not read as an ordinary "red" -
+  # that reads as this worktree's tests failing, when it is really a
+  # misconfiguration for a human to fix. The result string names the cause
+  # instead, and the sweep still fails overall.
+  #
+  # sabotage: check `quality_res.success?` alone instead of
+  # `quality_res.start_failed?` first in confirm_green -> red (this would
+  # report the bare "red" instead of naming the cause)
+  def test_gate_command_that_cannot_start_names_the_cause_instead_of_red
+    expect_survey
+    @fake.expect(%w[git fetch origin], out: "")
+    @fake.expect(%w[git rev-parse origin/main], out: "deadbeef\n")
+
+    @fake.expect(%w[git merge-base --is-ancestor origin/main HEAD], exitstatus: 0)
+    @fake.expect(%w[git merge-base --is-ancestor origin/main HEAD], exitstatus: 1)
+    @fake.expect(%w[git status --porcelain], out: "")
+    @fake.expect(%w[git rev-parse HEAD], out: "aaaaaaa\n")
+    @fake.expect(%w[git rebase origin/main], out: "")
+    @fake.expect(%w[git rev-parse origin/main], out: "deadbeef\n")
+    @fake.expect(["git", "diff", "--quiet", "aaaaaaa", "HEAD", "--", "lock.json"], exitstatus: 0)
+    err = "could not start command - No such file or directory - make (command: \"make\")"
+    @fake.expect(%w[make quick], start_failed: true, err: err)
+
+    code, env = run_refresh
+
+    assert_equal 1, code
+    assert_equal false, env["ok"]
+    wt2 = env["data"]["results"].find { |r| r["path"] == WT2 }
+    assert_equal "red, gate could not start: #{err}", wt2["result"]
+  end
+
   def test_dirty_worktree_is_refused_never_stashed
     expect_survey
     @fake.expect(%w[git fetch origin], out: "")

@@ -206,6 +206,21 @@ module WorktreeCreate
 
       quality_res = Sh.run(manifest.gate_loop, chdir: gate_chdir(manifest, path), envelope: env,
                             timeout: manifest.gate_timeout_seconds)
+
+      # The gate command itself never got a chance to run: a typo'd gate.cwd
+      # or a gate command missing from PATH (Sh::Result#start_failed?, see
+      # lib/sh.rb). That is a misconfiguration for a human to fix, not a
+      # failing test suite, so it blocks with the same code gate.rb uses for
+      # the identical condition (gate.rb's gate_command_could_not_start)
+      # rather than reading as an ordinary red quality_green: false.
+      # quality_res.err is already the self-describing sentence Sh emits
+      # (command and, when set, chdir), so it becomes the message as-is.
+      if quality_res.start_failed?
+        env.data[:quality_green] = false
+        env.block!(code: "gate_command_could_not_start", message: quality_res.err, needs: "human")
+        return env.emit(io)
+      end
+
       env.data[:quality_green] = quality_res.success?
       env.data[:quality_output] = quality_res.out.to_s unless quality_res.success?
       env.fail! unless quality_res.success?
