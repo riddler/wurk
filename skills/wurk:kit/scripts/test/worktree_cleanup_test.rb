@@ -106,10 +106,10 @@ class WorktreeCleanupTest < Minitest::Test
     assert_equal true, env["ok"]
     results = env["data"]["results"]
     wt1 = results.find { |r| r["path"] == WT1 }
-    assert_equal "merged in PR #42, removed", wt1["result"]
+    assert_equal "merged in request #42, removed", wt1["result"]
 
     wt2 = results.find { |r| r["path"] == WT2 }
-    assert_equal "not merged (no PR, open, or closed unmerged), kept", wt2["result"]
+    assert_equal "not merged (no request, open, or closed unmerged), kept", wt2["result"]
 
     assert_equal ["zz-abc"], env["data"]["beads_to_close"]
   end

@@ -241,7 +241,10 @@ the branch's own commits, falling back to the branch prefix (step 2).
 
    Then create the request with the CLI `forge.kind` selects (`gh pr create`
    for `github`, `glab mr create` for `gitlab`), based against the default
-   branch.
+   branch. Under `forge.kind: gitlab` the kit's forge-dependent scripts still
+   block with `unsupported_forge` today (see `skills/wurk:kit/REFERENCE.md`),
+   so the automated steps around this one - merge detection, permalinks, the
+   note this skill records below - do not yet run on that forge.
 
    The title matches the project's commit style (`commits.style`) and its
    subject length limit. The body carries what a reviewer needs and the
@@ -265,7 +268,7 @@ the branch's own commits, falling back to the branch prefix (step 2).
 
    ```bash
    bd dolt push
-   bd note <id> "PR: <url>"
+   bd note <id> "Request: <url>"
    ```
 
    Run the note once per bead step 2 resolved. A bead whose request URL was
