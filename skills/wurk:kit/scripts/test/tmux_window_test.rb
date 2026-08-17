@@ -812,3 +812,276 @@ class TmuxWindowTest < Minitest::Test
     assert_equal true, env["data"]["closed"]
   end
 end
+
+# session-per-issue: each workspace gets its own tmux session instead of a
+# window inside one shared, manifest-named session. Same FakeSh + sleep_fn
+# setup as TmuxWindowTest, driven off the tmux_session_per_issue fixture
+# instead (layout: session-per-issue, model: fakemodel, editor: ["nvim"],
+# no `session` key at all - see manifest fixture and Decision 4).
+class TmuxWindowSessionPerIssueTest < Minitest::Test
+  include ManifestHelper
+
+  FIXTURE = "tmux_session_per_issue"
+  NAME = "wu-aqy-thing"
+  PATH = "/repos/zz-worktrees/wu-aqy-thing"
+  ID = "wu-aqy"
+  SEED = "/wurk:work wu-aqy --auto"
+
+  def setup
+    @fake = FakeSh.new
+    Sh.runner = @fake
+    TmuxWindow.sleep_fn = ->(_seconds) {}
+  end
+
+  def teardown
+    Sh.runner = nil
+    TmuxWindow.sleep_fn = nil
+    Manifest.reset!
+  end
+
+  def run_tmux(argv, fixture: FIXTURE)
+    io = StringIO.new
+    code = nil
+    with_manifest(fixture) { code = TmuxWindow.run(argv, io: io) }
+    [code, JSON.parse(io.string)]
+  end
+
+  def expect_no_caffeinate
+    @fake.expect(%w[which caffeinate], exitstatus: 1)
+  end
+
+  def open_argv(extra = [])
+    ["open", *extra, NAME, PATH, ID, SEED]
+  end
+
+  # --- ensure-session --------------------------------------------------
+
+  def test_ensure_session_is_a_reporting_no_op_and_issues_no_tmux_command
+    code, env = run_tmux(["ensure-session"])
+
+    assert_equal 0, code
+    assert_equal "session-per-issue", env["data"]["layout"]
+    assert_equal false, env["data"]["created"]
+    assert_equal true, env["data"]["skipped"]
+    assert_match(/each workspace gets its own session/, env["data"]["reason"])
+    assert_empty @fake.calls
+  end
+
+  # The fixture omits tmux.session entirely (Decision 4); session_name_unused
+  # must reflect "no session configured", i.e. false here.
+  def test_ensure_session_reports_session_name_unused_false_when_no_session_is_configured
+    _code, env = run_tmux(["ensure-session"])
+
+    assert_equal false, env["data"]["session_name_unused"]
+  end
+
+  # A session-per-issue project that does set tmux.session anyway gets that
+  # fact reported, not silently ignored (Decision 4).
+  def test_ensure_session_reports_session_name_unused_true_when_a_stray_session_is_configured
+    fixture = manifest_with(FIXTURE, "tmux" => { "session" => "stray-session" })
+
+    _code, env = run_tmux(["ensure-session"], fixture: fixture)
+
+    assert_equal true, env["data"]["session_name_unused"]
+    assert_empty @fake.calls
+  end
+
+  # --- open: full sequence, order, and argv -----------------------------
+
+  def test_open_creates_the_session_as_the_editor_window_then_the_claude_window_in_order
+    @fake.expect(["tmux", "has-session", "-t", "=#{NAME}"], exitstatus: 1)
+    expect_no_caffeinate
+    @fake.expect(
+      ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", NAME, "-c", PATH,
+       "-n", "nvim", "--", "nvim"],
+      out: "@1\n"
+    )
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=#{NAME}:", "-n", "claude", "-c", PATH],
+      out: "@2\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@2"], out: "")
+
+    code, env = run_tmux(open_argv)
+
+    assert_equal 0, code
+    assert_equal "session-per-issue", env["data"]["layout"]
+    assert_equal NAME, env["data"]["session"]
+    assert_equal "@1", env["data"]["editor_window_id"]
+    assert_equal "@2", env["data"]["window_id"]
+    assert_equal false, env["data"]["skipped"]
+
+    # Order: has-session, new-session (editor), new-window (claude),
+    # send-keys - and no third new-window. The caffeinate probe's own
+    # `which` call is filtered out; it is not part of this sequence.
+    kinds = @fake.calls.map { |c| c.argv[0, 2] }.reject { |k| k == %w[which caffeinate] }
+    assert_equal(
+      [%w[tmux has-session], %w[tmux new-session], %w[tmux new-window], %w[tmux send-keys]],
+      kinds
+    )
+    new_window_calls = @fake.calls.select { |c| c.argv[0, 2] == %w[tmux new-window] }
+    assert_equal 1, new_window_calls.length
+  end
+
+  def test_open_editor_window_is_named_from_the_editor_argv_basename
+    @fake.expect(["tmux", "has-session", "-t", "=#{NAME}"], exitstatus: 1)
+    expect_no_caffeinate
+    fixture = manifest_with(FIXTURE, "tmux" => { "editor" => ["/usr/local/bin/nvim", "-c", "Explore"] })
+    @fake.expect(
+      ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", NAME, "-c", PATH,
+       "-n", "nvim", "--", "/usr/local/bin/nvim", "-c", "Explore"],
+      out: "@1\n"
+    )
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=#{NAME}:", "-n", "claude", "-c", PATH],
+      out: "@2\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@2"], out: "")
+
+    code, _env = run_tmux(open_argv, fixture: fixture)
+
+    assert_equal 0, code
+  end
+
+  # --- open: no editor configured ---------------------------------------
+
+  def test_open_with_no_editor_issues_a_single_new_session_and_no_new_window
+    fixture = manifest_with(FIXTURE, "tmux" => { "editor" => nil })
+    @fake.expect(["tmux", "has-session", "-t", "=#{NAME}"], exitstatus: 1)
+    expect_no_caffeinate
+    @fake.expect(
+      ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", NAME, "-c", PATH, "-n", "claude"],
+      out: "@1\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@1"], out: "")
+
+    code, env = run_tmux(open_argv, fixture: fixture)
+
+    assert_equal 0, code
+    assert_equal "@1", env["data"]["window_id"]
+    assert_nil env["data"]["editor_window_id"]
+    refute(@fake.calls.any? { |c| c.argv[0, 2] == %w[tmux new-window] })
+  end
+
+  # --- editor argv never joined into send-keys ---------------------------
+
+  def test_editor_argv_is_the_window_command_never_joined_into_send_keys
+    @fake.expect(["tmux", "has-session", "-t", "=#{NAME}"], exitstatus: 1)
+    expect_no_caffeinate
+    @fake.expect(
+      ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", NAME, "-c", PATH,
+       "-n", "nvim", "--", "nvim"],
+      out: "@1\n"
+    )
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=#{NAME}:", "-n", "claude", "-c", PATH],
+      out: "@2\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@2"], out: "")
+
+    run_tmux(open_argv)
+
+    send_call = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }
+    refute_includes send_call.argv[4], "nvim"
+  end
+
+  # --- existing session skip ---------------------------------------------
+
+  def test_open_skips_when_the_session_already_exists
+    @fake.expect(["tmux", "has-session", "-t", "=#{NAME}"], exitstatus: 0)
+    # No new-session, new-window, or send-keys expectation - a hit must not
+    # create anything.
+
+    code, env = run_tmux(open_argv)
+
+    assert_equal 0, code
+    assert_equal true, env["data"]["skipped"]
+    assert_match(/#{Regexp.escape(NAME)} already exists/, env["data"]["reason"])
+  end
+
+  # --- empty captured window id -------------------------------------------
+
+  def test_open_never_sends_keys_when_the_claude_window_id_is_empty_with_an_editor
+    @fake.expect(["tmux", "has-session", "-t", "=#{NAME}"], exitstatus: 1)
+    expect_no_caffeinate
+    @fake.expect(
+      ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", NAME, "-c", PATH,
+       "-n", "nvim", "--", "nvim"],
+      out: "@1\n"
+    )
+    @fake.expect(["tmux", "new-window"], out: "") # empty id despite success
+    # No send-keys expectation - FakeSh raises if the code tries.
+
+    code, env = run_tmux(open_argv)
+
+    assert_equal 1, code
+    assert_equal "window_id_empty", env["blocked"].first["code"]
+  end
+
+  def test_open_never_sends_keys_when_the_session_window_id_is_empty_with_no_editor
+    fixture = manifest_with(FIXTURE, "tmux" => { "editor" => nil })
+    @fake.expect(["tmux", "has-session", "-t", "=#{NAME}"], exitstatus: 1)
+    expect_no_caffeinate
+    @fake.expect(["tmux", "new-session"], out: "") # empty id despite success
+    # No send-keys expectation - FakeSh raises if the code tries.
+
+    code, env = run_tmux(open_argv, fixture: fixture)
+
+    assert_equal 1, code
+    assert_equal "window_id_empty", env["blocked"].first["code"]
+  end
+
+  # --- byte-identical claude command --------------------------------------
+
+  def test_seeded_claude_command_is_byte_identical_to_window_per_issue
+    @fake.expect(["tmux", "has-session", "-t", "=#{NAME}"], exitstatus: 1)
+    expect_no_caffeinate
+    @fake.expect(
+      ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", NAME, "-c", PATH,
+       "-n", "nvim", "--", "nvim"],
+      out: "@1\n"
+    )
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=#{NAME}:", "-n", "claude", "-c", PATH],
+      out: "@2\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@2"], out: "")
+
+    run_tmux(open_argv)
+
+    keys = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }.argv[4]
+    assert_includes keys, "claude --permission-mode auto --model fakemodel"
+    assert_includes keys, SEED
+    assert_includes keys, "/wurk:commit --auto"
+    assert_includes keys, "unrelated to #{ID}"
+  end
+
+  # --- dry run --------------------------------------------------------------
+
+  def test_open_dry_run_renders_the_full_sequence_and_issues_no_mutating_commands
+    @fake.expect(["tmux", "has-session", "-t", "=#{NAME}"], exitstatus: 1)
+    expect_no_caffeinate
+
+    code, env = run_tmux(open_argv(["--dry-run"]))
+
+    assert_equal 0, code
+    session_line = env["commands"].find { |c| c.include?("new-session") }
+    window_line = env["commands"].find { |c| c.include?("new-window") }
+    send_line = env["commands"].find { |c| c.include?("send-keys") }
+
+    refute_nil session_line
+    refute_nil window_line
+    refute_nil send_line
+    assert_includes send_line, "$win"
+    refute(@fake.calls.any? { |c| %w[new-session new-window send-keys].include?(c.argv[1]) })
+  end
+
+  def test_ensure_session_dry_run_is_still_a_no_op
+    code, env = run_tmux(["ensure-session", "--dry-run"])
+
+    assert_equal 0, code
+    assert_equal true, env["data"]["skipped"]
+    assert_empty @fake.calls
+    assert_empty env["commands"]
+  end
+end

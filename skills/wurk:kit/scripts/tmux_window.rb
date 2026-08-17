@@ -19,8 +19,25 @@ require_relative "lib/manifest"
 # quiesce timeout is reported `blocked`, not escalated. (`kill-window` on a
 # window every one of whose panes is already a bare shell, in `close`, is not
 # this rule - it targets nothing alive.)
+#
+# `tmux.layout` (manifest) selects between two topologies. Under
+# `window-per-issue` (the default) `ensure-session` and `open` address one
+# shared, manifest-named session and add a window per workspace - the
+# original shape, byte-identical to before this layout existed. Under
+# `session-per-issue`, `open` gives each workspace its own tmux *session*,
+# named for the workspace, and `ensure-session` becomes a reporting no-op
+# because there is no shared session left to ensure. The kill rules above
+# apply unchanged under both layouts - nothing about a second layout loosens
+# them. This file ships no default editor: `tmux.editor` is an optional
+# manifest argv, and no concrete editor binary is ever named in kit source.
 module TmuxWindow
   SHELL_COMMANDS = %w[fish zsh bash sh].freeze
+
+  # session-per-issue: the name of the second window, holding the seeded
+  # claude session. The first window - present only when tmux.editor is
+  # configured - is named from the editor argv instead, never from a
+  # constant here (see Decision 5: no editor name ever appears in this file).
+  CLAUDE_WINDOW_NAME = "claude"
 
   # The convergence point every caller relies on: editing this one template
   # reaches every seeded session without touching the calling skills.
@@ -289,6 +306,20 @@ module TmuxWindow
       manifest = tmux_manifest(env)
       return env.emit(io) unless manifest
 
+      if manifest.tmux_layout == "session-per-issue"
+        # Nothing to ensure: each workspace's session is created by `open`,
+        # named after the workspace. Reported rather than silently skipped so
+        # the caller can say what happened, and so a stray tmux.session under
+        # this layout is visible instead of quietly ignored.
+        env.data["layout"] = "session-per-issue"
+        env.data["created"] = false
+        env.data["skipped"] = true
+        env.data["reason"] = "session-per-issue: each workspace gets its own session"
+        env.data["session_name_unused"] = !blank?(manifest.tmux_session)
+        return env.emit(io)
+      end
+      env.data["layout"] = "window-per-issue"
+
       session = manifest.tmux_session
 
       # The session's working directory is the main checkout, asked of git
@@ -358,6 +389,10 @@ module TmuxWindow
       manifest = tmux_manifest(env)
       return env.emit(io) unless manifest
 
+      if manifest.tmux_layout == "session-per-issue"
+        return open_window_session_per_issue(manifest, name, path, id, seed, options, env, io)
+      end
+
       session = manifest.tmux_session
       model = manifest.tmux_model
 
@@ -412,6 +447,124 @@ module TmuxWindow
       env.data["path"] = path
       env.data["model"] = model
       env.data["no_finish"] = options[:no_finish]
+      env.data["skipped"] = false
+      env.emit(io)
+    end
+
+    # session-per-issue: the workspace name IS the session name (wu-aqy). The
+    # duplicate guard is has-session rather than a window-name scan, because
+    # the session is this layout's unique key - same shape as
+    # worktree_create.rb's branch/directory guards.
+    #
+    # `new-session` always creates a first window, so it is used AS the
+    # first window rather than leaving an unnamed one behind. With an editor
+    # configured that first window is the editor; with none it is claude, and
+    # the session has exactly one window. Never three.
+    #
+    # With tmux.editor configured - three commands after the guard:
+    #   tmux has-session -t =<name>                       -> skip if it exists
+    #   tmux new-session -d -s <name> -c <path> -n <editor> -- <editor argv...>
+    #   tmux new-window  -d -P -F '#{window_id}' -t =<name>: -n claude -c <path>
+    #   tmux send-keys   -t <claude window id> <keys> Enter
+    #
+    # With no tmux.editor - two commands after the guard:
+    #   tmux has-session -t =<name>                       -> skip if it exists
+    #   tmux new-session -d -P -F '#{window_id}' -s <name> -c <path> -n claude
+    #   tmux send-keys   -t <claude window id> <keys> Enter
+    #
+    # The editor window name is File.basename(editor_argv.first) - derived,
+    # never a literal editor name in this file. The claude window id is
+    # captured from new-window's -P -F in the editor case and from
+    # new-session's own -P -F in the no-editor case; either way the captured
+    # id goes through the same empty-window-id trap as window-per-issue's
+    # `open` before it is ever used to target a -t. The guard (has-session)
+    # is read-only and runs for real even under --dry-run, the same way
+    # window-per-issue's list-windows guard already does; only the mutating
+    # commands below it are deferred and rendered instead.
+    def open_window_session_per_issue(manifest, name, path, id, seed, options, env, io)
+      dry_run = options[:dry_run]
+      model = manifest.tmux_model
+      editor_argv = manifest.tmux_editor_argv
+
+      env.data["layout"] = "session-per-issue"
+      env.data["session"] = name
+      env.data["name"] = name
+      env.data["path"] = path
+      env.data["model"] = model
+      env.data["no_finish"] = options[:no_finish]
+
+      has_argv = ["tmux", "has-session", "-t", session_target(name)]
+      has_res = Sh.run(has_argv, envelope: env)
+      if has_res.success?
+        env.data["skipped"] = true
+        env.data["reason"] = "session #{name} already exists"
+        return env.emit(io)
+      end
+
+      keys = claude_command(model, seed, id, manifest.trailer_key, no_finish: options[:no_finish])
+      editor_name = editor_argv && File.basename(editor_argv.first)
+      session_new_argv =
+        if editor_argv
+          ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", name, "-c", path,
+           "-n", editor_name, "--"] + editor_argv
+        else
+          ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", name, "-c", path,
+           "-n", CLAUDE_WINDOW_NAME]
+        end
+      claude_window_argv = ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t",
+                             "#{session_target(name)}:", "-n", CLAUDE_WINDOW_NAME, "-c", path]
+
+      if dry_run
+        env.commands << Sh.render(session_new_argv)
+        env.commands << Sh.render(claude_window_argv) if editor_argv
+        env.commands << Sh.render(["tmux", "send-keys", "-t", "$win", keys, "Enter"])
+        env.data["skipped"] = false
+        env.data["editor_window_id"] = nil
+        return env.emit(io)
+      end
+
+      session_res = Sh.run(session_new_argv, envelope: env)
+      unless session_res.success?
+        env.block!(code: "session_create_failed", message: err_or(session_res, "tmux new-session failed"))
+        return env.emit(io)
+      end
+
+      if editor_argv
+        editor_window_id = session_res.out.to_s.strip
+        env.data["editor_window_id"] = editor_window_id.empty? ? nil : editor_window_id
+
+        new_res = Sh.run(claude_window_argv, envelope: env)
+        window_id = new_res.out.to_s.strip
+
+        # Refuse to issue any -t command when the captured id is empty. An
+        # empty -t "" does not error - tmux resolves it to the *current*
+        # window, which cost a live window on 2026-08-02.
+        if !new_res.success? || window_id.empty?
+          env.block!(
+            code: "window_id_empty",
+            message: "tmux new-window produced no window id for #{name.inspect}; " \
+                      "refusing to target -t with an empty id (#{err_or(new_res, 'no output')})"
+          )
+          return env.emit(io)
+        end
+      else
+        env.data["editor_window_id"] = nil
+        window_id = session_res.out.to_s.strip
+
+        if window_id.empty?
+          env.block!(
+            code: "window_id_empty",
+            message: "tmux new-session produced no window id for #{name.inspect}; " \
+                      "refusing to target -t with an empty id (#{err_or(session_res, 'no output')})"
+          )
+          return env.emit(io)
+        end
+      end
+
+      send_res = Sh.run(["tmux", "send-keys", "-t", window_id, keys, "Enter"], envelope: env)
+      env.warn(code: "send_keys_failed", message: err_or(send_res, "tmux send-keys failed")) unless send_res.success?
+
+      env.data["window_id"] = window_id
       env.data["skipped"] = false
       env.emit(io)
     end
