@@ -265,6 +265,42 @@ class WorktreeCreateTest < Minitest::Test
     end
   end
 
+  # wu-ik8: a gate command that never got a chance to run (missing
+  # executable, or a gate.cwd typo caught here rather than at manifest load)
+  # must not read as an ordinary failing quality run - it is a
+  # misconfiguration for a human to fix, so it blocks with the same code
+  # gate.rb uses for the identical condition.
+  #
+  # sabotage: check `quality_res.success?` alone instead of
+  # `quality_res.start_failed?` first -> red (this would set
+  # quality_green: false and fail! instead of blocking with the cause named)
+  def test_gate_command_that_cannot_start_blocks_instead_of_reading_as_red
+    with_scratch_repo do |root, worktrees_root|
+      path = File.join(worktrees_root, "zz-abc-new-thing")
+
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+      @fake.expect(%w[git fetch origin], out: "")
+      @fake.expect(["mkdir", "-p", worktrees_root], out: "")
+      @fake.expect(["git", "worktree", "add", path, "-b", "zz-abc-new-thing", "--no-track", "origin/main"], out: "")
+      @fake.expect(["faketool", "trust", path], out: "")
+      @fake.expect(["cp", "-Rfc", "vendor", "build", "#{path}/"], out: "")
+      @fake.expect(%w[faketool fetch], out: "")
+      err = "could not start command - No such file or directory - make (command: \"make\")"
+      @fake.expect(%w[make quick], start_failed: true, err: err)
+
+      code, env = run_create(["zz-abc-new-thing"])
+
+      assert_equal 1, code
+      assert_equal false, env["ok"]
+      assert_equal false, env["data"]["quality_green"]
+      assert_equal 1, env["blocked"].length
+      assert_equal "gate_command_could_not_start", env["blocked"].first["code"]
+      assert_equal "human", env["blocked"].first["needs"]
+      assert_equal err, env["blocked"].first["message"]
+    end
+  end
+
   # sabotage: pass no timeout: (or the wrong manifest field) to the trust and
   # warm Sh.run calls -> red (FakeSh records Sh.run's 60s default instead of
   # the configured parallelism.timeout_seconds)

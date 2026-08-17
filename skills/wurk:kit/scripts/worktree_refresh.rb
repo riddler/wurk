@@ -65,7 +65,10 @@ module WorktreeRefresh
       results = worktrees.map { |wt| refresh_one(wt["path"], wt["branch"], env, manifest, dry_run: dry_run) }
       env.data[:results] = results
 
-      env.fail! if results.any? { |r| r[:result] == "red" }
+      # start_with?("red") also catches confirm_green's "red, gate could not
+      # start: ..." variant above, not just the bare "red" - both are
+      # failures, they differ only in whether the cause is known.
+      env.fail! if results.any? { |r| r[:result].to_s.start_with?("red") }
       env.emit(io)
     end
 
@@ -124,6 +127,18 @@ module WorktreeRefresh
 
     def confirm_green(path, branch, rebase_result, env, manifest)
       quality_res = Sh.run(manifest.gate_loop, chdir: gate_chdir(manifest, path), envelope: env)
+
+      # The gate command itself never got a chance to run: a typo'd gate.cwd
+      # or a gate command missing from PATH (Sh::Result#start_failed?, see
+      # lib/sh.rb). A bare "red" would read as this worktree's tests
+      # failing, when it is really a misconfiguration to fix - so this names
+      # the concrete cause instead. quality_res.err is already Sh's
+      # self-describing sentence (command and, when set, chdir), so it goes
+      # into the result string as-is, the same way gate.rb uses res.err
+      # verbatim for its gate_command_could_not_start block.
+      if quality_res.start_failed?
+        return { path: path, branch: branch, result: "red, gate could not start: #{quality_res.err}" }
+      end
       return { path: path, branch: branch, result: "red" } unless quality_res.success?
 
       lock_note = rebase_result[:lock_changed] ? "lock repaired" : "lock unchanged"
