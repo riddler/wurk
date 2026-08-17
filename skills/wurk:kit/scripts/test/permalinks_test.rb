@@ -290,7 +290,7 @@ class PermalinksCliTest < Minitest::Test
       code, env = run_cli([path])
 
       assert_equal 1, code
-      assert_equal "gh_repo_view_failed", env["blocked"].first["code"]
+      assert_equal "forge_repo_view_failed", env["blocked"].first["code"]
       assert_equal "human", env["blocked"].first["needs"]
     end
   end

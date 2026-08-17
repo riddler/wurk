@@ -93,19 +93,19 @@ module WorktreeSurvey
       main_checkout = entries.first ? entries.first[:path] : nil
       rest = entries[1..-1] || []
 
-      gh_available = true
+      forge_available = true
       degraded = []
       worktrees = []
 
       rest.each do |entry|
-        worktree, gh_available = survey_one(entry, env, manifest, gh_available)
+        worktree, forge_available = survey_one(entry, env, manifest, forge_available)
         worktrees << worktree
-        degraded << entry[:path] unless gh_available
+        degraded << entry[:path] unless forge_available
       end
 
       env.data[:main_checkout] = main_checkout
       env.data[:worktrees] = worktrees
-      env.data[:gh_available] = gh_available
+      env.data[:forge_available] = forge_available
       env.data[:degraded] = degraded
 
       env.emit(io)
@@ -113,12 +113,12 @@ module WorktreeSurvey
 
     private
 
-    # Surveys one worktree entry. `gh_available` is the running flag from
+    # Surveys one worktree entry. `forge_available` is the running flag from
     # the caller; once false, no further gh call is attempted for any
     # subsequent worktree ("say so once, not once per worktree" - the
     # warning fires on the call that first discovers gh is down, not
-    # again). Returns [worktree_hash, gh_available_after_this_call].
-    def survey_one(entry, env, manifest, gh_available)
+    # again). Returns [worktree_hash, forge_available_after_this_call].
+    def survey_one(entry, env, manifest, forge_available)
       path = entry[:path]
       branch = entry[:branch]
       bead = decompose_bead(branch)
@@ -145,7 +145,7 @@ module WorktreeSurvey
       pr = nil
       stale = false
 
-      if gh_available
+      if forge_available
         result = PrState.query_merged(branch.to_s, env: env)
         if result.available
           if result.merged
@@ -154,9 +154,9 @@ module WorktreeSurvey
             stale = true
           end
         else
-          gh_available = false
+          forge_available = false
           env.warn(
-            code: "gh_unavailable",
+            code: "forge_unavailable",
             message: "gh unavailable, falling back to the raw worktree list for PR state: #{result.error}"
           )
         end
@@ -180,7 +180,7 @@ module WorktreeSurvey
         holds_areas: holds_areas
       }
 
-      [worktree, gh_available]
+      [worktree, forge_available]
     end
   end
 end

@@ -29,11 +29,23 @@ class WorktreeRefreshTest < Minitest::Test
     Manifest.reset!
   end
 
-  def run_refresh(argv = [])
+  def run_refresh(argv = [], fixture: FIXTURE)
     io = StringIO.new
     code = nil
-    with_manifest(FIXTURE) { code = WorktreeRefresh.run(argv, io: io) }
+    with_manifest(fixture) { code = WorktreeRefresh.run(argv, io: io) }
     [code, JSON.parse(io.string)]
+  end
+
+  # sabotage: drop the Forge.guard! call from worktree_refresh.rb -> the
+  # survey it drives shells out to gh against a GitLab repo -> red. Without
+  # its own guard this sweep would relay worktree_survey's "unsupported_forge"
+  # block as a nested "survey_failed" instead of naming the cause itself.
+  def test_a_gitlab_repo_blocks_in_its_own_voice_rather_than_relaying_survey_failed
+    code, env = run_refresh([], fixture: "forge_gitlab")
+
+    assert_equal 1, code
+    assert_equal "unsupported_forge", env["blocked"].first["code"]
+    assert_empty @fake.calls
   end
 
   def porcelain

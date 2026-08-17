@@ -74,6 +74,9 @@ report needs the actual rebase and gate outcome rather than a preview.
   per-worktree skip.
 - `blocked` `survey_failed` - the worktree enumeration itself failed; report
   its message rather than proceeding with a partial list.
+- `blocked` `unsupported_forge` - the manifest names a forge this sweep's
+  per-worktree request lookup does not implement. Report it and stop; there
+  is no partial path here.
 - `data.results` empty with `ok: true` - no live worktrees. A normal outcome,
   not an error. Say so and stop.
 - Otherwise `data.results` is one entry per worktree, each carrying the

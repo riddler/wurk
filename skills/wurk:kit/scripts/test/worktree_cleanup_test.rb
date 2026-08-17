@@ -143,7 +143,7 @@ class WorktreeCleanupTest < Minitest::Test
     assert_match(/commits after merge/, wt1["result"])
   end
 
-  def test_gh_unavailable_stops_the_whole_sweep
+  def test_forge_unavailable_stops_the_whole_sweep
     @fake.expect(%w[git worktree list --porcelain], out: porcelain)
     @fake.expect(%w[git status --porcelain], out: "")
     @fake.expect(%w[git merge-base --is-ancestor origin/main HEAD], exitstatus: 0)
@@ -153,8 +153,8 @@ class WorktreeCleanupTest < Minitest::Test
        "--json", "number,mergedAt,headRefOid", "--jq", ".[0]"],
       exitstatus: 1, err: "gh: authentication required\n"
     )
-    # Survey still visits wt2 (its own gh_available degrade is per-worktree),
-    # but never queries gh again once it went unavailable.
+    # Survey still visits wt2 (its own forge_available degrade is
+    # per-worktree), but never queries gh again once it went unavailable.
     @fake.expect(%w[git status --porcelain], out: "")
     @fake.expect(%w[git merge-base --is-ancestor origin/main HEAD], exitstatus: 1)
     @fake.expect(%w[bd show zz-def --json], out: '[{"id":"zz-def","labels":[]}]')
@@ -163,7 +163,7 @@ class WorktreeCleanupTest < Minitest::Test
 
     assert_equal 1, code
     assert_equal false, env["ok"]
-    assert_equal "gh_unavailable", env["blocked"].first["code"]
+    assert_equal "forge_unavailable", env["blocked"].first["code"]
   end
 
   def test_dry_run_never_removes_or_deletes_the_branch
