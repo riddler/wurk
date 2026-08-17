@@ -265,6 +265,74 @@ class WorktreeCreateTest < Minitest::Test
     end
   end
 
+  # sabotage: pass no timeout: (or the wrong manifest field) to the trust and
+  # warm Sh.run calls -> red (FakeSh records Sh.run's 60s default instead of
+  # the configured parallelism.timeout_seconds)
+  def test_trust_and_warm_use_the_parallelism_timeout
+    manifest = manifest_with(FIXTURE, "parallelism" => { "timeout_seconds" => 900 })
+
+    with_manifest(manifest) do
+      Dir.mktmpdir do |tmp|
+        root = File.join(tmp, "myrepo")
+        FileUtils.mkdir_p(File.join(root, "build", "cache"))
+        FileUtils.touch(File.join(root, "build", "cache", "faketool-1.2.cache"))
+        worktrees_root = File.join(tmp, "zz-worktrees")
+        path = File.join(worktrees_root, "zz-abc-new-thing")
+
+        expect_location(root)
+        @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+        @fake.expect(%w[git fetch origin], out: "")
+        @fake.expect(["mkdir", "-p", worktrees_root], out: "")
+        @fake.expect(["git", "worktree", "add", path, "-b", "zz-abc-new-thing", "--no-track", "origin/main"], out: "")
+        @fake.expect(["faketool", "trust", path], out: "")
+        @fake.expect(["cp", "-Rfc", "vendor", "build", "#{path}/"], out: "")
+        @fake.expect(%w[faketool fetch], out: "")
+        @fake.expect(%w[make quick], out: "loop green\n")
+
+        code, _env = run_create(["zz-abc-new-thing"])
+
+        assert_equal 0, code
+        trust_call = @fake.calls.find { |c| c.argv == ["faketool", "trust", path] }
+        warm_call = @fake.calls.find { |c| c.argv == %w[faketool fetch] }
+        assert_equal 900, trust_call.timeout
+        assert_equal 900, warm_call.timeout
+      end
+    end
+  end
+
+  # sabotage: pass no timeout: (or gate.timeout_seconds instead of
+  # parallelism.timeout_seconds) to the verify Sh.run call -> red
+  def test_verify_uses_the_gate_timeout_not_the_parallelism_timeout
+    manifest = manifest_with(FIXTURE, "gate" => { "timeout_seconds" => 1800 },
+                                       "parallelism" => { "timeout_seconds" => 900 })
+
+    with_manifest(manifest) do
+      Dir.mktmpdir do |tmp|
+        root = File.join(tmp, "myrepo")
+        FileUtils.mkdir_p(File.join(root, "build", "cache"))
+        FileUtils.touch(File.join(root, "build", "cache", "faketool-1.2.cache"))
+        worktrees_root = File.join(tmp, "zz-worktrees")
+        path = File.join(worktrees_root, "zz-abc-new-thing")
+
+        expect_location(root)
+        @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+        @fake.expect(%w[git fetch origin], out: "")
+        @fake.expect(["mkdir", "-p", worktrees_root], out: "")
+        @fake.expect(["git", "worktree", "add", path, "-b", "zz-abc-new-thing", "--no-track", "origin/main"], out: "")
+        @fake.expect(["faketool", "trust", path], out: "")
+        @fake.expect(["cp", "-Rfc", "vendor", "build", "#{path}/"], out: "")
+        @fake.expect(%w[faketool fetch], out: "")
+        @fake.expect(%w[make quick], out: "loop green\n")
+
+        code, _env = run_create(["zz-abc-new-thing"])
+
+        assert_equal 0, code
+        gate_call = @fake.calls.find { |c| c.argv == %w[make quick] }
+        assert_equal 1800, gate_call.timeout
+      end
+    end
+  end
+
   # sabotage: batch a nested entry into the flat multi-source cp instead of
   # giving it its own mkdir -p + single-source cp -> cp flattens it to its
   # basename ("plts" instead of "priv/plts") and this goes red. This is the

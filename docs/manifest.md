@@ -77,7 +77,13 @@ defaults are listed under "Defaults" below.
     "warm": [["mix", "deps.get"]],    // (opt) commands run in the new worktree
     "repair_when": "mix.lock",        // (opt) lockfile that triggers post-rebase repair
     "repair": [["mix", "deps.get"]],  // (opt)
-    "post_branch": []                 // (opt) e.g. fixative's xcodegen/icon chain
+    "post_branch": [],                // (opt) e.g. fixative's xcodegen/icon chain
+    "timeout_seconds": 600            // (opt) default 600; seconds Sh.run allows
+                                      // the mise-trust hook and each `warm` command
+                                      // before killing them - raise it for a warm
+                                      // step that builds container images or fetches
+                                      // deps. The post-warm verify runs gate.loop and
+                                      // uses gate.timeout_seconds instead.
   },
 
   "tmux": {                           // (opt) omit = no tmux integration
@@ -568,7 +574,8 @@ Defaults applied when a key is absent: `repo.default_branch` = `main`,
 `commits.body_line_max` = 72, `commits.total_lines_max` = 40,
 `commits.trailer.key` = `Refs`, `models.direction` = `opus`,
 `artifacts.filename` = `YYMMDD-[id-]kebab`, `judge.model` = `sonnet`,
-`rebase.auto_resolve_paths` = `[]`, `gate.timeout_seconds` = `600`.
+`rebase.auto_resolve_paths` = `[]`, `gate.timeout_seconds` = `600`,
+`parallelism.timeout_seconds` = `600`.
 
 Everything else absent means the capability is off, and the scripts say so
 rather than guessing: no `tmux` section means no tmux integration, no
@@ -604,6 +611,8 @@ gate commands run at the root of the checkout being gated.
   for why these are validated rather than merely documented.
 - **`gate.timeout_seconds` must be a positive integer.** Zero, a negative
   number, a float, and a non-numeric value all block.
+- **`parallelism.timeout_seconds` must be a positive integer.** Same rule,
+  same validation, as `gate.timeout_seconds` above.
 - **`gate.cwd` must be a relative subdirectory path.** An absolute path,
   `.`, `""`, a non-string, or any `..` segment blocks. Existence is
   deliberately not checked; see "`gate.cwd`" above. A `gate.cwd` that does
