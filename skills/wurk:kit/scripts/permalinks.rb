@@ -91,7 +91,7 @@ module PermalinksCli
 
       repo_res = Sh.run(%w[gh repo view --json owner,name], envelope: env)
       unless repo_res.success?
-        env.block!(code: "gh_repo_view_failed", message: err_or(repo_res, "gh repo view failed"), needs: "human")
+        env.block!(code: "forge_repo_view_failed", message: err_or(repo_res, "gh repo view failed"), needs: "human")
         return env.emit(io)
       end
 
@@ -99,7 +99,7 @@ module PermalinksCli
       owner = parsed && parsed["owner"].is_a?(Hash) ? parsed["owner"]["login"] : nil
       repo = parsed && parsed["name"]
       if owner.to_s.empty? || repo.to_s.empty?
-        env.block!(code: "gh_repo_view_unparseable", message: "gh repo view returned unexpected JSON")
+        env.block!(code: "forge_repo_view_unparseable", message: "gh repo view returned unexpected JSON")
         return env.emit(io)
       end
 

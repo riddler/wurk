@@ -100,7 +100,7 @@ module PrState
 
       result = beads_for_pr(number, env: env)
       unless result.available
-        env.block!(code: "gh_unavailable", message: "gh pr view failed: #{result.error}")
+        env.block!(code: "forge_unavailable", message: "gh pr view failed: #{result.error}")
         return env.emit(io)
       end
 
@@ -117,7 +117,7 @@ module PrState
 
       result = query_merged(branch, env: env)
       unless result.available
-        env.block!(code: "gh_unavailable", message: "gh pr list failed or is unauthenticated: #{result.error}")
+        env.block!(code: "forge_unavailable", message: "gh pr list failed or is unauthenticated: #{result.error}")
         return env.emit(io)
       end
 

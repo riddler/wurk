@@ -100,11 +100,11 @@ class WorktreeSurveyTest < Minitest::Test
     assert_equal true, wt2["dirty"]
     assert_nil wt2["pr"]
 
-    assert_equal true, data["gh_available"]
+    assert_equal true, data["forge_available"]
     assert_equal [], data["degraded"]
   end
 
-  def test_gh_unavailable_degrades_once_not_per_worktree
+  def test_forge_unavailable_degrades_once_not_per_worktree
     porcelain = <<~TXT
       worktree /repos/myrepo
       HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -141,9 +141,9 @@ class WorktreeSurveyTest < Minitest::Test
 
     assert_equal 0, code
     data = env["data"]
-    assert_equal false, data["gh_available"]
+    assert_equal false, data["forge_available"]
     assert_equal 1, env["warnings"].length
-    assert_equal "gh_unavailable", env["warnings"].first["code"]
+    assert_equal "forge_unavailable", env["warnings"].first["code"]
     assert_equal(
       %w[
         /repos/zz-worktrees/zz-abc-exit-sets

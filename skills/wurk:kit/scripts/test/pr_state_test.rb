@@ -87,7 +87,7 @@ class PrStateTest < Minitest::Test
 
     assert_equal 1, code
     assert_equal false, env["ok"]
-    assert_equal "gh_unavailable", env["blocked"].first["code"]
+    assert_equal "forge_unavailable", env["blocked"].first["code"]
     assert_equal "human", env["blocked"].first["needs"]
     # No merge-base/ancestry call was ever attempted: FakeSh would have
     # raised UnexpectedCommand had the script tried one as a fallback.
@@ -116,7 +116,7 @@ class PrStateTest < Minitest::Test
 
     assert_equal 1, code
     assert_equal false, env["ok"]
-    assert_equal "gh_unavailable", env["blocked"].first["code"]
+    assert_equal "forge_unavailable", env["blocked"].first["code"]
     assert_equal "human", env["blocked"].first["needs"]
   end
 end

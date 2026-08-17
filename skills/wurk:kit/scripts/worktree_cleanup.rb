@@ -102,8 +102,8 @@ module WorktreeCleanup
         return [nil, { code: "survey_failed", message: message.empty? ? "worktree_survey failed" : message }]
       end
 
-      unless survey_env.dig("data", "gh_available")
-        return [nil, { code: "gh_unavailable", message: "gh is unavailable; without PR state there is no safe merge signal" }]
+      unless survey_env.dig("data", "forge_available")
+        return [nil, { code: "forge_unavailable", message: "the forge CLI is unavailable; without request state there is no safe merge signal" }]
       end
 
       worktrees = survey_env.dig("data", "worktrees") || []

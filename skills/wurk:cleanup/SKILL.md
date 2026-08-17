@@ -160,7 +160,7 @@ Omitted, sweep every worktree.
 - `blocked` `unsupported_forge` - the manifest names a forge these scripts do
   not implement. Report it and stop; there is no partial path here, and this
   is the script that deletes branches.
-- `blocked` `gh_unavailable` (check phase or removal) - **STOP the whole
+- `blocked` `forge_unavailable` (check phase or removal) - **STOP the whole
   sweep.** Without request state there is no safe merge signal. Report the
   error; do not fall back to any git-only check.
 - `blocked` `no_matching_worktree` - report what is live instead.

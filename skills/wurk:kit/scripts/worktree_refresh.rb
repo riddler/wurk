@@ -7,6 +7,7 @@ require_relative "lib/envelope"
 require_relative "lib/sh"
 require_relative "lib/cli"
 require_relative "lib/manifest"
+require_relative "lib/forge"
 require_relative "worktree_survey"
 require_relative "rebase_onto"
 
@@ -30,6 +31,12 @@ module WorktreeRefresh
 
       manifest = Manifest.require!(env)
       return env.emit(io) unless manifest
+
+      # Guarded here as well as inside worktree_survey.rb: this sweep depends
+      # on the per-worktree request lookup for its rebase-worthiness signal,
+      # so it says in its own voice which forge that lookup needs rather than
+      # relaying a nested "survey_failed".
+      return env.emit(io) unless Forge.guard!(env, manifest, doing: "the per-worktree request lookup")
 
       worktrees, error = enumerate(env, target)
       if error
