@@ -407,16 +407,16 @@ prevent.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] `ruby skills/wurk:kit/scripts/lib/manifest.rb check --file
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] `ruby skills/wurk:kit/scripts/lib/manifest.rb check --file
       skills/wurk:kit/scripts/test/fixtures/manifests/tmux_session_per_issue.json`
       exits 0 with `data.valid: true` and an empty `warnings` array
-- [ ] `ruby skills/wurk:kit/scripts/lib/manifest.rb check` on this repo's own
+- [x] `ruby skills/wurk:kit/scripts/lib/manifest.rb check` on this repo's own
       `.claude/wurk.json` still exits 0 with no new warnings
-- [ ] The new fixture file exists at the path above
-- [ ] `git diff --stat` for the commit shows `lib/manifest.rb` and
+- [x] The new fixture file exists at the path above
+- [x] `git diff --stat` for the commit shows `lib/manifest.rb` and
       `docs/manifest.md` both present (CLAUDE.md's same-commit sync rule)
-- [ ] Every key in `Manifest::DEFAULTS` appears in `docs/manifest.md`'s
+- [x] Every key in `Manifest::DEFAULTS` appears in `docs/manifest.md`'s
       defaults enumeration - check with
       `ruby -r./skills/wurk:kit/scripts/lib/manifest -e 'd=File.read("docs/manifest.md"); miss=Manifest::DEFAULTS.keys.reject { |k| d.include?(k) }; abort(miss.inspect) unless miss.empty?'`
 
@@ -849,3 +849,27 @@ of blocking here.
 - Prior art for adding a field to a structural section rather than forking:
   `docs/plans/260817-wu-9fb-subdirectory-gate-cwd.md`
 - Bead: `wu-aqy`
+
+## Deferred Manual Verification
+
+Manual verification items are deferred during looped (--loop) execution and
+surfaced here once, rather than blocking after each phase. Confirm these
+before considering the plan fully landed.
+
+### Phase 1
+
+- [ ] `docs/manifest.md`'s `## tmux` prose matches what `lib/manifest.rb`
+      actually validates, field for field
+- [ ] The schema-fence comments read consistently with the `(opt)` convention
+      the rest of the fence uses
+- [ ] No regressions in related features
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---

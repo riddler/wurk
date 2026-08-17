@@ -91,8 +91,10 @@ defaults are listed under "Defaults" below.
   },
 
   "tmux": {                           // (opt) omit = no tmux integration
-    "session": "statifier-ex",
-    "model": "opus"                   // model for seeded worktree sessions
+    "layout": "window-per-issue",     // (opt) or "session-per-issue"; see ## tmux
+    "session": "statifier-ex",        // required under window-per-issue
+    "model": "opus",                  // model for seeded worktree sessions
+    "editor": ["nvim"]                // (opt) session-per-issue only; omit = no editor window
   },
 
   "models": {                         // (opt) stage models that differ per project
@@ -464,6 +466,29 @@ resolved against the manifest's checkout root, never the process cwd):
     gate.rb's default sabotage file reader
 ```
 
+## `tmux`
+
+`tmux.layout` selects one of two topologies for seeded worktree sessions.
+Absent means `window-per-issue`, today's behavior.
+
+- **window-per-issue** (default) - every issue's seeded session lands as a
+  new window inside one shared session, named by `tmux.session`.
+  `tmux.session` is required under this layout: `ensure-session` and `open`
+  address that session by name, so a missing or empty value blocks
+  validation.
+- **session-per-issue** - each issue gets its own tmux session, named after
+  the workspace (the same `<bead-id>-<slug>` string that names the branch
+  and the worktree). `tmux.session` is unused under this layout and may be
+  absent.
+
+`tmux.editor` is an optional argv array, the same shape as `gate.full` and
+`parallelism.trust` - a shell string is a validation error naming
+`tmux.editor`, not something split on whitespace. It applies to
+`session-per-issue` only: when present, an editor window is opened in the
+worktree running the argv as the window's command, named after the argv's
+first element's basename (`["nvim"]` names the window `nvim`). Omitting
+`tmux.editor` skips the editor window entirely.
+
 ## Two path lists, not one
 
 `gate.build_paths` and `gate.also_gated_paths` answer different questions,
@@ -524,6 +549,7 @@ is already handled there.
 | gate.attest | mix gate.verify | none | none |
 | gate.sabotage | yes | yes (enumerated binding tests) | none |
 | parallelism.model | worktree-per-issue | worktree-per-issue | branch-in-place |
+| tmux.layout | window-per-issue (default) | window-per-issue (default) | window-per-issue (default) |
 | tmux.session | statifier-ex | predicator-ex | (renames current window) |
 | models.direction | fable | opus (default) | opus (default) |
 | artifacts.plans | docs/plans | docs/plans | thoughts/shared/plans |
@@ -589,10 +615,11 @@ Defaults applied when a key is absent: `repo.default_branch` = `main`,
 `commits.trailer.key` = `Refs`, `models.direction` = `opus`,
 `artifacts.filename` = `YYMMDD-[id-]kebab`, `judge.model` = `sonnet`,
 `rebase.auto_resolve_paths` = `[]`, `gate.timeout_seconds` = `600`,
-`parallelism.timeout_seconds` = `600`.
+`parallelism.timeout_seconds` = `600`, `tmux.layout` = `window-per-issue`.
 
 Everything else absent means the capability is off, and the scripts say so
-rather than guessing: no `tmux` section means no tmux integration, no
+rather than guessing: no `tmux` section means no tmux integration, and a
+`tmux` section with no `layout` means `window-per-issue`; no
 `gate.report` means tier 0, no `gate.attest` means `attested: false`, no
 `gate.project_level_skips` and no `gate.not_applicable_skips` means every
 skipped stage blocks, no

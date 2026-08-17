@@ -618,6 +618,43 @@ class ManifestValidationTest < Minitest::Test
     assert m.valid?, "expected the gate_subdir fixture to validate: #{m.errors.inspect}"
     assert_empty m.warnings, "gate.cwd must be a known key: #{m.warnings.inspect}"
   end
+
+  # sabotage: drop the DEFAULTS["tmux.layout"] entry -> red
+  def test_tmux_layout_defaults_to_window_per_issue
+    m = ManifestFixtures.load("tmux")
+    assert_equal "window-per-issue", m.tmux_layout
+  end
+
+  # sabotage: drop "tmux.layout" from ENUMS -> red
+  def test_unrecognized_tmux_layout_blocks_rather_than_defaulting
+    m = ManifestFixtures.load_with("tmux", "tmux" => { "layout" => "per-window-issue" })
+    refute m.valid?
+    assert_match(/tmux\.layout is "per-window-issue"; expected one of window-per-issue, session-per-issue/,
+                 m.errors.join("\n"))
+  end
+
+  # sabotage: split tmux.editor on whitespace instead of enforcing argv -> red
+  def test_shell_string_tmux_editor_blocks
+    m = ManifestFixtures.load_with("tmux_session_per_issue", "tmux" => { "editor" => "nvim" })
+    refute m.valid?
+    assert_match(/tmux\.editor must be an argv array of strings/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the layout guard in validate_tmux, requiring session under
+  # every layout -> red, since tmux_session_per_issue has no tmux.session
+  def test_tmux_session_absent_is_valid_under_session_per_issue
+    m = ManifestFixtures.load("tmux_session_per_issue")
+    assert m.valid?, "expected the tmux_session_per_issue fixture to validate: #{m.errors.inspect}"
+    assert_empty m.warnings
+  end
+
+  # sabotage: return early regardless of layout in validate_tmux -> red,
+  # since window-per-issue with no session must still block
+  def test_tmux_session_required_under_window_per_issue
+    m = ManifestFixtures.load_with("tmux_session_per_issue", "tmux" => { "layout" => "window-per-issue" })
+    refute m.valid?
+    assert_match(/tmux\.session is required under tmux\.layout window-per-issue/, m.errors.join("\n"))
+  end
 end
 
 class ManifestAccessorTest < Minitest::Test
@@ -673,6 +710,26 @@ class ManifestAccessorTest < Minitest::Test
   def test_absent_tmux_section_reports_no_tmux_integration
     refute @m.tmux?
     assert_nil @m.tmux_session
+  end
+
+  # sabotage: drop the DEFAULTS["tmux.layout"] entry -> red, since tmux_layout
+  # would then return nil against a manifest with no tmux section at all
+  def test_tmux_layout_defaults_to_window_per_issue_even_without_a_tmux_section
+    assert_equal "window-per-issue", @m.tmux_layout
+    refute @m.tmux?
+  end
+
+  # sabotage: return [] instead of nil for an absent tmux.editor -> red
+  def test_tmux_editor_argv_is_nil_when_absent
+    m = ManifestFixtures.load("tmux")
+    assert_nil m.tmux_editor_argv
+  end
+
+  # sabotage: read the wrong dotted key, or drop the argv() call, in
+  # tmux_editor_argv -> red
+  def test_tmux_editor_argv_reads_the_declared_argv
+    m = ManifestFixtures.load("tmux_session_per_issue")
+    assert_equal ["nvim"], m.tmux_editor_argv
   end
 
   # sabotage: return a match-anything regex instead of nil when the key is

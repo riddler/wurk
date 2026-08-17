@@ -58,7 +58,8 @@ class Manifest
     "forge.kind" => %w[github gitlab],
     "parallelism.model" => %w[worktree-per-issue branch-in-place],
     "commits.style" => %w[s-form conventional],
-    "changelog.mode" => %w[fragments keep-a-changelog none]
+    "changelog.mode" => %w[fragments keep-a-changelog none],
+    "tmux.layout" => %w[window-per-issue session-per-issue]
   }.freeze
 
   # The known key surface, for the unknown-key warning. Nested sections list
@@ -74,7 +75,7 @@ class Manifest
     "gate.sabotage" => %w[test_roots test_pattern exempt_prefixes],
     "parallelism" => %w[model worktrees_dir trust warm_clone warm_globs warm repair_when repair post_branch
                         timeout_seconds],
-    "tmux" => %w[session model],
+    "tmux" => %w[session model layout editor],
     "models" => %w[direction],
     "artifacts" => %w[plans research filename repository],
     "commits" => %w[style package_map subject_under body_line_max total_lines_max trailer],
@@ -96,7 +97,8 @@ class Manifest
     "artifacts.filename" => "YYMMDD-[id-]kebab",
     "judge.model" => "sonnet",
     "gate.timeout_seconds" => 600,
-    "parallelism.timeout_seconds" => 600
+    "parallelism.timeout_seconds" => 600,
+    "tmux.layout" => "window-per-issue"
   }.freeze
 
   attr_reader :path, :raw, :errors, :warnings
@@ -414,6 +416,17 @@ class Manifest
     fetch("tmux.model")
   end
 
+  def tmux_layout
+    fetch("tmux.layout")
+  end
+
+  # Optional argv, same shape as trust_argv: absent stays nil, present is
+  # held to the argv rule rather than split on whitespace.
+  def tmux_editor_argv
+    value = fetch("tmux.editor")
+    value && argv(value)
+  end
+
   # The one stage model that genuinely differs between projects: the
   # direction/ADR tier wurk:work dispatches. Every other stage model is
   # workflow policy stated in the skill itself. Read by wurk:work from the
@@ -540,7 +553,8 @@ class Manifest
   # Command fields carry argv arrays. Checked here as well as at the
   # accessor so `check` reports a shell-string command as a validation
   # error rather than exploding mid-run in whichever script reads it first.
-  COMMAND_FIELDS = %w[gate.full gate.loop gate.report gate.report_loop gate.attest parallelism.trust].freeze
+  COMMAND_FIELDS = %w[gate.full gate.loop gate.report gate.report_loop gate.attest parallelism.trust
+                      tmux.editor].freeze
   COMMAND_LIST_FIELDS = %w[parallelism.warm parallelism.repair parallelism.post_branch].freeze
 
   # Fields that hold a list of regex source strings rather than argv. Each
@@ -560,6 +574,7 @@ class Manifest
     validate_gate_timeout_seconds
     validate_parallelism_timeout_seconds
     validate_gate_cwd
+    validate_tmux
     collect_unknown_keys(raw, nil)
   end
 
@@ -658,6 +673,21 @@ class Manifest
       errors << "#{path}: gate.cwd must name a subdirectory of the repo root " \
                 "(no '.', no '..' segments); omit the field to gate from the root, got #{value.inspect}"
     end
+  end
+
+  # tmux.session is required under window-per-issue because ensure-session
+  # and open address the session by name; under session-per-issue the
+  # per-issue session name comes from the workspace name, so session may be
+  # absent.
+  def validate_tmux
+    return unless tmux?
+    return unless fetch("tmux.layout") == "window-per-issue"
+
+    session = fetch("tmux.session")
+    return if session.is_a?(String) && !session.empty?
+
+    errors << "#{path}: tmux.session is required under tmux.layout " \
+              "window-per-issue, got #{session.inspect}"
   end
 
   JUDGE_ENTRY_STRING_FIELDS = %w[key label scope_prefix text focus].freeze
