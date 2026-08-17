@@ -57,7 +57,11 @@ defaults are listed under "Defaults" below.
       "test_roots": ["test/"],
       "test_pattern": "\\btest\\s+\"",
       "exempt_prefixes": ["test/scion_tests/", "test/scxml_tests/"]
-    }
+    },
+    "timeout_seconds": 600            // (opt) default 600; seconds Sh.run allows
+                                      // gate.full/gate.loop and gate.attest before
+                                      // killing them - raise it for a gate that
+                                      // runs inside e.g. docker-compose
   },
 
   "parallelism": {
@@ -496,7 +500,7 @@ Defaults applied when a key is absent: `repo.default_branch` = `main`,
 `commits.body_line_max` = 72, `commits.total_lines_max` = 40,
 `commits.trailer.key` = `Refs`, `models.direction` = `opus`,
 `artifacts.filename` = `YYMMDD-[id-]kebab`, `judge.model` = `sonnet`,
-`rebase.auto_resolve_paths` = `[]`.
+`rebase.auto_resolve_paths` = `[]`, `gate.timeout_seconds` = `600`.
 
 Everything else absent means the capability is off, and the scripts say so
 rather than guessing: no `tmux` section means no tmux integration, no
@@ -529,6 +533,8 @@ off - see "`rebase.auto_resolve_paths`" above.
   directory (`.claude/`) - in both match directions - plus rejected outright
   if an entry is `/`, `""`, or `.`. See "`rebase.auto_resolve_paths`" above
   for why these are validated rather than merely documented.
+- **`gate.timeout_seconds` must be a positive integer.** Zero, a negative
+  number, a float, and a non-numeric value all block.
 
 `ruby skills/wurk:kit/scripts/lib/manifest.rb check [--file PATH]` is the
 standalone lint. It emits the usual envelope and exits 1 on an invalid
