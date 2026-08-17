@@ -341,7 +341,7 @@ module Gate
       reporting = loop_mode ? manifest.gate_report_loop : manifest.gate_report
       argv = reporting || (loop_mode ? manifest.gate_loop : manifest.gate_full)
 
-      res = Sh.run(argv, envelope: env, timeout: 600)
+      res = Sh.run(argv, envelope: env, timeout: manifest.gate_timeout_seconds)
       return [res, nil] unless reporting
 
       report = begin
@@ -472,7 +472,7 @@ module Gate
         env.data[:attested] = false
         env.data[:attestation_message] = nil
       elsif manifest.gate_attest
-        verify_res = Sh.run(manifest.gate_attest, envelope: env, timeout: 600)
+        verify_res = Sh.run(manifest.gate_attest, envelope: env, timeout: manifest.gate_timeout_seconds)
         env.data[:attested] = verify_res.success?
         env.data[:attestation_message] =
           (verify_res.success? || verify_res.err.to_s.strip.empty? ? verify_res.out : verify_res.err).to_s.strip

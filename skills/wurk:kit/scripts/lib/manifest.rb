@@ -70,7 +70,7 @@ class Manifest
     "beads.areas" => %w[labels lands_alone always_batchable],
     "forge" => %w[kind labels],
     "gate" => %w[full loop report report_loop attest guard_ledger build_paths also_gated_paths moving_files
-                 project_level_skips not_applicable_skips sabotage],
+                 project_level_skips not_applicable_skips sabotage timeout_seconds],
     "gate.sabotage" => %w[test_roots test_pattern exempt_prefixes],
     "parallelism" => %w[model worktrees_dir trust warm_clone warm_globs warm repair_when repair post_branch],
     "tmux" => %w[session model],
@@ -93,7 +93,8 @@ class Manifest
     "commits.trailer.key" => "Refs",
     "models.direction" => "opus",
     "artifacts.filename" => "YYMMDD-[id-]kebab",
-    "judge.model" => "sonnet"
+    "judge.model" => "sonnet",
+    "gate.timeout_seconds" => 600
   }.freeze
 
   attr_reader :path, :raw, :errors, :warnings
@@ -268,6 +269,14 @@ class Manifest
 
   def gate_guard_ledger
     fetch("gate.guard_ledger")
+  end
+
+  # Seconds Sh.run allows the gate command and the attest command before
+  # killing them. Defaults to 600 - the value both gate.rb call sites used to
+  # hard-code. A consumer whose gate runs inside docker-compose (image build,
+  # deps fetch, full test battery) can plausibly need longer than that cold.
+  def gate_timeout_seconds
+    fetch("gate.timeout_seconds")
   end
 
   def gate_build_paths
@@ -510,6 +519,7 @@ class Manifest
     validate_sabotage
     validate_judge
     validate_rebase
+    validate_gate_timeout_seconds
     collect_unknown_keys(raw, nil)
   end
 
@@ -563,6 +573,16 @@ class Manifest
     unless exempt.nil? || (exempt.is_a?(Array) && exempt.all? { |p| p.is_a?(String) })
       errors << "#{path}: gate.sabotage.exempt_prefixes must be a list of path prefixes"
     end
+  end
+
+  # validate_gate_timeout_seconds needs no nil guard, same reason as
+  # validate_default_branch: fetch applies the 600 default, so the value is
+  # only ever absent-and-defaulted or explicitly wrong.
+  def validate_gate_timeout_seconds
+    value = fetch("gate.timeout_seconds")
+    return if value.is_a?(Integer) && value.positive?
+
+    errors << "#{path}: gate.timeout_seconds must be a positive integer, got #{value.inspect}"
   end
 
   JUDGE_ENTRY_STRING_FIELDS = %w[key label scope_prefix text focus].freeze
