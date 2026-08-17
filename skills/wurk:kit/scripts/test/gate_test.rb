@@ -1617,6 +1617,93 @@ class GateTest < Minitest::Test
     end
   end
 
+  # --- wu-8eh: a gate command that cannot start reads as blocked, not a crash ---
+
+  # A gate command missing from PATH (a typo in gate.full, or a tool never
+  # installed) - Sh::RealRunner now rescues the Errno::ENOENT and returns a
+  # failed Result instead of raising, so this is what gate.rb does with it:
+  # a well-formed, parseable envelope naming the cause, not a Ruby traceback
+  # on stderr and an empty stdout.
+  def test_gate_command_that_cannot_start_emits_a_blocked_envelope
+    in_tmp_cwd do
+      expect_elixir_diff
+      expect_no_sabotage_diff
+      err = "could not start command - No such file or directory - make (command: \"make\")"
+      @fake.expect(%w[make report], start_failed: true, err: err)
+
+      code, env = run_gate
+
+      assert_equal 1, code
+      assert_equal false, env["ok"]
+      assert_equal 1, env["blocked"].length
+      assert_equal "gate_command_could_not_start", env["blocked"].first["code"]
+      assert_equal "human", env["blocked"].first["needs"]
+      # gate.rb must not re-wrap Sh's already self-describing err in its own
+      # "could not start" sentence - the message is the cause verbatim, once.
+      assert_equal err, env["blocked"].first["message"]
+      assert_equal 1, env["blocked"].first["message"].scan("could not start").length
+      assert_equal [], env["data"]["stages"]
+      assert_equal [], env["data"]["skipped_stages"]
+      assert_equal false, env["data"]["attested"]
+      # No `make attest` expectation registered above: a gate command that
+      # never started must not fall through to running attest anyway.
+    end
+  end
+
+  # gate.cwd pointing at a directory that does not exist (a typo such as
+  # "sbu" for "sub") passes manifest validation - existence is deliberately
+  # not checked, see docs/manifest.md - and then the gate command's chdir
+  # fails to start. Same envelope shape as the missing-executable case, and
+  # gate_cwd in the payload names the resolved (nonexistent) directory so a
+  # reader can see exactly what to fix.
+  def test_gate_cwd_that_does_not_exist_emits_a_blocked_envelope
+    in_tmp_cwd(fixture: "gate_subdir") do
+      expect_base_ref
+      @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "backend/lib/acme/foo.ex\n")
+      @fake.expect(%w[git status --porcelain], out: "")
+      expect_no_subdir_sabotage_diff
+      expected_chdir = File.join(Dir.pwd, "backend")
+      err = "could not start command - No such file or directory - make " \
+            "(command: \"make\", chdir: #{expected_chdir.inspect})"
+      @fake.expect(%w[make report], start_failed: true, err: err)
+
+      code, env = run_gate
+
+      assert_equal 1, code
+      assert_equal false, env["ok"]
+      assert_equal "gate_command_could_not_start", env["blocked"].first["code"]
+      assert_equal err, env["blocked"].first["message"]
+      assert_equal 1, env["blocked"].first["message"].scan("could not start").length
+      assert_match(/#{Regexp.escape(expected_chdir)}/, env["blocked"].first["message"])
+      assert_equal expected_chdir, env["data"]["gate_cwd"]
+    end
+  end
+
+  # The attest command can be the one that fails to start even when
+  # gate.full itself ran fine - a separate manifest field, so it gets its
+  # own diagnosable blocked reason rather than silently reporting
+  # attested: false with no explanation.
+  def test_gate_attest_that_cannot_start_emits_a_blocked_envelope
+    in_tmp_cwd do
+      expect_elixir_diff
+      expect_no_sabotage_diff
+      @fake.expect(%w[make report], out: JSON.generate(GREEN_REPORT))
+      err = "could not start command - No such file or directory - make (command: \"make\")"
+      @fake.expect(%w[make attest], start_failed: true, err: err)
+
+      code, env = run_gate
+
+      assert_equal 1, code
+      assert_equal false, env["ok"]
+      assert_equal "gate_attest_could_not_start", env["blocked"].first["code"]
+      assert_equal "human", env["blocked"].first["needs"]
+      assert_equal false, env["data"]["attested"]
+      assert_equal err, env["data"]["attestation_message"]
+      assert_equal err, env["blocked"].first["message"]
+      assert_equal 1, env["blocked"].first["message"].scan("could not start").length
+    end
+  end
+
   # --- Phase 2: root-relative paths anchor on the checkout root, not Dir.pwd ---
 
   # sabotage: resolve gate_guard_from's File.exist? against a bare

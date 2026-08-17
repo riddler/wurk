@@ -34,6 +34,28 @@ class ShTest < Minitest::Test
     refute File.exist?("/tmp/should-not-exist-#{Process.pid}")
   end
 
+  def test_missing_executable_returns_a_start_failed_result_instead_of_raising
+    result = Sh.run(["/no/such/executable-#{Process.pid}"])
+
+    refute result.success?
+    assert result.start_failed?
+    refute result.timed_out?
+    assert_match(/could not start command/, result.err)
+    assert_match(/no-such-executable-#{Process.pid}|no\/such\/executable-#{Process.pid}/, result.err)
+  end
+
+  def test_nonexistent_chdir_returns_a_start_failed_result_instead_of_raising
+    bad_dir = "/tmp/wu-8eh-does-not-exist-#{Process.pid}"
+
+    result = Sh.run(["/bin/echo", "hi"], chdir: bad_dir)
+
+    refute result.success?
+    assert result.start_failed?
+    refute result.timed_out?
+    assert_match(/could not start command/, result.err)
+    assert_match(/#{Regexp.escape(bad_dir)}/, result.err)
+  end
+
   def test_timeout_kills_the_child_and_reports_timed_out
     result = Sh.run(["/bin/sleep", "5"], timeout: 0.2)
 
