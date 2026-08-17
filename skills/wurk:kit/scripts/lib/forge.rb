@@ -17,6 +17,13 @@ module Forge
   # work, not a configuration change.
   IMPLEMENTED = %w[github].freeze
 
+  # The kit's own word for "this request landed". Deliberately not a
+  # passthrough of any forge's state enum: GitHub spells it "MERGED" and
+  # GitLab spells it "merged", so a forge adapter maps its own value onto
+  # this one rather than the kit comparing against whichever casing the
+  # forge it was written against happened to use.
+  REQUEST_MERGED = "merged"
+
   module_function
 
   def implemented?(kind)

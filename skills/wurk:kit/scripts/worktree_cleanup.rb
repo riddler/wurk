@@ -120,7 +120,7 @@ module WorktreeCleanup
       branch = wt["branch"]
       pr = wt["pr"]
 
-      unless pr && pr["state"] == "MERGED"
+      unless pr && pr["state"] == Forge::REQUEST_MERGED
         return [{ path: path, branch: branch, result: "not merged (no PR, open, or closed unmerged), kept" }, []]
       end
 

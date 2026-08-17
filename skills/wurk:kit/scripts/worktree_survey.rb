@@ -149,7 +149,8 @@ module WorktreeSurvey
         result = PrState.query_merged(branch.to_s, env: env)
         if result.available
           if result.merged
-            pr = { number: result.number, state: "MERGED", head_oid: result.head_oid, merged_at: result.merged_at }
+            pr = { number: result.number, state: Forge::REQUEST_MERGED,
+                   head_oid: result.head_oid, merged_at: result.merged_at }
             stale = true
           end
         else
