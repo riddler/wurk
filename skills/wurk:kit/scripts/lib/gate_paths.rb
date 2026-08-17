@@ -31,6 +31,15 @@ require_relative "manifest"
 # Was `lib/touches_elixir.rb`, whose name and `any?` entry point both
 # asserted the project was Elixir. Nothing outside this repo required that;
 # the manifest carries it now.
+#
+# Why these lists stay repo-root-relative, and stay unaffected by `gate.cwd`
+# (docs/manifest.md audits this): every entry here is matched against
+# `git diff --name-only` / `git status --porcelain` output
+# (`lib/base_ref.rb`), and git prints those paths relative to the repo root
+# regardless of the process's working directory. A monorepo consumer whose
+# gated project lives in `backend/` writes `build_paths: ["backend/lib/"]`
+# and the match is correct with no cwd handling here at all - `gate.cwd`
+# scopes where the gate *command* runs, never what these lists mean.
 module GatePaths
   class << self
     def touches_build?(paths, manifest: Manifest.current)

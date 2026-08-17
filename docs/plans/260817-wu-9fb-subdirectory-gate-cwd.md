@@ -678,17 +678,17 @@ about `gate.cwd`, which explicitly does not apply to kit-owned git commands.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `ruby skills/wurk:kit/scripts/test/run.rb` is green
-- [ ] the suite contains a test that runs `gate.rb` with the process cwd set
+- [x] `ruby skills/wurk:kit/scripts/test/run.rb` is green
+- [x] the suite contains a test that runs `gate.rb` with the process cwd set
       to a subdirectory of the tmp repo and asserts
       `data.gate_guard.ledger_exists` is true - grep the test file for the
       new `from_subdir` helper to confirm it exists and is exercised
-- [ ] the same subdirectory test asserts the sabotage `git diff` call's
+- [x] the same subdirectory test asserts the sabotage `git diff` call's
       recorded `FakeSh::Call#chdir` equals the tmp repo root, and that the
       `# sabotage:` note is still found through the root-aware reader
-- [ ] `data.gate_guard.ledger_path` in that test is still the manifest's
+- [x] `data.gate_guard.ledger_path` in that test is still the manifest's
       relative value, not an absolute path
-- [ ] `ruby skills/wurk:kit/scripts/lib/manifest.rb check` still exits 0 on
+- [x] `ruby skills/wurk:kit/scripts/lib/manifest.rb check` still exits 0 on
       this repo's manifest, and `ruby skills/wurk:kit/scripts/gate.rb
       --profile loop` still emits `data.gate_cwd: null` here
 
@@ -875,6 +875,36 @@ before considering the plan fully landed.
       runs in `gate.cwd`
 - [ ] No regressions in `/wurk:commit`'s gate step or `/wurk:branch`'s warm
       check on this repo, which declares no `gate.cwd`
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 2
+
+- [ ] Revert each `File.join(root, ...)` resolution locally, one at a time,
+      and confirm the corresponding new test goes red - the tests are only
+      worth having if they fail without the fix, and no single command can
+      decide that
+- [ ] In the scratch monorepo from Phase 1 (which does declare a
+      `gate.guard_ledger` and a `gate.sabotage` section), `gate.rb` run from
+      the root and from `sub/` produce the same `data.gate_guard` and the same
+      `data.sabotage` payload
+- [ ] The `commands` trail of a real `gate.rb` run reads honestly: the
+      sabotage diff now shows the directory its pathspecs were resolved in,
+      and nothing else in the trail changed shape
+- [ ] `docs/manifest.md`'s audited-surfaces list matches the code - walk each
+      of the named files and confirm the classification (git output vs
+      filesystem/pathspec) is right
+- [ ] A reviewer reading the `gate_paths.rb` module doc can answer "why does
+      a monorepo consumer write `backend/lib/` and not `lib/`" without
+      opening `docs/manifest.md`
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
