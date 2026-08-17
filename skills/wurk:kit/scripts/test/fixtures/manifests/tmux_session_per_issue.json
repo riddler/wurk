@@ -1,0 +1,60 @@
+{
+  "wurk": 1,
+  "beads": {
+    "prefix": "zz"
+  },
+  "forge": {
+    "kind": "github"
+  },
+  "gate": {
+    "full": [
+      "make",
+      "check"
+    ],
+    "loop": [
+      "make",
+      "quick"
+    ]
+  },
+  "parallelism": {
+    "model": "worktree-per-issue",
+    "worktrees_dir": "../zz-worktrees",
+    "trust": [
+      "faketool",
+      "trust",
+      "{path}"
+    ],
+    "warm_clone": [
+      "vendor",
+      "build"
+    ],
+    "warm_globs": [
+      "build/cache/faketool-*.cache"
+    ],
+    "warm": [
+      [
+        "faketool",
+        "fetch"
+      ]
+    ],
+    "repair_when": "lock.json",
+    "repair": [
+      [
+        "faketool",
+        "fetch"
+      ]
+    ]
+  },
+  "artifacts": {
+    "plans": "docs/plans",
+    "research": "docs/research"
+  },
+  "changelog": {
+    "mode": "none"
+  },
+  "tmux": {
+    "layout": "session-per-issue",
+    "model": "fakemodel",
+    "editor": ["nvim"]
+  }
+}
