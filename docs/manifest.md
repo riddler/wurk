@@ -364,22 +364,32 @@ Same matching rule as the gate path lists (see "Two path lists, not one"
 below): each entry is a directory prefix when it ends in `/`, and an exact
 path otherwise; no globbing.
 
-`lib/manifest.rb` validates every entry disjoint from the surfaces a rebase
+`lib/manifest.rb` validates every entry against the surfaces a rebase
 conflict must never be allowed to touch, rather than merely documenting the
 rule - a documented-only rule is one a careful consumer follows and a
 careless one does not, and the human review step this feature removes was
-the only check on that:
+the only check on that. Per ADR-0010's 2026-08-17 amendment, the surfaces
+split into two classes, and only one of them is a disjointness surface:
 
 - An entry equal to `/`, `""`, or `.` is rejected outright. An allowlist
   that resolves to the whole repo is not an allowlist.
 - An entry that **matches, or is matched by**, any entry of
-  `gate.build_paths`, `gate.also_gated_paths`, `gate.moving_files`,
-  `gate.guard_ledger`, or `parallelism.repair_when` is rejected. Both
-  directions are checked deliberately: allowing `docs/` when
-  `docs/plan.md` is gate-guarded is exactly as wrong as allowing
-  `docs/plan.md` when `docs/` is gate-guarded. This covers the "code",
-  "lockfile", and "gate-guarded file" stop categories from the bead that
-  opened this feature.
+  `gate.moving_files`, `gate.guard_ledger`, or `parallelism.repair_when` is
+  rejected. Both directions are checked deliberately: allowing `docs/`
+  when `docs/plan.md` is one of these is exactly as wrong as allowing
+  `docs/plan.md` when `docs/` is. These are hazard surfaces - a machine
+  merge of them changes what verification means, not just what it covers:
+  `moving_files` is the gate's own configuration, `guard_ledger` is the
+  human authorization record for gate changes, and `repair_when` names the
+  generated lockfile whose correctness depends on its tool regenerating
+  it, not on a line-additive merge being textually clean.
+- `gate.build_paths` and `gate.also_gated_paths` are **not** disjointness
+  surfaces and a collision with them is accepted. They are coverage lists:
+  they declare where the gate looks, so an allowlist entry inside a gated
+  tree still gets the full gate run over the merged result, on top of the
+  deterministic net and the refute - the most-verified case this feature
+  has, not the least. Forbidding that case forbade the wrong one; see
+  ADR-0010's amendment for the reasoning.
 - An entry that is, or is under, the directory holding the manifest itself
   (`.claude/`, per ADR-0004's two seams - it holds `wurk.json` and every
   extension file) is rejected. This covers the "manifest" stop category;
@@ -608,11 +618,15 @@ gate commands run at the root of the checkout being gated.
 - **Command fields must be argv arrays** of strings. A shell string is a
   schema error, never something to split on whitespace.
 - **`rebase.auto_resolve_paths` entries are validated disjoint** from
-  `gate.build_paths`, `gate.also_gated_paths`, `gate.moving_files`,
-  `gate.guard_ledger`, `parallelism.repair_when`, and the manifest's own
-  directory (`.claude/`) - in both match directions - plus rejected outright
-  if an entry is `/`, `""`, or `.`. See "`rebase.auto_resolve_paths`" above
-  for why these are validated rather than merely documented.
+  `gate.moving_files`, `gate.guard_ledger`, `parallelism.repair_when`, and
+  the manifest's own directory (`.claude/`) - in both match directions -
+  plus rejected outright if an entry is `/`, `""`, or `.`. A collision with
+  `gate.build_paths` or `gate.also_gated_paths` is accepted: those are
+  coverage lists, not hazard surfaces, and an entry inside a gated tree
+  still gets the full gate run over the merged result. See
+  "`rebase.auto_resolve_paths`" above for why the hazard surfaces are
+  validated rather than merely documented, and why the coverage lists are
+  not disjointness surfaces.
 - **`gate.timeout_seconds` must be a positive integer.** Zero, a negative
   number, a float, and a non-numeric value all block.
 - **`parallelism.timeout_seconds` must be a positive integer.** Same rule,

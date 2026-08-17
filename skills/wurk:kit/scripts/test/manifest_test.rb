@@ -314,21 +314,21 @@ class ManifestValidationTest < Minitest::Test
     assert_match(/auto_resolve_paths entry "\." matches the whole repo/, m.errors.join("\n"))
   end
 
-  # sabotage: drop gate.build_paths from REBASE_COLLISION_LIST_FIELDS -> red
-  def test_rebase_entry_colliding_with_build_paths_blocks_naming_the_list
+  # sabotage: put gate.build_paths back into REBASE_COLLISION_LIST_FIELDS ->
+  # red. Coverage lists are not disjointness surfaces (ADR-0010's
+  # 2026-08-17 amendment): a collision with build_paths means the full
+  # gate verifies the merged result, so it is accepted.
+  def test_rebase_entry_colliding_with_build_paths_is_accepted
     m = ManifestFixtures.load_with("rebase", "rebase" => { "auto_resolve_paths" => ["mix.exs"] })
-    refute m.valid?
-    assert_match(/auto_resolve_paths entry "mix\.exs" collides with gate\.build_paths entry "mix\.exs"/, m.errors.join("\n"))
+    assert m.valid?, "expected a build_paths collision to be accepted: #{m.errors.inspect}"
   end
 
-  # sabotage: drop gate.also_gated_paths from REBASE_COLLISION_LIST_FIELDS -> red
-  def test_rebase_entry_colliding_with_also_gated_paths_blocks_naming_the_list
+  # sabotage: put gate.also_gated_paths back into REBASE_COLLISION_LIST_FIELDS
+  # -> red. Same reasoning as build_paths above - also_gated_paths is a
+  # coverage list, not a hazard surface.
+  def test_rebase_entry_colliding_with_also_gated_paths_is_accepted
     m = ManifestFixtures.load_with("rebase", "rebase" => { "auto_resolve_paths" => ["vendor/generated/"] })
-    refute m.valid?
-    assert_match(
-      /auto_resolve_paths entry "vendor\/generated\/" collides with gate\.also_gated_paths entry "vendor\/generated\/"/,
-      m.errors.join("\n")
-    )
+    assert m.valid?, "expected an also_gated_paths collision to be accepted: #{m.errors.inspect}"
   end
 
   # sabotage: drop gate.moving_files from REBASE_COLLISION_LIST_FIELDS -> red
@@ -375,11 +375,13 @@ class ManifestValidationTest < Minitest::Test
   end
 
   # sabotage: check only GatePaths.match_one?(guarded, entry) and drop the
-  # forward direction in rebase_collision -> red.
+  # forward direction in rebase_collision -> red. Uses gate.moving_files
+  # (a hazard surface, not a coverage list) since build_paths and
+  # also_gated_paths no longer collide.
   def test_rebase_entry_that_is_prefixed_by_a_guarded_path_blocks
-    m = ManifestFixtures.load_with("rebase", "rebase" => { "auto_resolve_paths" => ["vendor/generated/extra.rb"] })
+    m = ManifestFixtures.load_with("rebase", "rebase" => { "auto_resolve_paths" => ["genfiles/extra.rb"] })
     refute m.valid?
-    assert_match(/auto_resolve_paths entry "vendor\/generated\/extra\.rb" collides with gate\.also_gated_paths/, m.errors.join("\n"))
+    assert_match(/auto_resolve_paths entry "genfiles\/extra\.rb" collides with gate\.moving_files entry "genfiles\/"/, m.errors.join("\n"))
   end
 
   # sabotage: check only GatePaths.match_one?(entry, guarded) and drop the
@@ -387,11 +389,11 @@ class ManifestValidationTest < Minitest::Test
   # loop -> red. A directory-prefix allowlist entry that is broader than a
   # list-field guarded path (rather than a guard_ledger/repair_when scalar)
   # must also be caught; the scalar-field case above does not exercise this
-  # branch.
+  # branch. Uses gate.moving_files for the same reason as the test above.
   def test_rebase_directory_prefix_entry_broader_than_a_list_field_guarded_path_blocks
-    m = ManifestFixtures.load_with("rebase", "rebase" => { "auto_resolve_paths" => ["vendor/"] })
+    m = ManifestFixtures.load_with("rebase", "rebase" => { "auto_resolve_paths" => ["special/"] })
     refute m.valid?
-    assert_match(/auto_resolve_paths entry "vendor\/" collides with gate\.also_gated_paths/, m.errors.join("\n"))
+    assert_match(/auto_resolve_paths entry "special\/" collides with gate\.moving_files entry "special\/check\.rb"/, m.errors.join("\n"))
   end
 
   # sabotage: check only GatePaths.match_one?(guarded, entry) and drop the

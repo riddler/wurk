@@ -707,12 +707,16 @@ class Manifest
     errors << "#{path}: judge.registry entry scope_suffix must be a string"
   end
 
-  # The three source lists that, together with gate.guard_ledger and
-  # parallelism.repair_when, define the "code, lockfile, gate-guarded file"
-  # stop categories from the bead. Kept as separate named sources rather than
-  # one flattened list so a collision error can name exactly which one an
-  # entry hit.
-  REBASE_COLLISION_LIST_FIELDS = %w[gate.build_paths gate.also_gated_paths gate.moving_files].freeze
+  # gate.build_paths and gate.also_gated_paths are coverage lists: they
+  # declare where the gate looks, and a collision with them means the full
+  # gate verifies the merged result on top of the deterministic net and the
+  # refute. They are not disjointness surfaces. gate.moving_files, together
+  # with gate.guard_ledger and parallelism.repair_when, are hazard surfaces
+  # where a machine merge changes what verification means, so they stay.
+  # Kept as a separate named list rather than folded into the scalars so a
+  # collision error can name exactly which entry it hit. See ADR-0010's
+  # 2026-08-17 amendment.
+  REBASE_COLLISION_LIST_FIELDS = %w[gate.moving_files].freeze
   REBASE_COLLISION_SCALAR_FIELDS = %w[gate.guard_ledger parallelism.repair_when].freeze
 
   # An allowlist entry that resolves to the whole repo is not an allowlist.
