@@ -8,7 +8,7 @@
     "guard_ledger": "docs/quality-gate-changes.md",
     "build_paths": ["lib/", "mix.exs", "mix.lock"],
     "also_gated_paths": [".claude/scripts/", ".claude/skills/", "vendor/generated/"],
-    "moving_files": [".quality.exs"]
+    "moving_files": [".quality.exs", "genfiles/", "special/check.rb"]
   },
   "parallelism": {
     "model": "worktree-per-issue",

@@ -1,6 +1,7 @@
 # ADR-0010: Bounded, opt-in auto-resolution of rebase conflicts in /wurk:mr
 
-Status: accepted (2026-08-11)
+Status: accepted (2026-08-11), amended (2026-08-17) - see "Amendment
+(2026-08-17)" below; it narrows Decision 1's collision rule.
 
 ## Context
 
@@ -44,6 +45,9 @@ adversarial model refute - and `rebase_onto.rb` is not touched.**
    one a careful consumer follows and a careless one does not. An
    allowlist that resolves to the whole repo (an entry of `/`, `""`, or
    `.`) is also rejected; naming everything is not opting in to anything.
+   *(Amended 2026-08-17: `gate.build_paths` and `gate.also_gated_paths`
+   are no longer in the disjointness set. See "Amendment (2026-08-17)"
+   below for why that half of the rule was inverted.)*
 
 2. **`rebase_onto.rb` is untouched.** Its source-text refutations in
    `rebase_onto_test.rb` (no `checkout --ours|--theirs`, no `git add`, no
@@ -141,3 +145,124 @@ None carried forward from ADR-0008 remain unanswered for this change; its
 first open question is answered above. Its second and third open questions
 concern `.claude/wurk/*.md` scope and model selection for
 `skill_judge.rb`, which this ADR does not touch.
+
+## Amendment (2026-08-17): the collision rule's coverage half was inverted
+
+Decided under wu-mya.5. This amendment narrows Decision 1's disjointness
+set; every other decision in this record stands as written.
+
+### What was observed
+
+On a consumer whose `gate.build_paths` names a whole app tree, validation
+rejected an allowlist entry for an append-only records file living inside
+that tree - a file where every branch appends one section, so two live
+branches conflict on adjacent additive blocks on essentially every rebase.
+That is the exact provably-additive merge Decision 4's net was built to
+prove, and it conflicted twice in one afternoon on one branch. The
+consumer's only ways out were all wrong: narrow `build_paths` (stop gating
+real code to permit a doc), move the file away from the code it documents,
+or resolve the same trivial conflict by hand forever.
+
+### Which way the gate's coverage actually cuts
+
+Decision 1 validated `rebase.auto_resolve_paths` disjoint from five
+surfaces as if they were one class - surfaces the gate protects. They are
+two classes, and the difference is the whole point:
+
+- **Coverage lists** (`gate.build_paths`, `gate.also_gated_paths`) declare
+  where the gate *looks*. An allowlist entry colliding with them means the
+  full gate in `/wurk:mr` step 4 runs over the merged result - the
+  auto-resolved lines get the deterministic net, the adversarial refute,
+  *and* an independent full-gate verdict. That is the most-verified case
+  this feature has, not the least.
+- **Hazard surfaces** (`gate.moving_files`, `gate.guard_ledger`,
+  `parallelism.repair_when`) are places where a machine merge changes what
+  verification *means*, so "the gate runs afterward" is no answer:
+  `moving_files` is the gate's own configuration, so a merged config
+  re-aims the yardstick before it is used; `guard_ledger` is the recorded
+  human authorization for gate changes, which ADR-0006's contract forbids
+  any script to write precisely because a machine writing it forges the
+  signature it exists to capture; `repair_when` is the lockfile whose
+  motion triggers post-rebase cache repair, a generated artifact that is
+  only correct when its tool regenerates it - a line-additive merge of it
+  can be textually clean, satisfy the net, and still be a dependency graph
+  no resolver ever produced, over stale caches the repair never ran for.
+
+The original record already contained the correction's premise without
+drawing its conclusion. Decision 4 justifies the deterministic net by
+noting that for the file class most likely to qualify, the gate comes back
+`applicable: false` and "no check at all" runs; Decision 5 makes reporting
+load-bearing for the same reason. So the record knew that a path *outside*
+the coverage lists is the unverified case - and Decision 1 nonetheless
+forbade the covered case and permitted the uncovered one. The stated
+intent (wu-y7d's "code" stop category) survives this correction, because
+the Context above already states how code was actually protected: "the
+gate runs after the rebase ... so a bad code resolution is caught."
+Mapping "code" to `build_paths` disjointness never enforced that category;
+it enforced its opposite, while the category was carried all along by the
+gate itself plus the net and the refute.
+
+### The amended rule
+
+An allowlist entry is refused when a machine merge of it could change what
+verification means, or when the entry cannot be read as a deliberate
+grant. It is never refused merely because the gate will verify the result.
+
+Concretely, `lib/manifest.rb`'s collision validation drops
+`gate.build_paths` and `gate.also_gated_paths` from the disjointness set
+and keeps everything else exactly as Decision 1 states it:
+
+- Entries still reject, in both match directions, on collision with
+  `gate.moving_files`, `gate.guard_ledger`, and `parallelism.repair_when`.
+- The whole-repo refusals (`/`, `""`, `.`) are unchanged.
+- The manifest-directory refusal (`.claude/`, per ADR-0004's two seams) is
+  unchanged; the manifest defines this allowlist, and a list that can
+  authorize edits to its own definition authorizes anything.
+- `docs/manifest.md`'s `rebase.auto_resolve_paths` and Validation sections
+  follow the code in the same commit, per this repo's manifest-sync rule.
+
+Nothing at runtime changes. `lib/conflict_paths.rb`'s all-paths test,
+Decision 4's net, the refute, and Decision 5's reporting apply to every
+auto-resolution regardless of where the path sits; a path inside the
+coverage lists gets the full gate on top. A path outside every gated tree
+therefore still requires the deterministic net plus refute plus reporting
+- exactly today's bar - and the reporting stays load-bearing there for
+Decision 5's reason.
+
+### Alternatives considered
+
+- **A per-entry override flag** ("this entry may collide with
+  `build_paths`") keeps a rule whose stated justification is wrong and
+  sells exceptions to it. A safety rule that survives only behind an
+  override is not a safety rule; and the flag would mark the *safer* case
+  as the exceptional one, teaching consumers the inverted model this
+  amendment exists to correct.
+- **A separate, more-permissive tier for gate-covered entries** declares
+  in the schema a fact the manifest already encodes: whether an entry is
+  inside the coverage lists is derivable from those lists, and `gate.rb`'s
+  applicability check already acts on it at runtime. A declared tier adds
+  a second copy of that fact that can drift from the first, buys no new
+  behavior, and still requires deciding the question this amendment
+  decides - whether the covered case is more or less trustworthy.
+
+### Consequences
+
+- The motivating entry - a specific non-code file inside a gated tree -
+  validates, with `gate.build_paths` untouched.
+- A consumer *can* now allowlist a source path. That is a deliberate,
+  written, per-path grant (Decision 1's opt-in framing), and every merge
+  under it must pass the net, the refute, and the full gate. The default
+  remains `[]`; nothing changes for a consumer that does not opt in.
+- The "lockfile" stop category is now carried by `parallelism.repair_when`
+  and `gate.moving_files` alone, not incidentally by the lockfile's
+  presence in `build_paths`. A consumer that wants its lockfile refused
+  from the allowlist must name it in `repair_when` - which it should
+  already, since that is also what drives post-rebase cache repair.
+
+### Open questions
+
+- Whether the schema should grow a dedicated field for
+  generated-never-hand-merged files (lockfiles first among them), so the
+  lockfile refusal does not depend on a consumer having configured
+  `parallelism.repair_when` for its own sake. Deferred until a consumer
+  without `repair_when` actually presents one.
