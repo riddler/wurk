@@ -341,7 +341,7 @@ module Gate
       reporting = loop_mode ? manifest.gate_report_loop : manifest.gate_report
       argv = reporting || (loop_mode ? manifest.gate_loop : manifest.gate_full)
 
-      res = Sh.run(argv, envelope: env, timeout: manifest.gate_timeout_seconds)
+      res = Sh.run(argv, chdir: manifest.gate_chdir, envelope: env, timeout: manifest.gate_timeout_seconds)
       return [res, nil] unless reporting
 
       report = begin
@@ -450,6 +450,7 @@ module Gate
         env.data[:stages] = []
         env.data[:skipped_stages] = []
         env.data[:gate_guard] = gate_guard_from([], ledger_path)
+        env.data[:gate_cwd] = nil
         return env.emit(io)
       end
 
@@ -467,12 +468,18 @@ module Gate
       env.data[:stages] = stages
       env.data[:skipped_stages] = skipped
       env.data[:gate_guard] = gate_guard_from(stages, ledger_path)
+      # Resolved absolute directory the gate command ran in, or nil when the
+      # project gates from its checkout root. The `commands` trail already
+      # shows it via Sh.render; this makes it machine-readable for the
+      # skills.
+      env.data[:gate_cwd] = manifest.gate_chdir
 
       if loop_mode
         env.data[:attested] = false
         env.data[:attestation_message] = nil
       elsif manifest.gate_attest
-        verify_res = Sh.run(manifest.gate_attest, envelope: env, timeout: manifest.gate_timeout_seconds)
+        verify_res = Sh.run(manifest.gate_attest, chdir: manifest.gate_chdir, envelope: env,
+                            timeout: manifest.gate_timeout_seconds)
         env.data[:attested] = verify_res.success?
         env.data[:attestation_message] =
           (verify_res.success? || verify_res.err.to_s.strip.empty? ? verify_res.out : verify_res.err).to_s.strip

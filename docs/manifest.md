@@ -36,6 +36,10 @@ defaults are listed under "Defaults" below.
   },
 
   "gate": {                           // see docs/gate-contract.md for tiers
+    "cwd": "backend",                 // (opt) repo-root-relative dir the five gate
+                                      // commands RUN in; omit to run at the repo
+                                      // root. Scopes execution only - every path
+                                      // list below stays repo-root-relative.
     "full": ["mix", "quality"],
     "loop": ["mix", "quality", "--profile", "loop"],
     "report": ["mix", "quality", "--report", "-"],   // (opt) tier 1
@@ -376,6 +380,44 @@ Each rejection names both the offending entry and the list or field it
 collided with, so a consumer can fix its manifest without reading the kit
 source.
 
+## `gate.cwd`
+
+The repo-root-relative directory the five consumer gate commands
+(`gate.full`, `gate.loop`, `gate.report`, `gate.report_loop`, `gate.attest`)
+run in. Absent (the common case) means they run at the root of the checkout
+being gated. Present, the resolved `chdir:` is
+`<root of the checkout being gated>/<gate.cwd>` - the checkout root for
+`gate.rb`, and the new (or refreshed) worktree's root for
+`worktree_create.rb` and `worktree_refresh.rb`.
+
+**The rule: `gate.cwd` scopes execution of consumer gate commands; it never
+rescopes matching of manifest paths.** `gate.build_paths`,
+`gate.also_gated_paths`, `gate.moving_files`, `gate.guard_ledger`,
+`gate.sabotage.*`, `parallelism.repair_when`, `rebase.auto_resolve_paths`,
+and `artifacts.*` all stay relative to the repo root regardless of
+`gate.cwd` - see "Two path lists, not one" below. A monorepo consumer whose
+gated project lives in `backend/` therefore writes the shared prefix into
+every one of those lists, not into a cwd-adjusted subset of them.
+
+`gate.cwd` is never applied outside the five gate commands: not to
+`parallelism.trust` / `warm` / `repair` / `post_branch`, and not to any git
+command the kit itself runs.
+
+A worked example, a monorepo where the gated project is `backend/`:
+
+```jsonc
+"gate": {
+  "cwd": "backend",
+  "full": ["mix", "quality"],
+  "loop": ["mix", "quality", "--profile", "loop"],
+  "build_paths": ["backend/lib/", "backend/test/", "backend/mix.exs"]
+}
+```
+
+`mix quality` runs with its working directory at `<checkout root>/backend`;
+`build_paths` still names `backend/lib/` because it is matched against git's
+own root-relative output, not resolved as a filesystem path.
+
 ## Two path lists, not one
 
 `gate.build_paths` and `gate.also_gated_paths` answer different questions,
@@ -511,7 +553,8 @@ skipped stage blocks, no
 false, `missing` always `[]`, no `git diff` shelled out for it), no `judge`
 section means `judge?` is `false` and the judge never runs, no `rebase`
 section (or an empty `auto_resolve_paths`) means rebase auto-resolution is
-off - see "`rebase.auto_resolve_paths`" above.
+off - see "`rebase.auto_resolve_paths`" above, and no `gate.cwd` means the
+gate commands run at the root of the checkout being gated.
 
 ## Validation
 
@@ -535,6 +578,9 @@ off - see "`rebase.auto_resolve_paths`" above.
   for why these are validated rather than merely documented.
 - **`gate.timeout_seconds` must be a positive integer.** Zero, a negative
   number, a float, and a non-numeric value all block.
+- **`gate.cwd` must be a relative subdirectory path.** An absolute path,
+  `.`, `""`, a non-string, or any `..` segment blocks. Existence is
+  deliberately not checked; see "`gate.cwd`" above.
 
 `ruby skills/wurk:kit/scripts/lib/manifest.rb check [--file PATH]` is the
 standalone lint. It emits the usual envelope and exits 1 on an invalid

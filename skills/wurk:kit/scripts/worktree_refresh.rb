@@ -115,7 +115,7 @@ module WorktreeRefresh
       when "conflict"
         { path: path, branch: branch, result: "conflict in #{rebase_result[:files].join(', ')}, aborted, unchanged" }
       when "dry_run"
-        env.commands << Sh.render(manifest.gate_loop, chdir: path)
+        env.commands << Sh.render(manifest.gate_loop, chdir: gate_chdir(manifest, path))
         { path: path, branch: branch, result: "dry run" }
       else
         confirm_green(path, branch, rebase_result, env, manifest)
@@ -123,11 +123,21 @@ module WorktreeRefresh
     end
 
     def confirm_green(path, branch, rebase_result, env, manifest)
-      quality_res = Sh.run(manifest.gate_loop, chdir: path, envelope: env)
+      quality_res = Sh.run(manifest.gate_loop, chdir: gate_chdir(manifest, path), envelope: env)
       return { path: path, branch: branch, result: "red" } unless quality_res.success?
 
       lock_note = rebase_result[:lock_changed] ? "lock repaired" : "lock unchanged"
       { path: path, branch: branch, result: "rebased onto #{rebase_result[:target]}, #{lock_note}, loop green" }
+    end
+
+    # The gate command runs in the refreshed worktree - under gate.cwd inside
+    # it when the project gates from a subdirectory (wurk docs/manifest.md).
+    # One helper so the dry-run render and the real run cannot disagree about
+    # where. Kept as its own private method rather than sharing
+    # worktree_create.rb's - Manifest#gate_chdir is already the shared
+    # definition site, and the `|| path` fallback is one expression.
+    def gate_chdir(manifest, path)
+      manifest.gate_chdir(root: path) || path
     end
   end
 end

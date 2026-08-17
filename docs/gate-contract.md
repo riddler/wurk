@@ -19,7 +19,8 @@ At tier 0 the kit's `gate.rb` reports `ok` from the exit code, marks
 stage-level detail (skip taxonomy, coverage presence) simply does not fire.
 Skills phrase their refusal conditions against what the report can prove, and
 say so: a tier-0 green is "the gate command passed", never "a full attested
-gate is green".
+gate is green". Tiers are about what a gate command reports, not where it
+runs; where it runs is `gate.cwd`, see `docs/manifest.md`.
 
 Rules that hold at every tier: never truncate gate output; a scoped or quick
 green is not a full green; never go green by weakening the check.

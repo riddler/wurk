@@ -1,0 +1,72 @@
+{
+  "wurk": 1,
+  "beads": {
+    "prefix": "zz"
+  },
+  "forge": {
+    "kind": "github"
+  },
+  "gate": {
+    "cwd": "backend",
+    "full": [
+      "make",
+      "check"
+    ],
+    "loop": [
+      "make",
+      "quick"
+    ],
+    "report": [
+      "make",
+      "report"
+    ],
+    "report_loop": [
+      "make",
+      "report-loop"
+    ],
+    "attest": [
+      "make",
+      "attest"
+    ],
+    "guard_ledger": "backend/docs/zz-ledger.md",
+    "build_paths": [
+      "backend/lib/",
+      "backend/test/",
+      "backend/config/",
+      "backend/mix.exs",
+      "backend/mix.lock"
+    ],
+    "also_gated_paths": [
+      "backend/.claude/scripts/",
+      "backend/.claude/skills/"
+    ],
+    "moving_files": [
+      "backend/.zz-fmt.exs",
+      "backend/.zz-lint.exs",
+      "backend/zz-cov.json",
+      "backend/.zz-sec-conf"
+    ],
+    "project_level_skips": [
+      "not installed",
+      "disabled in \\.quality\\.exs"
+    ],
+    "not_applicable_skips": [
+      "^:gettext not installed$"
+    ],
+    "sabotage": {
+      "test_roots": ["backend/test/"],
+      "test_pattern": "\\btest\\s+\"",
+      "exempt_prefixes": ["backend/test/scion_tests/", "backend/test/scxml_tests/"]
+    }
+  },
+  "parallelism": {
+    "model": "worktree-per-issue"
+  },
+  "artifacts": {
+    "plans": "docs/plans",
+    "research": "docs/research"
+  },
+  "changelog": {
+    "mode": "none"
+  }
+}

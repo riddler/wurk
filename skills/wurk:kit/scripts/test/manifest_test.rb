@@ -499,6 +499,89 @@ class ManifestValidationTest < Minitest::Test
     refute m.valid?
     assert_match(/gate\.timeout_seconds must be a positive integer, got "600"/, m.errors.join("\n"))
   end
+
+  def test_gate_cwd_absent_validates
+    m = ManifestFixtures.load("valid")
+    assert m.valid?, "expected an absent gate.cwd to validate: #{m.errors.inspect}"
+  end
+
+  def test_gate_cwd_relative_subdirectory_validates
+    m = ManifestFixtures.load_with("valid", "gate" => { "cwd" => "backend" })
+    assert m.valid?, "expected a relative subdirectory to validate: #{m.errors.inspect}"
+  end
+
+  def test_gate_cwd_nested_relative_subdirectory_validates
+    m = ManifestFixtures.load_with("valid", "gate" => { "cwd" => "apps/backend" })
+    assert m.valid?, "expected a nested relative subdirectory to validate: #{m.errors.inspect}"
+  end
+
+  # sabotage: drop the trailing-slash tolerance (there isn't one to drop -
+  # File.join handles it) by normalizing the value -> this pins that no
+  # normalization happens and a trailing slash still validates
+  def test_gate_cwd_trailing_slash_validates
+    m = ManifestFixtures.load_with("valid", "gate" => { "cwd" => "backend/" })
+    assert m.valid?, "expected a trailing slash to validate: #{m.errors.inspect}"
+  end
+
+  # Validation is deliberately filesystem-free: a gate.cwd naming a directory
+  # that does not exist must still validate. See lib/manifest.rb's
+  # validate_gate_cwd comment and docs/manifest.md.
+  def test_gate_cwd_validation_does_not_touch_the_filesystem
+    m = ManifestFixtures.load_with("valid", "gate" => { "cwd" => "definitely/does/not/exist/anywhere" })
+    assert m.valid?, "expected validation to accept a nonexistent directory: #{m.errors.inspect}"
+  end
+
+  # sabotage: drop the is_a?(String) check, letting a non-string through -> red
+  def test_gate_cwd_non_string_blocks
+    m = ManifestFixtures.load_with("valid", "gate" => { "cwd" => 5 })
+    refute m.valid?
+    assert_match(/gate\.cwd must be a non-empty relative directory path, got 5/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the !value.empty? check, letting "" through -> red
+  def test_gate_cwd_empty_string_blocks
+    m = ManifestFixtures.load_with("valid", "gate" => { "cwd" => "" })
+    refute m.valid?
+    assert_match(/gate\.cwd must be a non-empty relative directory path, got ""/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the start_with?("/") check -> red
+  def test_gate_cwd_absolute_path_blocks
+    m = ManifestFixtures.load_with("valid", "gate" => { "cwd" => "/abs/path" })
+    refute m.valid?
+    assert_match(%r{gate\.cwd must be relative to the repo root, got "/abs/path"}, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the value == "." check -> red
+  def test_gate_cwd_dot_blocks
+    m = ManifestFixtures.load_with("valid", "gate" => { "cwd" => "." })
+    refute m.valid?
+    assert_match(/gate\.cwd must name a subdirectory of the repo root/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the ".." segment check -> red
+  def test_gate_cwd_dot_dot_prefix_blocks
+    m = ManifestFixtures.load_with("valid", "gate" => { "cwd" => "../up" })
+    refute m.valid?
+    assert_match(/gate\.cwd must name a subdirectory of the repo root/, m.errors.join("\n"))
+  end
+
+  # sabotage: check the value string for ".." with a substring match instead
+  # of splitting on "/" -> would incorrectly reject "a..b" while still
+  # missing this test's "a/../b" if the split were dropped entirely -> red
+  def test_gate_cwd_dot_dot_segment_blocks
+    m = ManifestFixtures.load_with("valid", "gate" => { "cwd" => "a/../b" })
+    refute m.valid?
+    assert_match(/gate\.cwd must name a subdirectory of the repo root/, m.errors.join("\n"))
+  end
+
+  # sabotage: forget to add "cwd" to KNOWN["gate"] -> red, since gate.cwd
+  # would then warn as an unknown key instead of validating as a known one
+  def test_gate_subdir_fixture_produces_no_unknown_key_warning
+    m = ManifestFixtures.load("gate_subdir")
+    assert m.valid?, "expected the gate_subdir fixture to validate: #{m.errors.inspect}"
+    assert_empty m.warnings, "gate.cwd must be a known key: #{m.warnings.inspect}"
+  end
 end
 
 class ManifestAccessorTest < Minitest::Test
@@ -621,6 +704,48 @@ class ManifestAccessorTest < Minitest::Test
   def test_rebase_auto_resolve_paths_round_trips_a_well_formed_list
     m = ManifestFixtures.load("rebase")
     assert_equal ["docs/plan.md", "docs/notes/"], m.rebase_auto_resolve_paths
+  end
+
+  # sabotage: read the wrong dotted key in gate_cwd -> red
+  def test_gate_cwd_is_nil_when_absent
+    assert_nil @m.gate_cwd
+  end
+
+  def test_gate_cwd_reads_the_declared_value
+    m = ManifestFixtures.load("gate_subdir")
+    assert_equal "backend", m.gate_cwd
+  end
+
+  # checkout_root is two directories up from path (path is always
+  # <root>/.claude/wurk.json).
+  # sabotage: go up only one directory instead of two -> red
+  def test_checkout_root_is_two_directories_above_path
+    m = ManifestFixtures.load("valid")
+    expected = File.expand_path(File.join(ManifestFixtures::DIR, ".."))
+    assert_equal expected, m.checkout_root
+  end
+
+  # sabotage: return the checkout root instead of nil when gate.cwd is
+  # absent -> red. This is the property that keeps the rendered `commands`
+  # audit trail byte-identical for every consumer that does not use the
+  # field.
+  def test_gate_chdir_is_nil_when_gate_cwd_is_absent
+    assert_nil @m.gate_chdir
+    assert_nil @m.gate_chdir(root: "/some/worktree")
+  end
+
+  # sabotage: join against Dir.pwd instead of the default root argument -> red
+  def test_gate_chdir_joins_gate_cwd_onto_the_default_checkout_root
+    m = ManifestFixtures.load("gate_subdir")
+    assert_equal File.join(m.checkout_root, "backend"), m.gate_chdir
+  end
+
+  # sabotage: ignore the explicit root: keyword and always use checkout_root
+  # -> red. This is the shape worktree_create.rb / worktree_refresh.rb rely
+  # on: gate_chdir(root: <worktree path>).
+  def test_gate_chdir_joins_gate_cwd_onto_an_explicit_root
+    m = ManifestFixtures.load("gate_subdir")
+    assert_equal "/some/worktree/backend", m.gate_chdir(root: "/some/worktree")
   end
 
   def test_judge_fixture_exposes_typed_registry_values

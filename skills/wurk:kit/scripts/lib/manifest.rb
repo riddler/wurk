@@ -69,7 +69,7 @@ class Manifest
     "beads" => %w[prefix topology areas],
     "beads.areas" => %w[labels lands_alone always_batchable],
     "forge" => %w[kind labels],
-    "gate" => %w[full loop report report_loop attest guard_ledger build_paths also_gated_paths moving_files
+    "gate" => %w[cwd full loop report report_loop attest guard_ledger build_paths also_gated_paths moving_files
                  project_level_skips not_applicable_skips sabotage timeout_seconds],
     "gate.sabotage" => %w[test_roots test_pattern exempt_prefixes],
     "parallelism" => %w[model worktrees_dir trust warm_clone warm_globs warm repair_when repair post_branch],
@@ -200,6 +200,15 @@ class Manifest
 
   # --- typed accessors ----------------------------------------------------
 
+  # The root of the checkout this manifest was located in: `path` is always
+  # <root>/.claude/wurk.json, so the root is two levels up. Every kit use of a
+  # repo-root-relative manifest path resolves against this rather than
+  # Dir.pwd, because manifest resolution walks up from the working directory
+  # (see `locate`) and gate.rb is legitimately invoked from a subdirectory.
+  def checkout_root
+    File.expand_path(File.join(File.dirname(path), ".."))
+  end
+
   # The branch every "what did this branch change" comparison is made
   # against. Defaults to "main" - git's own convention, stated once here
   # rather than spelled into each script's argv.
@@ -277,6 +286,22 @@ class Manifest
   # deps fetch, full test battery) can plausibly need longer than that cold.
   def gate_timeout_seconds
     fetch("gate.timeout_seconds")
+  end
+
+  # The repo-root-relative directory the five consumer gate commands run in,
+  # or nil when the project gates from its repo root (the common case).
+  # See docs/manifest.md: gate.cwd scopes EXECUTION of gate commands; it never
+  # rescopes MATCHING of manifest paths.
+  def gate_cwd
+    fetch("gate.cwd")
+  end
+
+  # The `chdir:` to hand Sh.run for a gate command, given the root of the
+  # checkout being gated. nil when the project declares no gate.cwd, so the
+  # caller's own default applies unchanged - gate.rb passes no chdir at all,
+  # and the worktree scripts keep passing the worktree path.
+  def gate_chdir(root: checkout_root)
+    gate_cwd && File.join(root, gate_cwd)
   end
 
   def gate_build_paths
@@ -520,6 +545,7 @@ class Manifest
     validate_judge
     validate_rebase
     validate_gate_timeout_seconds
+    validate_gate_cwd
     collect_unknown_keys(raw, nil)
   end
 
@@ -583,6 +609,31 @@ class Manifest
     return if value.is_a?(Integer) && value.positive?
 
     errors << "#{path}: gate.timeout_seconds must be a positive integer, got #{value.inspect}"
+  end
+
+  # Shape only, never the filesystem - see docs/manifest.md and this plan's
+  # What We're NOT Doing. A `gate.cwd` that names a directory which does not
+  # exist fails loudly the first time the gate command tries to start; a
+  # validation-time probe would make `manifest.rb check` depend on the
+  # process cwd, which is the sensitivity gate.cwd exists to remove.
+  def validate_gate_cwd
+    value = fetch("gate.cwd")
+    return if value.nil?
+
+    unless value.is_a?(String) && !value.empty?
+      errors << "#{path}: gate.cwd must be a non-empty relative directory path, got #{value.inspect}"
+      return
+    end
+
+    if value.start_with?("/")
+      errors << "#{path}: gate.cwd must be relative to the repo root, got #{value.inspect}"
+      return
+    end
+
+    if value == "." || value.split("/").include?("..")
+      errors << "#{path}: gate.cwd must name a subdirectory of the repo root " \
+                "(no '.', no '..' segments); omit the field to gate from the root, got #{value.inspect}"
+    end
   end
 
   JUDGE_ENTRY_STRING_FIELDS = %w[key label scope_prefix text focus].freeze
