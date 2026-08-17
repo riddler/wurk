@@ -35,6 +35,17 @@ So: ask the forge, never git. `pr_state.rb` - reached through
 `worktree_survey.rb` and `worktree_cleanup.rb` - is the one place that encodes
 this.
 
+This is verified on both supported forges, not just inferred for one. Across a
+sample of merged requests on a live remote, the recorded head was not an
+ancestor of the target under more than one of the forge's merge settings - so
+this cannot be ruled out by picking a setting, and a check that happens to be
+safe under one setting is unsafe under others. In one sampled case, the
+request's recorded head and the commit that actually landed were different
+commits, with the same message but different parents. Ancestry detection
+would have missed that merge. A request's own "has a merge commit" field is
+not a safe substitute for its merged state either: some merge settings leave
+that field an empty string on a request that is genuinely merged.
+
 **Do not substitute a commit-range check either.** `git log @{upstream}..HEAD`
 fails precisely when this skill runs, because the forge deletes the remote
 branch on merge and the missing upstream ref reads like "unpushed commits",
