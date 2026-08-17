@@ -184,6 +184,19 @@ The banned list is the mechanical floor, not the whole story: judgment calls
 skill prose and extension files even where scripting them is technically
 possible.
 
+**A forge CLI's name stays out of the kit's own vocabulary.** `test/contract_test.rb`'s
+`FORGE_VOCABULARY` rule bans a `gh_`/`glab_`-shaped identifier and a quoted
+GitHub request-state literal (`"MERGED"`, `"OPEN"`, `"CLOSED"`, `"DRAFT"`)
+anywhere outside a comment in `scripts/`, because an envelope code, a data
+key, or a synthesized value is the kit's own contract and has to outlive
+whichever forge it was first written against - see `lib/forge.rb`'s
+`REQUEST_MERGED` for the neutral value scripts compare against instead. The
+rule is deliberately narrow about what it permits: naming the CLI in an argv
+behind `Forge.guard!` (`Sh.run(["gh", "pr", "list", ...])`) and naming it in
+a diagnostic message ("gh pr list failed: ...") are both fine and expected -
+only the kit's own vocabulary has to stay neutral, not every mention of the
+tool that produced a value.
+
 **Shelling out goes through one runner.** `Sh.run` (`lib/sh.rb`) always uses
 `Open3.capture3`/`popen3` with an argv array - never a shell string - so a
 developer's `-i` alias on `cp`/`rm`/`mv` cannot apply and no argument's shell
