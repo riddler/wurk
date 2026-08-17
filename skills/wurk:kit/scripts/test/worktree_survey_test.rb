@@ -91,14 +91,14 @@ class WorktreeSurveyTest < Minitest::Test
     assert_equal true, wt1["stale"]
     assert_equal ["area:interpreter"], wt1["areas"]
     assert_equal [], wt1["holds_areas"]
-    assert_equal Forge::REQUEST_MERGED, wt1["pr"]["state"]
+    assert_equal Forge::REQUEST_MERGED, wt1["request"]["state"]
 
     wt2 = data["worktrees"].find { |w| w["bead"] == "zz-00p.3" }
     assert_equal false, wt2["stale"]
     assert_equal ["area:parser"], wt2["areas"]
     assert_equal ["area:parser"], wt2["holds_areas"]
     assert_equal true, wt2["dirty"]
-    assert_nil wt2["pr"]
+    assert_nil wt2["request"]
 
     assert_equal true, data["forge_available"]
     assert_equal [], data["degraded"]

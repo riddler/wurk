@@ -118,10 +118,10 @@ module WorktreeCleanup
     def cleanup_one(wt, env, dry_run:)
       path = wt["path"]
       branch = wt["branch"]
-      pr = wt["pr"]
+      request = wt["request"]
 
-      unless pr && pr["state"] == Forge::REQUEST_MERGED
-        return [{ path: path, branch: branch, result: "not merged (no PR, open, or closed unmerged), kept" }, []]
+      unless request && request["state"] == Forge::REQUEST_MERGED
+        return [{ path: path, branch: branch, result: "not merged (no request, open, or closed unmerged), kept" }, []]
       end
 
       status_res = Sh.run(%w[git status --porcelain], chdir: path, envelope: env)
@@ -131,29 +131,29 @@ module WorktreeCleanup
 
       head_res = Sh.run(%w[git rev-parse HEAD], chdir: path, envelope: env)
       local_head = head_res.out.to_s.strip
-      if head_res.success? && local_head != pr["head_oid"]
+      if head_res.success? && local_head != request["head_oid"]
         return [
-          { path: path, branch: branch, result: "commits after merge (#{local_head} != #{pr['head_oid']}), skipped" },
+          { path: path, branch: branch, result: "commits after merge (#{local_head} != #{request['head_oid']}), skipped" },
           []
         ]
       end
 
-      beads = beads_for(pr, env)
+      beads = beads_for(request, env)
 
       if dry_run
         env.commands << Sh.render(["git", "worktree", "remove", path])
         env.commands << Sh.render(%w[git worktree prune])
         env.commands << Sh.render(["git", "branch", "-D", branch])
-        return [{ path: path, branch: branch, result: "merged in PR ##{pr['number']}, would remove" }, beads]
+        return [{ path: path, branch: branch, result: "merged in request ##{request['number']}, would remove" }, beads]
       end
 
-      remove(path, branch, pr, beads, env)
+      remove(path, branch, request, beads, env)
     end
 
-    def beads_for(pr, env)
-      result = PrState.beads_for_pr(pr["number"], env: env)
+    def beads_for(request, env)
+      result = PrState.beads_for_pr(request["number"], env: env)
       unless result.available
-        env.warn(code: "beads_lookup_failed", message: "could not read commits for PR ##{pr['number']}: #{result.error}")
+        env.warn(code: "beads_lookup_failed", message: "could not read commits for request ##{request['number']}: #{result.error}")
         return []
       end
 
@@ -162,7 +162,7 @@ module WorktreeCleanup
 
     # Order matters: the branch cannot be deleted while a worktree has it
     # checked out, so remove is always first.
-    def remove(path, branch, pr, beads, env)
+    def remove(path, branch, request, beads, env)
       remove_res = Sh.run(["git", "worktree", "remove", path], envelope: env)
       unless remove_res.success?
         env.warn(code: "worktree_remove_failed", message: err_or(remove_res, "git worktree remove #{path} failed"))
@@ -177,7 +177,7 @@ module WorktreeCleanup
       branch_res = Sh.run(["git", "branch", "-D", branch], envelope: env)
       env.warn(code: "branch_delete_failed", message: err_or(branch_res, "git branch -D #{branch} failed")) unless branch_res.success?
 
-      [{ path: path, branch: branch, result: "merged in PR ##{pr['number']}, removed" }, beads]
+      [{ path: path, branch: branch, result: "merged in request ##{request['number']}, removed" }, beads]
     end
 
     def err_or(result, fallback)

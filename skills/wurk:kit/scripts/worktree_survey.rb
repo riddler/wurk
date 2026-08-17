@@ -142,15 +142,15 @@ module WorktreeSurvey
 
       areas = areas_for(bead, env)
 
-      pr = nil
+      request = nil
       stale = false
 
       if forge_available
         result = PrState.query_merged(branch.to_s, env: env)
         if result.available
           if result.merged
-            pr = { number: result.number, state: Forge::REQUEST_MERGED,
-                   head_oid: result.head_oid, merged_at: result.merged_at }
+            request = { number: result.number, state: Forge::REQUEST_MERGED,
+                         head_oid: result.head_oid, merged_at: result.merged_at }
             stale = true
           end
         else
@@ -175,7 +175,7 @@ module WorktreeSurvey
         areas: areas,
         dirty: dirty,
         ancestor_of_origin_main: ancestor_of_origin_main,
-        pr: pr,
+        request: request,
         stale: stale,
         holds_areas: holds_areas
       }

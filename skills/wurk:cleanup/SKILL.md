@@ -76,7 +76,7 @@ Omitted, sweep every worktree.
    merged, refuses on a dirty tree, and compares the local `HEAD` against the
    SHA the forge actually merged, to catch commits made after the push.
 
-   Read `data.results[].result` per worktree. `"merged in PR #<n>, would
+   Read `data.results[].result` per worktree. `"merged in request #<n>, would
    remove"` marks a candidate; anything else is not touched this run.
 
 2. **Quiesce each candidate's session**, before touching anything on disk -
@@ -167,10 +167,11 @@ Omitted, sweep every worktree.
 - `blocked` `survey_failed` - report its message; do not proceed on a partial
   worktree list.
 - `data.results` empty with `ok: true` - no worktrees at all. Say so and stop.
-- The result strings are the report vocabulary directly: `"not merged (no PR,
-  open, or closed unmerged), kept"`, `"dirty, skipped"`, `"commits after merge
-  (<sha> != <sha>), skipped"`, `"merged in PR #<n>, removed"`, `"merged in PR
-  #<n>, would remove"` (dry run), `"remove failed, skipped"`.
+- The result strings are the report vocabulary directly: `"not merged (no
+  request, open, or closed unmerged), kept"`, `"dirty, skipped"`, `"commits
+  after merge (<sha> != <sha>), skipped"`, `"merged in request #<n>,
+  removed"`, `"merged in request #<n>, would remove"` (dry run), `"remove
+  failed, skipped"`.
 - `data.beads_to_close` is already deduped and sorted per call. Union across
   calls; do not re-derive it from the forge yourself.
 - `warnings` `beads_lookup_failed`, `worktree_remove_failed`,
@@ -184,13 +185,13 @@ session and window:
 
 | Worktree | Result |
 |---|---|
-| `zz-qww.1-team-maintainer-optin` | merged in PR #6, closed zz-qww.1, session exited, removed, branch deleted, window closed |
-| `zz-qww.4-close-on-merge` | merged in PR #10, closed zz-qww.4 + zz-qww.6, no window, removed |
-| `zz-00p.3-regression-ratchet` | open PR #11, kept |
-| `zz-vbu-strict-lint` | no PR, kept |
+| `zz-qww.1-team-maintainer-optin` | merged in request #6, closed zz-qww.1, session exited, removed, branch deleted, window closed |
+| `zz-qww.4-close-on-merge` | merged in request #10, closed zz-qww.4 + zz-qww.6, no window, removed |
+| `zz-00p.3-regression-ratchet` | open request #11, kept |
+| `zz-vbu-strict-lint` | no request, kept |
 | `zz-92f-area-labels` | dirty, skipped |
-| `zz-8k2-send-queue` | merged in PR #13, **session busy, skipped** |
-| `zz-lzn-tmux-windows` | merged in PR #12, **no trailer, no bead closed** |
+| `zz-8k2-send-queue` | merged in request #13, **session busy, skipped** |
+| `zz-lzn-tmux-windows` | merged in request #12, **no trailer, no bead closed** |
 
 **A busy session is a skip worth naming, not a footnote.** It is the one
 outcome where re-running the sweep later finishes the job on its own, and the
