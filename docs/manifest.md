@@ -418,6 +418,30 @@ A worked example, a monorepo where the gated project is `backend/`:
 `build_paths` still names `backend/lib/` because it is matched against git's
 own root-relative output, not resolved as a filesystem path.
 
+**What is root-relative, and against what.** The audit behind this field
+walked every kit consumer of a repo-root-relative manifest path:
+
+```
+matched against git's own output (`git diff --name-only` and
+`git status --porcelain` both print repo-root-relative paths regardless of
+the process cwd - lib/base_ref.rb is the only source of these lists - so
+these are unaffected by gate.cwd and by the process cwd):
+  gate.build_paths, gate.also_gated_paths - lib/gate_paths.rb, consumed by
+    gate.rb's carve-out and repo_state.rb's touches_build
+  gate.moving_files, gate.guard_ledger, parallelism.repair_when,
+    rebase.auto_resolve_paths - lib/conflict_paths.rb, and manifest.rb's
+    rebase collision validation (pure string comparison)
+  gate.sabotage.test_roots / exempt_prefixes, as prefix filters over
+    untracked paths - gate.rb sabotage_untracked_unverifiable
+resolved on the filesystem or handed to git as a pathspec (root-relative,
+resolved against the manifest's checkout root, never the process cwd):
+  gate.guard_ledger existence - gate.rb gate_guard_from
+  gate.sabotage.test_roots / exempt_prefixes as `git diff` pathspecs -
+    gate.rb sabotage_diff_args
+  the working-tree file reads behind the `# sabotage:` note check -
+    gate.rb's default sabotage file reader
+```
+
 ## Two path lists, not one
 
 `gate.build_paths` and `gate.also_gated_paths` answer different questions,

@@ -100,10 +100,17 @@ module Gate
     # currently exist or cannot be read - a file deleted since the diff was
     # taken, a permissions problem, etc. Callers treat nil the same as "can't
     # verify" rather than "no note"; see scan_sabotage.
-    DEFAULT_SABOTAGE_FILE_READER = lambda do |path|
-      File.read(path)
-    rescue SystemCallError
-      nil
+    #
+    # Was a constant lambda reading `path` against Dir.pwd. Diff paths are
+    # repo-root-relative, so the reader has to know the root; injected readers
+    # (tests) still receive the relative path unchanged, which is what keeps
+    # this a seam rather than a signature change.
+    def default_sabotage_file_reader(root)
+      lambda do |path|
+        File.read(File.join(root, path))
+      rescue SystemCallError
+        nil
+      end
     end
 
     # Parses a -U0 unified diff for CANDIDATE test-declaration lines - added
@@ -121,7 +128,7 @@ module Gate
     # `file_reader` is an injectable seam (defaults to real disk reads) so
     # tests can hand in file contents without touching disk. Report-only -
     # see the module doc.
-    def scan_sabotage(diff_text, test_re:, exempt_prefixes: [], file_reader: DEFAULT_SABOTAGE_FILE_READER)
+    def scan_sabotage(diff_text, test_re:, exempt_prefixes: [], file_reader:)
       missing = []
       unverifiable = []
       current_file = nil
@@ -258,7 +265,12 @@ module Gate
                  unverifiable: [{ reason: "no_base_ref", file: nil, text: nil, detail: nil }] }
       end
 
-      diff_res = Sh.run(sabotage_diff_args(manifest, merge_base), envelope: env)
+      # Pathspecs (gate.sabotage.test_roots / exempt_prefixes) are cwd-relative
+      # to git, unlike the diff output they produce - see docs/manifest.md's
+      # "what is root-relative, and against what". chdir here, never
+      # gate.cwd: this is a git command the kit itself runs, which gate.cwd
+      # is explicitly never applied to.
+      diff_res = Sh.run(sabotage_diff_args(manifest, merge_base), chdir: manifest.checkout_root, envelope: env)
       unless diff_res.success?
         return { scanned: false, missing: [],
                  unverifiable: [{ reason: "diff_failed", file: nil, text: nil,
@@ -267,7 +279,8 @@ module Gate
 
       result = scan_sabotage(diff_res.out,
                               test_re: manifest.sabotage_test_pattern,
-                              exempt_prefixes: manifest.sabotage_exempt_prefixes).merge(scanned: true)
+                              exempt_prefixes: manifest.sabotage_exempt_prefixes,
+                              file_reader: default_sabotage_file_reader(manifest.checkout_root)).merge(scanned: true)
       result[:unverifiable] += sabotage_untracked_unverifiable(env, manifest)
       result
     end
@@ -316,12 +329,16 @@ module Gate
       "no changes under #{paths} - nothing for the gate to measure"
     end
 
-    def gate_guard_from(stages, ledger_path)
+    def gate_guard_from(stages, ledger_path, root)
       stage = Array(stages).find { |s| s["name"] == "Gate guard" }
 
       {
         ledger_path: ledger_path,
-        ledger_exists: !ledger_path.nil? && File.exist?(ledger_path),
+        # Resolved against the manifest's checkout root, not Dir.pwd: manifest
+        # resolution walks up from the working directory, so gate.rb is
+        # legitimately invoked from a subdirectory, where a bare relative
+        # File.exist? silently reports a present ledger as absent.
+        ledger_exists: !ledger_path.nil? && File.exist?(File.join(root, ledger_path)),
         stage: stage && { status: stage["status"], summary: stage["summary"], findings: stage["findings"] }
       }
     end
@@ -449,7 +466,7 @@ module Gate
         env.data[:profile] = nil
         env.data[:stages] = []
         env.data[:skipped_stages] = []
-        env.data[:gate_guard] = gate_guard_from([], ledger_path)
+        env.data[:gate_guard] = gate_guard_from([], ledger_path, manifest.checkout_root)
         env.data[:gate_cwd] = nil
         return env.emit(io)
       end
@@ -467,7 +484,7 @@ module Gate
       env.data[:profile] = report["profile"]
       env.data[:stages] = stages
       env.data[:skipped_stages] = skipped
-      env.data[:gate_guard] = gate_guard_from(stages, ledger_path)
+      env.data[:gate_guard] = gate_guard_from(stages, ledger_path, manifest.checkout_root)
       # Resolved absolute directory the gate command ran in, or nil when the
       # project gates from its checkout root. The `commands` trail already
       # shows it via Sh.render; this makes it machine-readable for the

@@ -36,13 +36,24 @@ class GateTest < Minitest::Test
   # regardless of where the ledger happens to exist in this real checkout,
   # and the gate commands under test are `make report`/`make attest` rather
   # than this repo's own - see support/manifest_helper.rb.
-  def in_tmp_cwd(ledger_present: false, fixture: "gate_tier1")
+  #
+  # `from_subdir: true` chdirs the block one level below the checkout root
+  # (`Manifest.locate`'s walk-up still finds `.claude/wurk.json` there) - the
+  # Phase 2 regression case, where a bare `Dir.pwd`-relative resolution of a
+  # root-relative manifest path silently disagrees with a root invocation.
+  def in_tmp_cwd(ledger_present: false, fixture: "gate_tier1", from_subdir: false)
     in_tmp_repo(fixture) do |dir|
       if ledger_present
         FileUtils.mkdir_p(File.join(dir, "docs"))
         File.write(File.join(dir, "docs", "quality-gate-changes.md"), "# ledger\n")
       end
-      yield
+      if from_subdir
+        subdir = File.join(dir, "sub")
+        FileUtils.mkdir_p(subdir)
+        Dir.chdir(subdir) { yield dir }
+      else
+        yield dir
+      end
     end
   end
 
@@ -171,33 +182,39 @@ class GateTest < Minitest::Test
   # manifest.default_branch -> red (FakeSh::UnexpectedCommand: no stub is
   # registered for the "main...HEAD" pathspec)
   def test_sabotage_pathspec_uses_the_manifests_default_branch
-    other = manifest_with("gate_tier1", "repo" => { "default_branch" => "trunk" })
-
+    # A real located manifest, not with_manifest(manifest_with(...)): the
+    # sabotage scan now resolves its `git diff` chdir and its file reads
+    # against manifest.checkout_root, which is two levels above `path` - for
+    # an in-memory manifest built from a fixture path, that is
+    # test/fixtures, not this test's tmp dir. Installing the modified raw at
+    # <tmpdir>/.claude/wurk.json keeps checkout_root aligned with Dir.pwd,
+    # the same as in_tmp_repo.
     Manifest.reset!
-    with_manifest(other) do
-      Dir.mktmpdir do |dir|
-        Dir.chdir(dir) do
-          expect_base_ref(ref: "origin/trunk")
-          @fake.expect(%w[git diff --name-only origin/trunk...HEAD], out: "docs/plans/x.md\n")
-          @fake.expect(%w[git status --porcelain], out: "")
-          expect_no_sabotage_diff(
-            ref: "origin/trunk",
-            out: "diff --git a/test/foo_test.exs b/test/foo_test.exs\n" \
-                 "--- a/test/foo_test.exs\n+++ b/test/foo_test.exs\n@@ -0,0 +1,1 @@\n" \
-                 "+  test \"missing its note\" do\n"
-          )
-          # scan_sabotage checks the working-tree file, not the diff - see
-          # gate.rb - so the fixture needs one on disk with no note above
-          # the candidate line.
-          FileUtils.mkdir_p("test")
-          File.write("test/foo_test.exs", "  test \"missing its note\" do\n")
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, ".claude"))
+      raw = deep_merge(JSON.parse(File.read(fixture_path("gate_tier1"))), "repo" => { "default_branch" => "trunk" })
+      File.write(File.join(dir, ".claude", "wurk.json"), JSON.generate(raw))
+      Dir.chdir(dir) do
+        expect_base_ref(ref: "origin/trunk")
+        @fake.expect(%w[git diff --name-only origin/trunk...HEAD], out: "docs/plans/x.md\n")
+        @fake.expect(%w[git status --porcelain], out: "")
+        expect_no_sabotage_diff(
+          ref: "origin/trunk",
+          out: "diff --git a/test/foo_test.exs b/test/foo_test.exs\n" \
+               "--- a/test/foo_test.exs\n+++ b/test/foo_test.exs\n@@ -0,0 +1,1 @@\n" \
+               "+  test \"missing its note\" do\n"
+        )
+        # scan_sabotage checks the working-tree file, not the diff - see
+        # gate.rb - so the fixture needs one on disk with no note above
+        # the candidate line.
+        FileUtils.mkdir_p("test")
+        File.write("test/foo_test.exs", "  test \"missing its note\" do\n")
 
-          _code, env = run_gate
+        _code, env = run_gate
 
-          assert_equal true, env["data"]["sabotage"]["enabled"]
-          assert_equal 1, env["data"]["sabotage"]["missing"].length
-          assert_equal "sabotage_note_missing", env["warnings"].first["code"]
-        end
+        assert_equal true, env["data"]["sabotage"]["enabled"]
+        assert_equal 1, env["data"]["sabotage"]["missing"].length
+        assert_equal "sabotage_note_missing", env["warnings"].first["code"]
       end
     end
   end
@@ -1214,7 +1231,8 @@ class GateTest < Minitest::Test
       +  end
     DIFF
 
-    assert_empty Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE, exempt_prefixes: %w[test/scion_tests/ test/scxml_tests/])[:missing]
+    assert_empty Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE, exempt_prefixes: %w[test/scion_tests/ test/scxml_tests/],
+                                           file_reader: sabotage_files({}))[:missing]
   end
 
   # sabotage: hardcode /\btest\s+"/ back into scan_sabotage instead of
@@ -1576,7 +1594,11 @@ class GateTest < Minitest::Test
       assert_nil report_call.chdir
       assert_nil attest_call.chdir
       assert_nil env["data"]["gate_cwd"]
-      refute env["commands"].any? { |c| c.include?("(cd ") }
+      # gate.cwd is absent, so neither gate command's rendered entry carries
+      # a `(cd ...)` wrapper - unlike the sabotage `git diff` entry, which
+      # always chdirs to the checkout root regardless of gate.cwd (Phase 2:
+      # a pathspec is cwd-relative to git, gate.cwd is not applied to it).
+      refute env["commands"].any? { |c| c.include?("(cd ") && (c.include?("make report") || c.include?("make attest")) }
     end
   end
 
@@ -1592,6 +1614,61 @@ class GateTest < Minitest::Test
 
       assert env["data"].key?("gate_cwd"), "carve-out path must still report gate_cwd"
       assert_nil env["data"]["gate_cwd"]
+    end
+  end
+
+  # --- Phase 2: root-relative paths anchor on the checkout root, not Dir.pwd ---
+
+  # sabotage: resolve gate_guard_from's File.exist? against a bare
+  # `ledger_path` (i.e. Dir.pwd) instead of `File.join(root, ledger_path)`
+  # -> red (ledger_exists would be false even though the ledger is on disk)
+  def test_ledger_exists_is_true_when_gate_rb_is_invoked_from_a_subdirectory
+    in_tmp_cwd(ledger_present: true, from_subdir: true) do
+      expect_elixir_diff
+      expect_no_sabotage_diff
+      @fake.expect(%w[make report], out: JSON.generate(GREEN_REPORT))
+      @fake.expect(%w[make attest], out: "Full gate green.\n")
+
+      _code, env = run_gate
+
+      gate_guard = env["data"]["gate_guard"]
+      assert_equal true, gate_guard["ledger_exists"]
+      # The manifest's own relative value is still what is reported - only
+      # the File.exist? check's argument is resolved against the checkout
+      # root, never the ledger_path a reader recognizes.
+      assert_equal "docs/quality-gate-changes.md", gate_guard["ledger_path"]
+    end
+  end
+
+  # sabotage: drop `chdir: manifest.checkout_root` from the sabotage
+  # `git diff` call -> red (FakeSh records chdir nil, not the checkout root,
+  # and the file read behind the note check resolves against Dir.pwd instead
+  # of the root, missing the noted candidate below)
+  def test_sabotage_diff_and_file_reads_resolve_against_the_checkout_root_from_a_subdirectory
+    in_tmp_cwd(from_subdir: true) do |root|
+      expect_elixir_diff
+      expect_no_sabotage_diff(
+        out: "diff --git a/test/foo_test.exs b/test/foo_test.exs\n" \
+             "--- a/test/foo_test.exs\n+++ b/test/foo_test.exs\n@@ -0,0 +1,1 @@\n" \
+             "+  test \"noted from a subdirectory invocation\" do\n"
+      )
+      FileUtils.mkdir_p(File.join(root, "test"))
+      File.write(
+        File.join(root, "test", "foo_test.exs"),
+        "  # sabotage: kills the branch -> red\n  test \"noted from a subdirectory invocation\" do\nend\n"
+      )
+      @fake.expect(%w[make report], out: JSON.generate(GREEN_REPORT))
+      @fake.expect(%w[make attest], out: "Full gate green.\n")
+
+      _code, env = run_gate
+
+      diff_call = @fake.calls.find { |c| c.argv[0, 2] == %w[git diff] && c.argv.include?("-U0") }
+      # File.expand_path (checkout_root) resolves through macOS's /var ->
+      # /private/var symlink the same way Dir.mktmpdir's raw path does not;
+      # File.realpath makes the two comparable without caring which one does.
+      assert_equal File.realpath(root), File.realpath(diff_call.chdir)
+      assert_equal [], env["data"]["sabotage"]["missing"]
+      assert_equal [], env["data"]["sabotage"]["unverifiable"]
     end
   end
 end
