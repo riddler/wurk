@@ -9,24 +9,39 @@ require_relative "lib/refs"
 require_relative "lib/manifest"
 require_relative "lib/forge"
 
-# PrState is the one place that knows PR-merge detection is gh-based, and
-# that git ancestry is *wrong* here under this repo's rebase-merge-only
-# setting.
+# PrState is the one place that knows PR/MR-merge detection is forge-based,
+# and that git ancestry is *wrong* here - verified independently on GitHub and
+# GitLab.
 #
 # Wrong alternative #1: `@{upstream}` / `git branch --merged origin/main`.
 # Rebase merging replays a branch's commits onto main as new SHAs, so a
 # merged branch's tip is *never* an ancestor of main - ancestry-based
 # detection silently no-ops forever while looking like it works. Verified on
-# PRs #2, #3 and #6 (cleanup-worktrees/SKILL.md L15-38): main carried
-# b5e9104/873aa20/96dda3e while the branch tips were
-# 53b5ede/638f29c/62f9875, and `--merged` listed only main.
+# GitHub PRs #2, #3 and #6 (cleanup-worktrees/SKILL.md L15-38): main carried
+# b5e9104/873aa20/96dda3e while the branch tips were 53b5ede/638f29c/62f9875,
+# and `--merged` listed only main. Verified again on GitLab, and more often:
+# over the 25 most recent merged MRs per project, the recorded head was NOT an
+# ancestor of the target in 19/25 for gitlab-org/cli (merge: squash on), 13/25
+# for wireshark/wireshark (fast-forward), 0/25 for freedesktop-sdk/freedesktop-sdk
+# (rebase-merge) - the failure isn't specific to one merge setting. Decisive
+# case: wireshark/wireshark !26206, MR head 45cc0108 (parent e0127775) landed
+# on master as 2a99fbbb (parent a9e15236) with a byte-identical commit
+# message; merge_base(45cc0108, master) is e0127775, not 45cc0108. Full method
+# and counts: docs/research/260817-wu-mya.2-gitlab-merged-request-detection.md
 #
 # Wrong alternative #2: `origin/main..HEAD` (a commit-range check) to infer
 # "nothing left to merge". Same ancestry assumption, same failure.
 #
-# So: ask GitHub, never git. On `gh` failure or an unauthenticated call this
-# script (and PrState.query_merged/beads_for_pr) reports "not available" -
-# it must never fall back to ancestry as a substitute.
+# Wrong alternative #3: treating "has a merge commit" as the merged signal.
+# Under GitLab's fast-forward merge method a merged MR's merge-commit field is
+# an empty string, not null or absent - verified on every fast-forward-merged
+# MR sampled. The forge's own merged state is the only reliable signal (which
+# is why `Forge::REQUEST_MERGED` is GitLab's own spelling of that state; only
+# the GitHub side needs a mapping).
+#
+# So: ask the forge, never git. On a forge-CLI failure or an unauthenticated
+# call this script (and PrState.query_merged/beads_for_pr) reports "not
+# available" - it must never fall back to ancestry as a substitute.
 module PrState
   QueryResult = Struct.new(:available, :merged, :number, :merged_at, :head_oid, :error, keyword_init: true)
   BeadsResult = Struct.new(:available, :beads, :error, keyword_init: true)
