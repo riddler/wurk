@@ -564,14 +564,14 @@ which fixture it passes - no helper needs to change. Cases:
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] Every pre-existing test in `tmux_window_test.rb` passes with its
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] Every pre-existing test in `tmux_window_test.rb` passes with its
       assertions unmodified (verified by `git diff` showing no deletions or
       edits inside `class TmuxWindowTest`)
-- [ ] `contract_test.rb`'s `test_no_consumer_vocabulary_in_kit_source` and
+- [x] `contract_test.rb`'s `test_no_consumer_vocabulary_in_kit_source` and
       `test_banned_kill_operations_appear_only_in_the_forbidding_comment`
       pass
-- [ ] `grep -n 'nvim\|vim\|emacs\|code ' skills/wurk:kit/scripts/tmux_window.rb`
+- [x] `grep -n 'nvim\|vim\|emacs\|code ' skills/wurk:kit/scripts/tmux_window.rb`
       returns nothing
 
 #### Manual Verification:
@@ -862,6 +862,29 @@ before considering the plan fully landed.
       actually validates, field for field
 - [ ] The schema-fence comments read consistently with the `(opt)` convention
       the rest of the fence uses
+- [ ] No regressions in related features
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 2
+
+- [ ] Against a scratch session-per-issue manifest, `open --dry-run` renders
+      a pasteable three-command sequence in the right order (two with
+      `tmux.editor` removed)
+- [ ] Running that sequence by hand in tmux produces a detached session named
+      for the workspace with the editor window first and `claude` second, both
+      rooted in the worktree
+- [ ] The seeded claude window is live and in auto permission mode (this is
+      the case `docs/plan.md:539-553` records as deliberately never smoke-run
+      automatically, because it launches a real session)
 - [ ] No regressions in related features
 
 **Implementation Note**: Use the project's loop gate between edits while
