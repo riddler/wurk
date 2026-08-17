@@ -72,7 +72,8 @@ class Manifest
     "gate" => %w[cwd full loop report report_loop attest guard_ledger build_paths also_gated_paths moving_files
                  project_level_skips not_applicable_skips sabotage timeout_seconds],
     "gate.sabotage" => %w[test_roots test_pattern exempt_prefixes],
-    "parallelism" => %w[model worktrees_dir trust warm_clone warm_globs warm repair_when repair post_branch],
+    "parallelism" => %w[model worktrees_dir trust warm_clone warm_globs warm repair_when repair post_branch
+                        timeout_seconds],
     "tmux" => %w[session model],
     "models" => %w[direction],
     "artifacts" => %w[plans research filename repository],
@@ -94,7 +95,8 @@ class Manifest
     "models.direction" => "opus",
     "artifacts.filename" => "YYMMDD-[id-]kebab",
     "judge.model" => "sonnet",
-    "gate.timeout_seconds" => 600
+    "gate.timeout_seconds" => 600,
+    "parallelism.timeout_seconds" => 600
   }.freeze
 
   attr_reader :path, :raw, :errors, :warnings
@@ -389,6 +391,17 @@ class Manifest
     Array(fetch("parallelism.post_branch")).map { |c| argv(c) }
   end
 
+  # Seconds Sh.run allows the mise-trust hook and each parallelism.warm
+  # command before killing them. Defaults to 600, same as gate.timeout_seconds
+  # and for the same reason: a consumer whose warm step builds container
+  # images or fetches deps can plausibly need longer than the 60s Sh.run
+  # default. Separate from gate.timeout_seconds because it is a different
+  # phase with a different owner - the post-warm verify runs gate.loop itself
+  # and uses gate.timeout_seconds instead (see worktree_create.rb).
+  def parallelism_timeout_seconds
+    fetch("parallelism.timeout_seconds")
+  end
+
   def tmux?
     !fetch("tmux").nil?
   end
@@ -545,6 +558,7 @@ class Manifest
     validate_judge
     validate_rebase
     validate_gate_timeout_seconds
+    validate_parallelism_timeout_seconds
     validate_gate_cwd
     collect_unknown_keys(raw, nil)
   end
@@ -609,6 +623,16 @@ class Manifest
     return if value.is_a?(Integer) && value.positive?
 
     errors << "#{path}: gate.timeout_seconds must be a positive integer, got #{value.inspect}"
+  end
+
+  # validate_parallelism_timeout_seconds needs no nil guard, same reason as
+  # validate_gate_timeout_seconds: fetch applies the 600 default, so the
+  # value is only ever absent-and-defaulted or explicitly wrong.
+  def validate_parallelism_timeout_seconds
+    value = fetch("parallelism.timeout_seconds")
+    return if value.is_a?(Integer) && value.positive?
+
+    errors << "#{path}: parallelism.timeout_seconds must be a positive integer, got #{value.inspect}"
   end
 
   # Shape only, never the filesystem - see docs/manifest.md and this plan's

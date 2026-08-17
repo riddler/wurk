@@ -500,6 +500,40 @@ class ManifestValidationTest < Minitest::Test
     assert_match(/gate\.timeout_seconds must be a positive integer, got "600"/, m.errors.join("\n"))
   end
 
+  def test_parallelism_timeout_seconds_explicit_valid_value_validates
+    m = ManifestFixtures.load_with("valid", "parallelism" => { "timeout_seconds" => 1200 })
+    assert m.valid?, "expected an explicit positive integer timeout to validate: #{m.errors.inspect}"
+  end
+
+  # sabotage: drop the .positive? check, letting 0 through -> red
+  def test_parallelism_timeout_seconds_zero_blocks
+    m = ManifestFixtures.load_with("valid", "parallelism" => { "timeout_seconds" => 0 })
+    refute m.valid?
+    assert_match(/parallelism\.timeout_seconds must be a positive integer, got 0/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the .positive? check entirely -> red
+  def test_parallelism_timeout_seconds_negative_blocks
+    m = ManifestFixtures.load_with("valid", "parallelism" => { "timeout_seconds" => -5 })
+    refute m.valid?
+    assert_match(/parallelism\.timeout_seconds must be a positive integer, got -5/, m.errors.join("\n"))
+  end
+
+  # sabotage: use is_a?(Numeric) instead of is_a?(Integer), letting a float
+  # through -> red
+  def test_parallelism_timeout_seconds_float_blocks
+    m = ManifestFixtures.load_with("valid", "parallelism" => { "timeout_seconds" => 600.5 })
+    refute m.valid?
+    assert_match(/parallelism\.timeout_seconds must be a positive integer, got 600\.5/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the is_a?(Integer) check, letting a string through -> red
+  def test_parallelism_timeout_seconds_non_numeric_blocks
+    m = ManifestFixtures.load_with("valid", "parallelism" => { "timeout_seconds" => "600" })
+    refute m.valid?
+    assert_match(/parallelism\.timeout_seconds must be a positive integer, got "600"/, m.errors.join("\n"))
+  end
+
   def test_gate_cwd_absent_validates
     m = ManifestFixtures.load("valid")
     assert m.valid?, "expected an absent gate.cwd to validate: #{m.errors.inspect}"
@@ -617,6 +651,7 @@ class ManifestAccessorTest < Minitest::Test
     assert_equal 40, @m.total_lines_max
     assert_equal "opus", @m.direction_model
     assert_equal 600, @m.gate_timeout_seconds
+    assert_equal 600, @m.parallelism_timeout_seconds
   end
 
   # sabotage: read the wrong dotted key, or drop the DEFAULTS entry, in
@@ -624,6 +659,13 @@ class ManifestAccessorTest < Minitest::Test
   def test_gate_timeout_seconds_reads_an_explicit_value
     m = ManifestFixtures.load_with("valid", "gate" => { "timeout_seconds" => 1800 })
     assert_equal 1800, m.gate_timeout_seconds
+  end
+
+  # sabotage: read the wrong dotted key, or drop the DEFAULTS entry, in
+  # parallelism_timeout_seconds -> red
+  def test_parallelism_timeout_seconds_reads_an_explicit_value
+    m = ManifestFixtures.load_with("valid", "parallelism" => { "timeout_seconds" => 1800 })
+    assert_equal 1800, m.parallelism_timeout_seconds
   end
 
   def test_absent_tmux_section_reports_no_tmux_integration

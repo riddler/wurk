@@ -193,18 +193,19 @@ module WorktreeCreate
       # a non-interactive session the same way an unaliased -i flag does.
       trust = trust_argv(manifest, path)
       if trust
-        trust_res = Sh.run(trust, envelope: env)
+        trust_res = Sh.run(trust, envelope: env, timeout: manifest.parallelism_timeout_seconds)
         env.warn(code: "trust_failed", message: err_or(trust_res, "#{Sh.render(trust)} failed")) unless trust_res.success?
       end
 
       warm(env, manifest, root: root, path: path)
 
       manifest.warm.each do |cmd|
-        res = Sh.run(cmd, chdir: path, envelope: env)
+        res = Sh.run(cmd, chdir: path, envelope: env, timeout: manifest.parallelism_timeout_seconds)
         env.warn(code: "warm_failed", message: err_or(res, "#{Sh.render(cmd)} failed")) unless res.success?
       end
 
-      quality_res = Sh.run(manifest.gate_loop, chdir: gate_chdir(manifest, path), envelope: env)
+      quality_res = Sh.run(manifest.gate_loop, chdir: gate_chdir(manifest, path), envelope: env,
+                            timeout: manifest.gate_timeout_seconds)
       env.data[:quality_green] = quality_res.success?
       env.data[:quality_output] = quality_res.out.to_s unless quality_res.success?
       env.fail! unless quality_res.success?
