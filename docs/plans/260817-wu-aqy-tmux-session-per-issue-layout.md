@@ -686,12 +686,12 @@ code path unchanged. After the `kill-window` succeeds:
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] The pre-existing `find` and `close` tests in `TmuxWindowTest` pass with
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] The pre-existing `find` and `close` tests in `TmuxWindowTest` pass with
       their assertions unmodified
-- [ ] `test_banned_kill_operations_appear_only_in_the_forbidding_comment`
+- [x] `test_banned_kill_operations_appear_only_in_the_forbidding_comment`
       passes with `kill-session` present in the file
-- [ ] `grep -n 'kill-pane\|kill -9\|SIGKILL' skills/wurk:kit/scripts/tmux_window.rb`
+- [x] `grep -n 'kill-pane\|kill -9\|SIGKILL' skills/wurk:kit/scripts/tmux_window.rb`
       shows only comment lines
 
 #### Manual Verification:
@@ -885,6 +885,27 @@ of blocking here.
 - [ ] The seeded claude window is live and in auto permission mode (this is
       the case `docs/plan.md:539-553` records as deliberately never smoke-run
       automatically, because it launches a real session)
+- [ ] No regressions in related features
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 3
+
+- [ ] With a real two-window per-issue session, `find <name> <path>` returns
+      the claude window id, not the editor's
+- [ ] `close --session <name> <window_id>` against a session whose editor is
+      still running kills the claude window and leaves the session and the
+      editor alone
+- [ ] The same call against a session with only bare shells left removes the
+      session
 - [ ] No regressions in related features
 
 **Implementation Note**: Use the project's loop gate between edits while
