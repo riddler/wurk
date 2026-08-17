@@ -420,6 +420,90 @@ class WorktreeCreateTest < Minitest::Test
     end
   end
 
+  # --- gate.cwd: the gate command runs under gate.cwd inside the new worktree ---
+
+  # sabotage: pass `chdir: path` instead of `chdir: gate_chdir(manifest, path)`
+  # to the real Sh.run call in create_and_warm -> red (FakeSh records the
+  # bare worktree path instead of worktree/backend)
+  def test_gate_cwd_present_chdirs_the_real_quality_run_into_the_subdirectory
+    manifest = manifest_with(FIXTURE, "gate" => { "cwd" => "backend" })
+
+    with_manifest(manifest) do
+      Dir.mktmpdir do |tmp|
+        root = File.join(tmp, "myrepo")
+        FileUtils.mkdir_p(root)
+        worktrees_root = File.join(tmp, "zz-worktrees")
+        path = File.join(worktrees_root, "zz-abc-new-thing")
+
+        expect_location(root)
+        @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+        @fake.expect(%w[git fetch origin], out: "")
+        @fake.expect(["mkdir", "-p", worktrees_root], out: "")
+        @fake.expect(["git", "worktree", "add", path, "-b", "zz-abc-new-thing", "--no-track", "origin/main"], out: "")
+        @fake.expect(["faketool", "trust", path], out: "")
+        @fake.expect(["cp", "-Rfc", "vendor", "build", "#{path}/"], out: "")
+        @fake.expect(%w[faketool fetch], out: "")
+        @fake.expect(%w[make quick], out: "loop green\n")
+
+        code, env = run_create(["zz-abc-new-thing"])
+
+        assert_equal 0, code
+        assert_equal true, env["data"]["quality_green"]
+        gate_call = @fake.calls.find { |c| c.argv == %w[make quick] }
+        assert_equal File.join(path, "backend"), gate_call.chdir
+      end
+    end
+  end
+
+  # sabotage: render the dry-run preview with `chdir: path` instead of
+  # `chdir: gate_chdir(manifest, path)` -> red (the rendered command shows
+  # the bare worktree path instead of worktree/backend)
+  def test_gate_cwd_present_renders_the_dry_run_preview_with_the_subdirectory
+    manifest = manifest_with(FIXTURE, "gate" => { "cwd" => "backend" })
+
+    with_manifest(manifest) do
+      Dir.mktmpdir do |tmp|
+        root = File.join(tmp, "myrepo")
+        FileUtils.mkdir_p(root)
+        worktrees_root = File.join(tmp, "zz-worktrees")
+        path = File.join(worktrees_root, "zz-abc-new-thing")
+
+        expect_location(root)
+        @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+        @fake.expect(%w[git fetch origin], out: "")
+
+        _code, env = run_create(["zz-abc-new-thing", "--dry-run"])
+
+        gate_preview = env["commands"].find { |c| c.include?("make quick") }
+        assert_match(/\A\(cd #{Regexp.escape(File.join(path, "backend"))} && make quick\)/, gate_preview)
+      end
+    end
+  end
+
+  # Without gate.cwd, both the real run's chdir and the dry-run preview stay
+  # the bare worktree path, exactly as before this field existed.
+  def test_gate_cwd_absent_chdir_and_preview_are_the_bare_worktree_path
+    with_scratch_repo do |root, worktrees_root|
+      path = File.join(worktrees_root, "zz-abc-new-thing")
+
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+      @fake.expect(%w[git fetch origin], out: "")
+      @fake.expect(["mkdir", "-p", worktrees_root], out: "")
+      @fake.expect(["git", "worktree", "add", path, "-b", "zz-abc-new-thing", "--no-track", "origin/main"], out: "")
+      @fake.expect(["faketool", "trust", path], out: "")
+      @fake.expect(["cp", "-Rfc", "vendor", "build", "#{path}/"], out: "")
+      @fake.expect(%w[faketool fetch], out: "")
+      @fake.expect(%w[make quick], out: "loop green\n")
+
+      code, _env = run_create(["zz-abc-new-thing"])
+
+      assert_equal 0, code
+      gate_call = @fake.calls.find { |c| c.argv == %w[make quick] }
+      assert_equal path, gate_call.chdir
+    end
+  end
+
   def test_never_force_in_source
     source = File.read(File.expand_path("../worktree_create.rb", __dir__))
     refute_match(/--force\b/, source)

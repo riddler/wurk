@@ -273,6 +273,9 @@ Runs the consumer's own gate commands - `gate.full`, `gate.loop`,
 `gate.report`, `gate.report_loop`, `gate.attest` - and reports which tier of
 `docs/gate-contract.md` the project reached. It knows no gate tool's flag
 surface; every command is manifest data. The most constrained script here.
+Each of the five runs in `gate.cwd` when the manifest declares one (default
+the checkout root); `data.gate_cwd` reports the resolved directory. See
+`docs/manifest.md`.
 
 - `data.skipped_stages` always stays in the payload, for every skip. Whether
   a skip *blocks*, and whether it belongs in what you report, follows a

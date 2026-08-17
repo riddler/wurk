@@ -117,7 +117,7 @@ module WorktreeCreate
       env.commands << Sh.render(trust) if trust
       record_clone_dry_run(env, manifest.warm_clone, root: root, path: path)
       manifest.warm.each { |cmd| env.commands << Sh.render(cmd, chdir: path) }
-      env.commands << Sh.render(manifest.gate_loop, chdir: path)
+      env.commands << Sh.render(manifest.gate_loop, chdir: gate_chdir(manifest, path))
     end
 
     # Mirrors clone_caches below command-for-command, so --dry-run reports
@@ -165,6 +165,14 @@ module WorktreeCreate
       argv && argv.map { |a| a.gsub("{path}", path) }
     end
 
+    # The gate command runs in the new worktree - under gate.cwd inside it
+    # when the project gates from a subdirectory (wurk docs/manifest.md). One
+    # helper so the dry-run render and the real run cannot disagree about
+    # where.
+    def gate_chdir(manifest, path)
+      manifest.gate_chdir(root: path) || path
+    end
+
     def create_and_warm(env, io, manifest, root:, path:, worktrees_root:, base_ref:, name:)
       mkdir_res = Sh.run(["mkdir", "-p", worktrees_root], envelope: env)
       unless mkdir_res.success?
@@ -196,7 +204,7 @@ module WorktreeCreate
         env.warn(code: "warm_failed", message: err_or(res, "#{Sh.render(cmd)} failed")) unless res.success?
       end
 
-      quality_res = Sh.run(manifest.gate_loop, chdir: path, envelope: env)
+      quality_res = Sh.run(manifest.gate_loop, chdir: gate_chdir(manifest, path), envelope: env)
       env.data[:quality_green] = quality_res.success?
       env.data[:quality_output] = quality_res.out.to_s unless quality_res.success?
       env.fail! unless quality_res.success?

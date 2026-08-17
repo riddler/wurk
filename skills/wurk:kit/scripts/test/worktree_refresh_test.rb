@@ -191,6 +191,63 @@ class WorktreeRefreshTest < Minitest::Test
     refute env["commands"].any? { |c| c.include?("--force") }
   end
 
+  # --- gate.cwd: the gate command runs under gate.cwd inside the refreshed worktree ---
+
+  # sabotage: pass `chdir: path` instead of `chdir: gate_chdir(manifest, path)`
+  # to confirm_green's Sh.run call -> red
+  def test_gate_cwd_present_chdirs_confirm_greens_quality_run
+    manifest = manifest_with(FIXTURE, "gate" => { "cwd" => "backend" })
+
+    expect_survey
+    @fake.expect(%w[git fetch origin], out: "")
+    @fake.expect(%w[git rev-parse origin/main], out: "deadbeef\n")
+
+    @fake.expect(%w[git merge-base --is-ancestor origin/main HEAD], exitstatus: 0)
+    @fake.expect(%w[git merge-base --is-ancestor origin/main HEAD], exitstatus: 1)
+    @fake.expect(%w[git status --porcelain], out: "")
+    @fake.expect(%w[git rev-parse HEAD], out: "aaaaaaa\n")
+    @fake.expect(%w[git rebase origin/main], out: "")
+    @fake.expect(%w[git rev-parse origin/main], out: "deadbeef\n")
+    @fake.expect(["git", "diff", "--quiet", "aaaaaaa", "HEAD", "--", "lock.json"], exitstatus: 0)
+    @fake.expect(%w[make quick], out: "green\n")
+
+    io = StringIO.new
+    code = nil
+    with_manifest(manifest) { code = WorktreeRefresh.run([], io: io) }
+    env = JSON.parse(io.string)
+
+    assert_equal 0, code
+    wt2 = env["data"]["results"].find { |r| r["path"] == WT2 }
+    assert_equal "rebased onto deadbeef, lock unchanged, loop green", wt2["result"]
+
+    gate_call = @fake.calls.find { |c| c.argv == %w[make quick] }
+    assert_equal File.join(WT2, "backend"), gate_call.chdir
+  end
+
+  # sabotage: render the dry-run preview with `chdir: path` instead of
+  # `chdir: gate_chdir(manifest, path)` -> red
+  def test_gate_cwd_present_renders_the_dry_run_preview_with_the_subdirectory
+    manifest = manifest_with(FIXTURE, "gate" => { "cwd" => "backend" })
+
+    expect_survey
+    @fake.expect(%w[git fetch origin], out: "")
+    @fake.expect(%w[git rev-parse origin/main], out: "deadbeef\n")
+
+    @fake.expect(%w[git merge-base --is-ancestor origin/main HEAD], exitstatus: 0)
+    @fake.expect(%w[git merge-base --is-ancestor origin/main HEAD], exitstatus: 1)
+    @fake.expect(%w[git status --porcelain], out: "")
+    # No git rebase / gate expectations - dry-run must not execute them.
+
+    io = StringIO.new
+    code = nil
+    with_manifest(manifest) { code = WorktreeRefresh.run(["--dry-run"], io: io) }
+    env = JSON.parse(io.string)
+
+    assert_equal 0, code
+    gate_preview = env["commands"].find { |c| c.include?("make quick") }
+    assert_match(/\A\(cd #{Regexp.escape(File.join(WT2, "backend"))} && make quick\)/, gate_preview)
+  end
+
   def test_never_force_in_source
     source = File.read(File.expand_path("../worktree_refresh.rb", __dir__))
     refute_match(/--force\b/, source)

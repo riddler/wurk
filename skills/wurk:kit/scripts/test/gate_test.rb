@@ -1516,4 +1516,82 @@ class GateTest < Minitest::Test
       refute File.exist?("docs/quality-gate-changes.md")
     end
   end
+
+  # --- gate.cwd: scopes execution of the gate command, never matching ---
+
+  # Same shape as expect_no_sabotage_diff, but against the gate_subdir
+  # fixture's own gate.sabotage config (backend/test/ roots and exemptions -
+  # gate.cwd never rescopes matching, so these stay repo-root-relative
+  # exactly like gate_tier1's, just under the backend/ prefix).
+  def expect_no_subdir_sabotage_diff(ref: "origin/main", base_sha: "abc1234")
+    @fake.expect(["git", "merge-base", ref, "HEAD"], out: "#{base_sha}\n")
+    @fake.expect(
+      ["git", "diff", base_sha, "-U0", "--", "backend/test/",
+       ":!backend/test/scion_tests/", ":!backend/test/scxml_tests/"],
+      out: ""
+    )
+    @fake.expect(%w[git status --porcelain], out: "")
+  end
+
+  # sabotage: drop `chdir: manifest.gate_chdir` from run_quality's Sh.run
+  # call -> red (FakeSh records chdir nil, not the subdir)
+  def test_gate_cwd_present_chdirs_the_quality_and_attest_runs
+    in_tmp_cwd(fixture: "gate_subdir") do
+      expect_base_ref
+      @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "backend/lib/acme/foo.ex\n")
+      @fake.expect(%w[git status --porcelain], out: "")
+      expect_no_subdir_sabotage_diff
+      @fake.expect(%w[make report], out: JSON.generate(GREEN_REPORT))
+      @fake.expect(%w[make attest], out: "Full gate green.\n")
+
+      _code, env = run_gate
+
+      expected_chdir = File.join(Dir.pwd, "backend")
+      report_call = @fake.calls.find { |c| c.argv == %w[make report] }
+      attest_call = @fake.calls.find { |c| c.argv == %w[make attest] }
+
+      assert_equal expected_chdir, report_call.chdir
+      assert_equal expected_chdir, attest_call.chdir
+      assert_equal expected_chdir, env["data"]["gate_cwd"]
+      assert env["commands"].any? { |c| c.start_with?("(cd #{expected_chdir} && make report)") }
+    end
+  end
+
+  # The absent-field no-op case: this is what guards the audit trail from
+  # changing shape for every consumer that never declares gate.cwd.
+  # sabotage: pass an explicit chdir (e.g. Dir.pwd) instead of
+  # manifest.gate_chdir, which is nil when gate.cwd is absent -> red
+  def test_gate_cwd_absent_chdir_and_data_gate_cwd_are_nil
+    in_tmp_cwd do
+      expect_elixir_diff
+      expect_no_sabotage_diff
+      @fake.expect(%w[make report], out: JSON.generate(GREEN_REPORT))
+      @fake.expect(%w[make attest], out: "Full gate green.\n")
+
+      _code, env = run_gate
+
+      report_call = @fake.calls.find { |c| c.argv == %w[make report] }
+      attest_call = @fake.calls.find { |c| c.argv == %w[make attest] }
+
+      assert_nil report_call.chdir
+      assert_nil attest_call.chdir
+      assert_nil env["data"]["gate_cwd"]
+      refute env["commands"].any? { |c| c.include?("(cd ") }
+    end
+  end
+
+  # sabotage: leave env.data[:gate_cwd] unset in the carve-out early return
+  # -> red (JSON serializes a missing key as absent from the hash, so the
+  # `["data"].key?` check below catches it, not just a nil comparison)
+  def test_gate_cwd_reported_nil_on_the_carve_out_path
+    in_tmp_cwd(fixture: "gate_subdir") do
+      expect_no_elixir_diff
+      expect_no_subdir_sabotage_diff
+
+      _code, env = run_gate
+
+      assert env["data"].key?("gate_cwd"), "carve-out path must still report gate_cwd"
+      assert_nil env["data"]["gate_cwd"]
+    end
+  end
 end
