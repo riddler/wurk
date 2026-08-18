@@ -60,7 +60,9 @@ reported, never guessed: no `tmux` section blocks `tmux_window.rb`'s
 session-addressing subcommands rather than inventing a session name, no
 `gate.report` means tier 0, `forge.kind: gitlab` blocks the gh-based and
 permalink-writing scripts with `unsupported_forge` (see `lib/forge.rb`)
-instead of half-working.
+instead of half-working. Within a `tmux` section, `tmux.layout` selects the
+topology and defaults to `window-per-issue` when absent; `tmux.editor` is an
+optional argv array, and its absence means no editor window is opened.
 
 ## Ruby version and syntax
 

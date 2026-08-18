@@ -121,6 +121,13 @@ restated description goes stale the moment the bead is edited.
    explicitly by the script rather than left to whatever default the launched
    session would otherwise inherit.
 
+   The topology is the manifest's `tmux.layout`, and the script handles both
+   without any branching in this prose: under `window-per-issue` the two
+   commands do what they have always done. Under `session-per-issue`,
+   `ensure-session` has nothing to do and reports that; `open` creates the
+   workspace's own session, named for the workspace, with an optional editor
+   window ahead of the seeded `claude` window.
+
 ## How to read the result
 
 `worktree_create.rb`:
@@ -157,12 +164,13 @@ restated description goes stale the moment the bead is edited.
   manifest has no `tmux` section at all (`blocked` `tmux_not_configured`),
   skip the step with a note and go to the report. Never fail workspace
   creation because a window could not be made.
-- `data.skipped: true` - a window of this name already exists. Report it; do
-  not make a second one.
+- `data.skipped: true` - a window or a session of this name already exists,
+  depending on `data.layout`. Report it; do not make a second one.
 - `blocked` `window_id_empty` - report it as the window step failing, not as
   the workspace failing.
-- On success, `data.window_id`, `data.name`, `data.path`, and `data.model`
-  feed the report directly.
+- On success, `data.layout`, `data.session`, `data.editor_window_id`,
+  `data.window_id`, `data.name`, `data.path`, and `data.model` feed the
+  report directly.
 
 ## Report
 
@@ -170,6 +178,8 @@ State the workspace path, the branch and what it was cut from, whether the
 warm caches came along, the gate result, **the tmux window** (name and id, or
 why it was skipped), and **the model the session launched with**, so the user
 can jump to it and knows what is running there without switching windows.
+When `data.layout` is `session-per-issue`, state the session name alongside
+the window.
 
 Remind that subsequent work on this bead happens **inside the workspace**, and
 that under worktree-per-issue the worktree is removed at merge by

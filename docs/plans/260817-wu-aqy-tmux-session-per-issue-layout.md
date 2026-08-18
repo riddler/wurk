@@ -766,11 +766,11 @@ since `REFERENCE.md`'s command blocks are scanned.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] `contract_test.rb`'s `test_markdown_scans_cover_every_shipped_skill`,
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] `contract_test.rb`'s `test_markdown_scans_cover_every_shipped_skill`,
       `test_no_consumer_vocabulary_in_skill_markdown` and
       `test_no_consumer_vocabulary_in_kit_reference_command_blocks` pass
-- [ ] `grep -rn 'nvim\|emacs' skills/` returns nothing
+- [x] `grep -rn 'nvim\|emacs' skills/` returns nothing
 
 #### Manual Verification:
 - [ ] `/wurk:branch` prose read end to end still describes one unconditional
@@ -906,6 +906,26 @@ of blocking here.
       editor alone
 - [ ] The same call against a session with only bare shells left removes the
       session
+- [ ] No regressions in related features
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 4
+
+- [ ] `/wurk:branch` prose read end to end still describes one unconditional
+      two-command sequence, with no manifest branching asked of the model
+- [ ] `/wurk:cleanup` prose makes the `--session` condition decidable purely
+      from the `find` envelope
+- [ ] An operator reading `docs/manifest.md`'s `## tmux` plus these two skills
+      can turn on session-per-issue without reading the script
 - [ ] No regressions in related features
 
 **Implementation Note**: Use the project's loop gate between edits while
