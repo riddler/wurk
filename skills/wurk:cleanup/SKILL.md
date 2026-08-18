@@ -102,7 +102,8 @@ Omitted, sweep every worktree.
    - `blocked` `ambiguous_window_match` - more than one window claims this
      worktree. Skip the quiesce **and** the removal, and report it. Two
      windows claiming one worktree is a state a human should look at.
-   - Otherwise carry `data.window_id` forward:
+   - Otherwise carry `data.window_id` forward, and carry `data.session`
+     forward alongside it when `data.session_scoped` is true:
 
    ```bash
    ruby ~/.claude/skills/wurk:kit/scripts/tmux_window.rb classify <window_id>
@@ -137,12 +138,15 @@ Omitted, sweep every worktree.
    If step 2 left a `window_id`, close its window now that removal succeeded:
 
    ```bash
-   ruby ~/.claude/skills/wurk:kit/scripts/tmux_window.rb close <window_id>
+   ruby ~/.claude/skills/wurk:kit/scripts/tmux_window.rb close [--session <session>] <window_id>
    ```
 
-   `data.closed: false` with `reason: "window kept, other panes busy"` is a
-   normal outcome - report it and move on. The removal already happened and
-   stands regardless.
+   Pass `--session` only when step 2 reported `data.session_scoped: true`,
+   using the `data.session` value it returned. `data.closed: false` with
+   `reason: "window kept, other panes busy"` is a normal outcome - report it
+   and move on. So is `data.session_closed: false` with `reason: "session
+   kept, other windows busy"`, when `--session` was passed. The removal
+   already happened and stands regardless.
 
 4. **Close the beads that just landed.** *(A literal instruction in this
    skill, never routed through a script - see Guidelines.)* Union
