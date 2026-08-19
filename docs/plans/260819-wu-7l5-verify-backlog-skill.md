@@ -696,15 +696,15 @@ cannot make it vacuous.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] `contract_test.rb`'s `test_markdown_scans_cover_every_shipped_skill`
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] `contract_test.rb`'s `test_markdown_scans_cover_every_shipped_skill`
       sees `skills/wurk:verify/SKILL.md`
-- [ ] The consumer-vocabulary scan finds nothing in the new SKILL.md
-- [ ] The new cross-reference test passes, and fails if
+- [x] The consumer-vocabulary scan finds nothing in the new SKILL.md
+- [x] The new cross-reference test passes, and fails if
       `skills/wurk:verify/` is renamed without updating `/wurk:work`
       (verify by planting the rename in a scratch copy, as the file's other
       meta-checks do)
-- [ ] `ruby install.rb --dry-run` lists the new skill directory
+- [x] `ruby install.rb --dry-run` lists the new skill directory
 
 #### Manual Verification:
 - [ ] Invoke `/wurk:verify` on a bead that has a half-walked plan: it
@@ -838,6 +838,34 @@ of blocking here.
       legible - a plan's questions read as recorded judgment calls, a
       research document's as genuinely open
 - [ ] Output is small enough to be useful in a session without flooding it
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 3
+
+- [ ] Invoke `/wurk:verify` on a bead that has a half-walked plan: it
+      enumerates the remaining items, skips the ones already ticked, and
+      walks the rest one at a time
+- [ ] An item that is really a decision escalates to Direction on the
+      manifest's model and returns a record, rather than being silently
+      decided in the walk
+- [ ] A settled open question ends with a `**Settled (...)**` note that reads
+      naturally beside the corpus's existing ones, and a re-invocation skips it
+- [ ] The pass ends with a summary and a single `/wurk:commit` touch-up, with
+      nothing pushed and no bead closed
+- [ ] Read the new SKILL.md against ADR-0008: every policy call, human gate,
+      and verification discipline is stated in its own prose, and no step
+      hands one to a script
+- [ ] The name reads right in use - typing `/wurk:verify` and reading its
+      description does not suggest "run the gate"
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,

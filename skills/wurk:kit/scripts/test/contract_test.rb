@@ -298,6 +298,24 @@ module Contract
     end
     hits
   end
+
+  # Every "/wurk:<name>" skill cross-reference anywhere in a SKILL.md. The
+  # markdown scan the whole file's other checks are: no code_only stripping
+  # (a reference in prose counts the same as one in a fenced example), and
+  # no distinction between a reference that resolves and one that does not -
+  # that judgment belongs to the caller, which knows the installed skill
+  # directories and this module does not.
+  SKILL_REF_RE = %r{/wurk:([a-z][a-z0-9-]*)}.freeze
+
+  # Returns [[lineno, name], ...] for every "/wurk:<name>" reference found on
+  # any line.
+  def skill_references(content)
+    hits = []
+    content.each_line.with_index(1) do |line, lineno|
+      line.scan(SKILL_REF_RE) { |match| hits << [lineno, match.first] }
+    end
+    hits
+  end
 end
 
 class ContractRulesTest < Minitest::Test
@@ -459,6 +477,16 @@ class ContractRulesTest < Minitest::Test
     assert_empty Contract.forge_vocabulary(%(REQUEST_MERGED = "merged"\n))
     assert_empty Contract.forge_vocabulary(%(# the gh_unavailable code was renamed in wu-mya.1\n))
   end
+
+  def test_skill_references_finds_every_reference_on_a_line
+    content = "Compose with `/wurk:issue` and `/wurk:branch`.\nSee /wurk:kit-reference too.\n"
+    assert_equal [[1, "issue"], [1, "branch"], [2, "kit-reference"]],
+                 Contract.skill_references(content)
+  end
+
+  def test_skill_references_ignores_text_with_no_reference
+    assert_empty Contract.skill_references("Run the gate, then commit by hand.\n")
+  end
 end
 
 # Applies the Contract rules to the real files under .claude/scripts/, so a
@@ -616,6 +644,29 @@ class ContractTest < Minitest::Test
                  "or a synthesized value"
   end
 
+  # Every "/wurk:<name>" cross-reference in any shipped SKILL.md must resolve
+  # to a skill directory that actually exists. This is what makes a
+  # cross-skill pointer (e.g. wurk:work naming wurk:verify) gate-verifiable
+  # rather than merely written, and it guards the same drift CLAUDE.md's
+  # rename checklist makes a rename responsible for.
+  def test_every_skill_reference_resolves_to_a_shipped_skill
+    refs = []
+    skill_markdown_files.each do |file|
+      Contract.skill_references(File.read(file)).each do |(lineno, name)|
+        refs << [file, lineno, name]
+      end
+    end
+    refute_empty refs,
+                 "no /wurk:<name> references found across shipped SKILL.md files - " \
+                 "the cross-reference scan would be vacuous"
+
+    missing = refs.reject do |(_file, _lineno, name)|
+      File.directory?(File.join(REPO_ROOT, "skills", "wurk:#{name}"))
+    end
+    assert_empty missing.map { |(file, lineno, name)| "#{file}:#{lineno} (/wurk:#{name})" },
+                 "a /wurk:<name> reference does not resolve to a shipped skill directory"
+  end
+
   # A meta-check on the guardrail itself: prove the scan is not vacuously
   # green just because no scripts exist yet in Phase 1. A fixture file with a
   # violation, dropped into a temp copy of the tree shape, must be caught.
@@ -670,6 +721,31 @@ class ContractTest < Minitest::Test
       refute_empty hits, "the command-block scan failed to catch a planted consumer command"
       assert_equal ["mix gate commands"], hits.map(&:last).uniq,
                    "the command-block scan flagged prose or a worked example, not just the command"
+    end
+  end
+
+  # The cross-reference scan's own meta-check: plant the rename it exists to
+  # catch (skills/wurk:verify renamed with no update to the skill that names
+  # it) in a scratch copy of the real tree, and confirm the scan - reapplied
+  # to that scratch copy - now reports the reference as unresolved.
+  def test_meta_the_skill_reference_scan_catches_a_renamed_skill_directory
+    Dir.mktmpdir do |dir|
+      scratch_skills = File.join(dir, "skills")
+      FileUtils.cp_r(File.join(REPO_ROOT, "skills"), scratch_skills)
+
+      verify_dir = File.join(scratch_skills, "wurk:verify")
+      assert File.directory?(verify_dir),
+             "fixture assumption: skills/wurk:verify must exist for this meta-check to plant its rename"
+      FileUtils.mv(verify_dir, File.join(scratch_skills, "wurk:verify-renamed"))
+
+      refs = []
+      Dir.glob(File.join(scratch_skills, "wurk:*", "SKILL.md")).sort.each do |file|
+        Contract.skill_references(File.read(file)).each { |(lineno, name)| refs << [file, lineno, name] }
+      end
+      refute_empty refs, "meta-check setup produced no references to scan - fixture assumption broke"
+
+      missing = refs.reject { |(_file, _lineno, name)| File.directory?(File.join(scratch_skills, "wurk:#{name}")) }
+      refute_empty missing, "the cross-reference scan failed to catch a planted skill-directory rename"
     end
   end
 

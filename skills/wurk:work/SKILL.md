@@ -277,7 +277,9 @@ Every spawn obeys these invariants:
 ### Direction stage prompt
 
 No skill wraps this stage, so the prompt is composed directly into the Agent
-call. Tell the subagent to:
+call. This section is the definition `/wurk:verify` cites by name rather
+than restating when it escalates an item to Direction; a rewrite here should
+keep that coupling in mind. Tell the subagent to:
 
 - read the bead in full and the files it names;
 - read the project's existing architecture-decision records, and its
@@ -342,7 +344,9 @@ Always report:
 - the bucket and its one-line rationale,
 - each stage that ran, the model it ran on, and the artifact it produced,
 - any **Deferred Manual Verification** items the loop surfaced, and any open
-  questions a stage recorded in its artifact,
+  questions a stage recorded in its artifact - `/wurk:verify` is how that
+  backlog gets worked, on its own cadence and by hand,
+
 - for a stopped loop: the refusal reason and the phase it stopped at.
 
 ## Guidelines
