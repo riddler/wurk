@@ -555,12 +555,12 @@ Cases, using `ManifestHelper` to install a fixture manifest whose
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] `ruby skills/wurk:kit/scripts/backlog.rb wu-7l5` exits 0 and reports
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] `ruby skills/wurk:kit/scripts/backlog.rb wu-7l5` exits 0 and reports
       this bead's research document with its six open-question items
-- [ ] `contract_test.rb`'s shebang/executable-bit, banned-call, no-backticks,
+- [x] `contract_test.rb`'s shebang/executable-bit, banned-call, no-backticks,
       and no-consumer-vocabulary scans all cover the new script and pass
-- [ ] `backlog.rb --help` documents `<bead-id>` and `--doc`
+- [x] `backlog.rb --help` documents `<bead-id>` and `--doc`
 
 #### Manual Verification:
 - [ ] Run over three or four real beads with artifacts: every open-questions
@@ -818,6 +818,26 @@ before considering the plan fully landed.
       confirm its `defer` and `check` calls behave exactly as before: the
       phase's manual block lands under a fresh `### Phase N`, the automated
       boxes tick, and the new subcommands are not reached
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 2
+
+- [ ] Run over three or four real beads with artifacts: every open-questions
+      heading a human can find in those documents appears in the output, and
+      nothing that is not one appears
+- [ ] The `kind` label makes the plan-versus-research semantic difference
+      legible - a plan's questions read as recorded judgment calls, a
+      research document's as genuinely open
+- [ ] Output is small enough to be useful in a session without flooding it
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
