@@ -151,6 +151,7 @@ Four layers:
 | cleanup-worktrees | wurk:cleanup |
 | release (pred) / release-app (fixative) | wurk:release |
 | (new, shared foundation like present:kit) | wurk:kit |
+| (new, wu-7l5 - works the deferred-verification and open-question backlog) | wurk:verify |
 
 ## Cross-reference update checklist (applies at every rename)
 
