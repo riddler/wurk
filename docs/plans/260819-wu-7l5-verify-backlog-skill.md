@@ -809,10 +809,10 @@ before considering the plan fully landed.
 
 ### Phase 1
 
-- [ ] `deferred` over two or three of the seven plans that still hold
+- [x] `deferred` over two or three of the seven plans that still hold
       unchecked items reads them the way a human reads them - no split
       continuation lines, no prose masquerading as an item
-- [ ] `confirm --dry-run` against a real plan reports the line a human would
+- [x] `confirm --dry-run` against a real plan reports the line a human would
       have ticked by hand
 - [ ] Run `/wurk:implement --loop` over one phase of a small real plan and
       confirm its `defer` and `check` calls behave exactly as before: the
@@ -831,13 +831,13 @@ of blocking here.
 
 ### Phase 2
 
-- [ ] Run over three or four real beads with artifacts: every open-questions
+- [x] Run over three or four real beads with artifacts: every open-questions
       heading a human can find in those documents appears in the output, and
       nothing that is not one appears
-- [ ] The `kind` label makes the plan-versus-research semantic difference
+- [x] The `kind` label makes the plan-versus-research semantic difference
       legible - a plan's questions read as recorded judgment calls, a
       research document's as genuinely open
-- [ ] Output is small enough to be useful in a session without flooding it
+- [x] Output is small enough to be useful in a session without flooding it
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
@@ -857,14 +857,14 @@ of blocking here.
 - [ ] An item that is really a decision escalates to Direction on the
       manifest's model and returns a record, rather than being silently
       decided in the walk
-- [ ] A settled open question ends with a `**Settled (...)**` note that reads
+- [x] A settled open question ends with a `**Settled (...)**` note that reads
       naturally beside the corpus's existing ones, and a re-invocation skips it
 - [ ] The pass ends with a summary and a single `/wurk:commit` touch-up, with
       nothing pushed and no bead closed
-- [ ] Read the new SKILL.md against ADR-0008: every policy call, human gate,
+- [x] Read the new SKILL.md against ADR-0008: every policy call, human gate,
       and verification discipline is stated in its own prose, and no step
       hands one to a script
-- [ ] The name reads right in use - typing `/wurk:verify` and reading its
+- [x] The name reads right in use - typing `/wurk:verify` and reading its
       description does not suggest "run the gate"
 
 **Implementation Note**: Use the project's loop gate between edits while
