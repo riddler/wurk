@@ -24,10 +24,15 @@ module Backlog
   # script can see that a note exists; whether the question is settled is
   # the reader's call (ADR-0008). Order matters: the first pattern to match
   # an item's folded text wins.
+  # Each pattern is anchored to the start of a line, because that is where
+  # every one of these idioms actually appears: a settled note opens its own
+  # nested sub-note, a "Resolved:" prefix opens the item. Matching anywhere
+  # in an item's folded text instead reads a question that merely *quotes*
+  # the idiom while describing it as one that carries it.
   SETTLED_MARKERS = {
-    "settled" => /\*\*settled\b/i,
-    "resolved" => /\A\s*[-*]?\s*(\*\*)?resolved\b/i,
-    "strikethrough" => /~~/
+    "settled" => /\A[-*]?\s*(\*\*)?settled\b/i,
+    "resolved" => /\A[-*]?\s*(\*\*)?resolved\b/i,
+    "strikethrough" => /\A[-*]?\s*~~/
   }.freeze
 
   # Any heading, any level - used only to find where an Open Questions
@@ -56,7 +61,7 @@ module Backlog
           heading: line,
           level: level,
           line: idx + 1,
-          items: items.map { |it| { line: it[:line] + 1, text: it[:text], settled_marker: settled_marker(it[:text]) } }
+          items: items.map { |it| { line: it[:line] + 1, text: it[:text], settled_marker: settled_marker(it[:raw]) } }
         }
       end
       sections
@@ -88,11 +93,12 @@ module Backlog
       range.each do |i|
         line = lines[i]
         if (m = line.match(NUMBERED_ITEM_RE))
-          items << { line: i, text: m[1].strip }
+          items << { line: i, text: m[1].strip, raw: [m[1].strip] }
         elsif (m = line.match(BULLET_ITEM_RE))
-          items << { line: i, text: m[1].strip }
+          items << { line: i, text: m[1].strip, raw: [m[1].strip] }
         elsif !items.empty? && !line.strip.empty? && line.start_with?(" ")
           items.last[:text] = "#{items.last[:text]} #{line.strip}"
+          items.last[:raw] << line.strip
         end
       end
       return items unless items.empty?
@@ -101,11 +107,15 @@ module Backlog
       return [] unless prose_idx
 
       text = range.map { |i| lines[i] }.reject { |l| l.strip.empty? }.map(&:strip).join(" ")
-      [{ line: prose_idx, text: text }]
+      [{ line: prose_idx, text: text, raw: range.map { |i| lines[i].strip }.reject(&:empty?) }]
     end
 
-    def settled_marker(text)
-      SETTLED_MARKERS.each { |name, re| return name if text =~ re }
+    # Takes the item's raw lines, not its folded text: position is the whole
+    # point of the anchoring above, and folding destroys it.
+    def settled_marker(raw_lines)
+      Array(raw_lines).each do |line|
+        SETTLED_MARKERS.each { |name, re| return name if line =~ re }
+      end
       nil
     end
   end

@@ -24,7 +24,7 @@ class BacklogLibTest < Minitest::Test
     section = sections.first
     assert_equal "## Open Questions", section[:heading]
     assert_equal 2, section[:level]
-    assert_equal 4, section[:items].length
+    assert_equal 5, section[:items].length
   end
 
   def test_finds_a_sentence_case_heading_with_a_prose_only_block
@@ -89,6 +89,18 @@ class BacklogLibTest < Minitest::Test
     assert_equal "settled", items[1][:settled_marker]
     assert_equal "resolved", items[2][:settled_marker]
     assert_equal "strikethrough", items[3][:settled_marker]
+  end
+
+  def test_an_item_that_only_quotes_the_marker_idioms_is_not_reported_settled
+    sections = Backlog.open_questions(read_fixture("open_questions_numbered.md"))
+    items = sections.first[:items]
+
+    # This item names all three idioms while describing them - "**Settled
+    # after the loop**", "Resolved:", strikethrough - but carries none of
+    # them as its own marker. Matching anywhere in the folded text read it
+    # as settled and undercounted the backlog by one.
+    assert_match(/Settled after the loop/, items[4][:text])
+    assert_nil items[4][:settled_marker]
   end
 
   def test_no_item_ever_carries_a_boolean_resolved_field

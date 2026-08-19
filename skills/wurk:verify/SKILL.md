@@ -48,6 +48,14 @@ the point of this skill and stays interactive.
 ruby ~/.claude/skills/wurk:kit/scripts/backlog.rb <bead-id> [--doc PATH ...]
 ```
 
+Read the envelope's shape rather than guessing at it: deferred items are
+nested under each document's `deferred` hash as `deferred.items`, and open
+questions are grouped by heading, so the items live at
+`open_questions[].items` rather than in a flat list. Both totals are
+reported separately under `totals`, so a flat read that finds nothing while
+the totals are non-zero means the keys were guessed, not that the backlog is
+empty.
+
 Report the counts per document - deferred items unchecked, open-question
 items with no settled marker - before walking anything. **The list comes
 from the documents on disk, not from what a `/wurk:work` report said.** A

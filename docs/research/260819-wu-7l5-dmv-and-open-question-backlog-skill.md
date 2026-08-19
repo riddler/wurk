@@ -784,18 +784,31 @@ ran. None blocks planning.
    an ADR directory, and `work_state.rb` has no way to find ADRs for a bead.
    Including ADRs would mean either a new manifest field or a convention-based
    guess at the directory - both of which are plan-level decisions.
+   **Settled (2026-08-19):** out of scope. Only `artifacts.plans` and
+   `artifacts.research` are swept, because no `artifacts.*` field names an
+   ADR directory and guessing one would put a consumer-project constant in a
+   generic skill. `backlog.rb --doc <path>` sweeps an ADR on demand.
 2. **Whether a `/wurk:dmv` pass should normalize the open-questions heading
    across existing documents, or only tolerate the variants.** A tolerant
    regex (`^#{2,3} Open [Qq]uestions\b`, optional parenthetical suffix) covers
    all 15 headings found today without touching any file; normalizing would
    make future passes cheaper but is a corpus-wide edit that no bead currently
    asks for.
+   **Settled (2026-08-19):** tolerate, do not normalize. The lenient regex covers all
+   15 existing headings, and the writer template emits one canonical form, so
+   the variants are historical rather than ongoing.
 3. **How an open question gets marked worked, so an interrupted pass resumes.**
    DMV items have checkboxes; open questions have none, and the three
    resolution idioms in the corpus (strikethrough plus bold Settled, a nested
    "**Settled after the loop**" note, an inline "Resolved:" prefix) are prose,
    not markers. Inventing a fourth is a decision; adopting one of the three is
    also a decision.
+   **Settled (2026-08-19):** adopt the nested sub-note, written as
+   `**Settled (YYYY-MM-DD):**`. Checkboxes stay reserved for success criteria.
+   Walking this very question exposed the cost of the choice: a reader that
+   matched the marker anywhere in an item's folded text read *this item* as
+   settled because it quotes the idiom while describing it. The marker is now
+   matched only at the start of a line, where the convention actually puts it.
 4. **Whether the Direction definition moves to a shared document or is cited
    by name.** Both have precedent in this repo, and they point opposite ways:
    [`skills/wurk:iterate/SKILL.md:14-16`](https://github.com/riddler/wurk/blob/cb3ad01bb889c81a2b04de3452654ffa43e8d5f6/skills/wurk:iterate/SKILL.md#L14-L16) says link by name, while
@@ -804,11 +817,24 @@ ran. None blocks planning.
    judgment prose rather than mechanics, and moving judgment prose out of a
    SKILL.md is close to the failure mode that ADR describes. Not resolvable
    from the codebase alone.
+   **Settled (2026-08-19):** cited by name, not moved. `/wurk:verify` step 3 tells the
+   reader to read `/wurk:work`'s "Direction stage prompt" section and compose
+   from it. Moving judgment prose into the script layer's REFERENCE.md would
+   cross the architecture boundary ADR-0008 draws.
 5. **The skill's name.** The bead itself raises it: `/wurk:dmv` names one of
    the two backlogs the skill works. Nothing in the codebase settles it, and
    [`CLAUDE.md:52-55`](https://github.com/riddler/wurk/blob/cb3ad01bb889c81a2b04de3452654ffa43e8d5f6/CLAUDE.md#L52-L55) makes a later rename a same-commit sweep of every
    reference, so the choice is cheapest now.
+   **Settled (2026-08-19):** `/wurk:verify`, chosen by the user over the bead's
+   provisional `/wurk:dmv` because it covers both backlogs. The "verify is
+   loaded vocabulary" objection is answered by the description, which names
+   both backlogs and never suggests running the gate. The bead's own text
+   still says `dmv` and needs a tracker edit.
 6. **Whether it gets an `--auto` form.** The bead leaves it undecided. If it
    does, `/wurk:work`'s "no human is available" invariant
    ([`skills/wurk:work/SKILL.md:266-270`](https://github.com/riddler/wurk/blob/cb3ad01bb889c81a2b04de3452654ffa43e8d5f6/skills/wurk:work/SKILL.md#L266-L270)) applies, which is in direct tension
    with a pass whose whole point is confirming things with a human.
+   **Settled (2026-08-19):** no `--auto` form. These items exist precisely because no
+   human was available; removing the human again would convert a human gate
+   into an automated one. The enumeration half is already unattended-safe as a
+   plain script.
