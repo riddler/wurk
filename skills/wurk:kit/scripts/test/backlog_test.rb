@@ -103,6 +103,20 @@ class BacklogLibTest < Minitest::Test
     assert_nil items[4][:settled_marker]
   end
 
+  def test_wrapped_continuation_starting_with_a_marker_word_is_not_reported_settled
+    # Regression for wu-vu3: extract_items strips a continuation line's
+    # indentation, so a paragraph that merely wraps right before "resolved",
+    # "settled", or "~~" used to read as a marker line. None of these three
+    # items carry a real marker - they only happen to wrap there.
+    sections = Backlog.open_questions(read_fixture("open_questions_wrapped_continuation.md"))
+    items = sections.first[:items]
+
+    assert_equal 3, items.length
+    assert_nil items[0][:settled_marker]
+    assert_nil items[1][:settled_marker]
+    assert_nil items[2][:settled_marker]
+  end
+
   def test_no_item_ever_carries_a_boolean_resolved_field
     sections = Backlog.open_questions(read_fixture("open_questions_numbered.md"))
 

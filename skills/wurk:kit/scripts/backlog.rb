@@ -23,15 +23,24 @@ module Backlog
   # A marker this reader saw - never a claim the question is answered. A
   # script can see that a note exists; whether the question is settled is
   # the reader's call (ADR-0008). Order matters: the first pattern to match
-  # an item's folded text wins.
-  # Each pattern is anchored to the start of a line, because that is where
-  # every one of these idioms actually appears: a settled note opens its own
-  # nested sub-note, a "Resolved:" prefix opens the item. Matching anywhere
-  # in an item's folded text instead reads a question that merely *quotes*
-  # the idiom while describing it as one that carries it.
+  # an item's raw line wins.
+  #
+  # Anchoring each pattern to the start of a line (a28db67) was not enough:
+  # extract_items folds a wrapped prose continuation into the same shape as
+  # a genuine marker line, and a paragraph that happens to wrap right before
+  # the word "resolved" or "settled" then reads exactly like one. Real
+  # markers are not bare words - SKILL.md step 4 tells authors to write
+  # "**Settled (YYYY-MM-DD):**", the corpus's own "Resolved:" prefix carries
+  # a colon too - so "settled"/"resolved" additionally require a colon later
+  # on the same line, closing the idiom's own clause. Wrapped prose that
+  # merely starts with the word (no colon in that line) no longer matches.
+  # Strikethrough carries no such colon; the idiom instead always opens the
+  # item itself (`~~...~~` wraps the item's own text, never a note further
+  # down it), so it is only tested against an item's first raw line -
+  # see settled_marker below.
   SETTLED_MARKERS = {
-    "settled" => /\A[-*]?\s*(\*\*)?settled\b/i,
-    "resolved" => /\A[-*]?\s*(\*\*)?resolved\b/i,
+    "settled" => /\A[-*]?\s*(\*\*)?settled\b[^:]*:/i,
+    "resolved" => /\A[-*]?\s*(\*\*)?resolved\b[^:]*:/i,
     "strikethrough" => /\A[-*]?\s*~~/
   }.freeze
 
@@ -111,10 +120,17 @@ module Backlog
     end
 
     # Takes the item's raw lines, not its folded text: position is the whole
-    # point of the anchoring above, and folding destroys it.
+    # point of the anchoring above, and folding destroys it. Strikethrough
+    # is only tested against the first raw line (the item's own opening,
+    # whether the numbered/bulleted item text or the sole line of a
+    # prose-only block) - see the comment on SETTLED_MARKERS.
     def settled_marker(raw_lines)
-      Array(raw_lines).each do |line|
-        SETTLED_MARKERS.each { |name, re| return name if line =~ re }
+      Array(raw_lines).each_with_index do |line, idx|
+        SETTLED_MARKERS.each do |name, re|
+          next if name == "strikethrough" && idx != 0
+
+          return name if line =~ re
+        end
       end
       nil
     end
