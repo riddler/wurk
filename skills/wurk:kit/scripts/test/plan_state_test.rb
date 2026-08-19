@@ -163,6 +163,75 @@ class PlanStateLibTest < Minitest::Test
 
     assert_equal ["wraps onto a second physical line"], phase[:manual][:items]
   end
+
+  # --- deferred_items ---
+
+  def test_deferred_items_folds_a_continuation_line_into_one_item
+    lines = PlanState.to_lines(read_fixture("deferred_backlog.md"))
+    items = PlanState.deferred_items(lines)
+
+    wrapped = items.find { |it| it[:text].start_with?("second deferred item") }
+    assert_equal "second deferred item, wraps onto an indented continuation line", wrapped[:text]
+  end
+
+  def test_deferred_items_skips_the_implementation_note_and_the_rule
+    lines = PlanState.to_lines(read_fixture("deferred_backlog.md"))
+    items = PlanState.deferred_items(lines)
+
+    refute items.any? { |it| it[:text].include?("Implementation Note") }
+    refute items.any? { |it| it[:text] == "---" }
+  end
+
+  def test_deferred_items_carries_the_phase_number_it_sits_under
+    lines = PlanState.to_lines(read_fixture("deferred_backlog.md"))
+    items = PlanState.deferred_items(lines)
+
+    phase1_items = items.select { |it| it[:phase] == 1 }
+    phase2_items = items.select { |it| it[:phase] == 2 }
+
+    assert_equal 2, phase1_items.length
+    assert_equal 2, phase2_items.length
+    assert(phase1_items.any? { |it| it[:text].start_with?("first deferred item") })
+    assert(phase2_items.any? { |it| it[:text].start_with?("fourth deferred item") })
+  end
+
+  def test_deferred_items_reports_checked_state
+    lines = PlanState.to_lines(read_fixture("deferred_backlog.md"))
+    items = PlanState.deferred_items(lines)
+
+    first = items.find { |it| it[:text].start_with?("first deferred item") }
+    third = items.find { |it| it[:text].start_with?("third deferred item") }
+
+    assert first[:checked]
+    refute third[:checked]
+  end
+
+  def test_deferred_items_returns_empty_array_when_section_absent
+    lines = PlanState.to_lines(read_fixture("missing_section.md"))
+
+    assert_equal [], PlanState.deferred_items(lines)
+  end
+
+  # --- find_deferred_section counts ---
+
+  def test_find_deferred_section_reports_total_and_checked
+    lines = PlanState.to_lines(read_fixture("deferred_backlog.md"))
+    section = PlanState.find_deferred_section(lines)
+
+    assert section[:present]
+    assert_equal 4, section[:total]
+    assert_equal 2, section[:checked]
+  end
+
+  def test_find_deferred_section_still_reports_absent_on_missing_section_fixture
+    lines = PlanState.to_lines(read_fixture("missing_section.md"))
+    section = PlanState.find_deferred_section(lines)
+
+    refute section[:present]
+    assert_nil section[:line]
+    assert_equal 0, section[:total]
+    assert_equal 0, section[:checked]
+  end
 end
 
 # PlanStateCli (the file-mutating CLI), driven through tmpdir copies of the
@@ -360,5 +429,145 @@ class PlanStateCliTest < Minitest::Test
     run_cli(["defer", path, "2", "--dry-run"])
 
     assert_equal original, File.read(path)
+  end
+
+  # --- deferred ---------------------------------------------------------
+
+  def line_of(path, needle)
+    File.readlines(path).find_index { |l| l.include?(needle) } + 1
+  end
+
+  def test_deferred_emits_the_items_read_only_and_leaves_the_file_byte_identical
+    path = copy_fixture("deferred_backlog.md")
+    original = File.read(path)
+
+    code, env = run_cli(["deferred", path])
+
+    assert_equal 0, code
+    assert_equal path, env["data"]["path"]
+    assert env["data"]["deferred_manual_section"]["present"]
+    assert_equal 4, env["data"]["deferred_manual_section"]["total"]
+    assert_equal 2, env["data"]["deferred_manual_section"]["checked"]
+    assert_equal 4, env["data"]["items"].length
+    assert_equal original, File.read(path)
+  end
+
+  def test_deferred_warns_no_deferred_section_on_a_plan_without_one
+    path = copy_fixture("missing_section.md")
+
+    code, env = run_cli(["deferred", path])
+
+    assert_equal 0, code
+    assert_equal [], env["data"]["items"]
+    assert env["warnings"].any? { |w| w["code"] == "no_deferred_section" }
+  end
+
+  def test_deferred_missing_file_blocks
+    code, env = run_cli(["deferred", File.join(@dir, "nope.md")])
+
+    assert_equal 1, code
+    assert_equal "file_not_found", env["blocked"].first["code"]
+  end
+
+  # --- confirm ------------------------------------------------------------
+
+  def test_confirm_line_ticks_exactly_that_line_and_no_other
+    path = copy_fixture("deferred_backlog.md")
+    line = line_of(path, "third deferred item")
+
+    code, env = run_cli(["confirm", path, "--line", line.to_s])
+
+    assert_equal 0, code
+    assert_equal [line], env["data"]["changed_lines"]
+    assert_equal "third deferred item, unconfirmed", env["data"]["item"]
+
+    lines = PlanState.to_lines(File.read(path))
+    items = PlanState.deferred_items(lines)
+    assert_equal 3, items.count { |it| it[:checked] }
+  end
+
+  def test_confirm_line_undo_reverses_it
+    path = copy_fixture("deferred_backlog.md")
+    line = line_of(path, "third deferred item")
+
+    run_cli(["confirm", path, "--line", line.to_s])
+    code, env = run_cli(["confirm", path, "--line", line.to_s, "--undo"])
+
+    assert_equal 0, code
+    assert_equal [line], env["data"]["changed_lines"]
+
+    lines = PlanState.to_lines(File.read(path))
+    items = PlanState.deferred_items(lines)
+    assert_equal 2, items.count { |it| it[:checked] }
+  end
+
+  def test_confirm_line_dry_run_reports_changed_lines_and_leaves_file_byte_identical
+    path = copy_fixture("deferred_backlog.md")
+    original = File.read(path)
+    line = line_of(path, "third deferred item")
+
+    code, env = run_cli(["confirm", path, "--line", line.to_s, "--dry-run"])
+
+    assert_equal 0, code
+    assert_equal [line], env["data"]["changed_lines"]
+    assert_equal original, File.read(path)
+  end
+
+  def test_confirm_blocks_not_deferred_item_for_an_in_phase_manual_box
+    path = copy_fixture("deferred_backlog.md")
+    line = line_of(path, "in-phase manual box for phase 1")
+
+    code, env = run_cli(["confirm", path, "--line", line.to_s])
+
+    assert_equal 1, code
+    assert_equal "not_deferred_item", env["blocked"].first["code"]
+  end
+
+  def test_confirm_blocks_not_deferred_item_for_an_automated_box
+    path = copy_fixture("deferred_backlog.md")
+    line = line_of(path, "thing one")
+
+    code, env = run_cli(["confirm", path, "--line", line.to_s])
+
+    assert_equal 1, code
+    assert_equal "not_deferred_item", env["blocked"].first["code"]
+  end
+
+  def test_confirm_blocks_not_deferred_item_for_a_prose_line_inside_the_section
+    path = copy_fixture("deferred_backlog.md")
+    line = line_of(path, "Manual verification items are deferred")
+
+    code, env = run_cli(["confirm", path, "--line", line.to_s])
+
+    assert_equal 1, code
+    assert_equal "not_deferred_item", env["blocked"].first["code"]
+  end
+
+  def test_confirm_blocks_no_deferred_section_when_absent
+    path = copy_fixture("missing_section.md")
+
+    code, env = run_cli(["confirm", path, "--line", "1"])
+
+    assert_equal 1, code
+    assert_equal "no_deferred_section", env["blocked"].first["code"]
+  end
+
+  def test_confirm_missing_file_blocks
+    code, env = run_cli(["confirm", File.join(@dir, "nope.md"), "--line", "1"])
+
+    assert_equal 1, code
+    assert_equal "file_not_found", env["blocked"].first["code"]
+  end
+
+  # --- regression: check --line on an in-phase Manual box is untouched ---
+
+  def test_check_line_on_an_in_phase_manual_box_still_blocks_manual_verification_refused
+    path = copy_fixture("deferred_backlog.md")
+    line = line_of(path, "in-phase manual box for phase 1")
+
+    code, env = run_cli(["check", path, "1", "--line", line.to_s])
+
+    assert_equal 1, code
+    assert_equal "manual_verification_refused", env["blocked"].first["code"]
   end
 end

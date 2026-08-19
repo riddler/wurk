@@ -407,14 +407,14 @@ cases in `PlanStateLibTest`, CLI cases in `PlanStateCliTest` against
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] `plan_state.rb --help` and the usage line list `deferred` and `confirm`
-- [ ] `ruby skills/wurk:kit/scripts/plan_state.rb deferred docs/plans/260816-wu-z6n-atomic-claim-inside-auto-walk.md`
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] `plan_state.rb --help` and the usage line list `deferred` and `confirm`
+- [x] `ruby skills/wurk:kit/scripts/plan_state.rb deferred docs/plans/260816-wu-z6n-atomic-claim-inside-auto-walk.md`
       reports 4 unchecked and 7 checked items, matching the research
       document's count for that file
-- [ ] `contract_test.rb` still passes with the new subcommands present
+- [x] `contract_test.rb` still passes with the new subcommands present
       (`--dry-run` on the mutating verb, no banned calls, no backticks)
-- [ ] The regression case holds: `check --line N` aimed at an in-phase Manual
+- [x] The regression case holds: `check --line N` aimed at an in-phase Manual
       Verification box still blocks `manual_verification_refused`, and
       `defer` still appends a phase's block unchanged (both asserted in
       `test/plan_state_test.rb`)
@@ -800,3 +800,31 @@ plan with a deferred section but zero checkboxes.
   `docs/plans/260808-wu-gd1-gate-rb-manifest-driven-constants.md`,
   `docs/plan.md:1078-1081`
 - Bead: wu-7l5
+
+## Deferred Manual Verification
+
+Manual verification items are deferred during looped (--loop) execution and
+surfaced here once, rather than blocking after each phase. Confirm these
+before considering the plan fully landed.
+
+### Phase 1
+
+- [ ] `deferred` over two or three of the seven plans that still hold
+      unchecked items reads them the way a human reads them - no split
+      continuation lines, no prose masquerading as an item
+- [ ] `confirm --dry-run` against a real plan reports the line a human would
+      have ticked by hand
+- [ ] Run `/wurk:implement --loop` over one phase of a small real plan and
+      confirm its `defer` and `check` calls behave exactly as before: the
+      phase's manual block lands under a fresh `### Phase N`, the automated
+      boxes tick, and the new subcommands are not reached
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---

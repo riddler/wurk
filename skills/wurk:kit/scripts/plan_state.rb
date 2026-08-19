@@ -27,6 +27,7 @@ module PlanState
   MANUAL_HEADING_RE = /\A#### Manual Verification:/.freeze
   CHECKBOX_RE = /\A- \[( |x)\] (.+)\z/.freeze
   DEFERRED_HEADING_RE = /\A## Deferred Manual Verification\s*\z/.freeze
+  DEFERRED_SUBHEADING_RE = /\A### Phase (\d+)\s*\z/.freeze
 
   # /wurk:plan's mandatory nine sections, in the order the template
   # specifies them (create-plan/SKILL.md's "Template Structure" list).
@@ -153,7 +154,53 @@ module PlanState
 
     def find_deferred_section(lines)
       idx = lines.find_index { |l| l =~ DEFERRED_HEADING_RE }
-      idx ? { present: true, line: idx + 1 } : { present: false, line: nil }
+      return { present: false, line: nil, total: 0, checked: 0 } unless idx
+
+      items = deferred_items_in_section(lines, idx)
+      { present: true, line: idx + 1, total: items.length, checked: items.count { |it| it[:checked] } }
+    end
+
+    # Every checkbox inside "## Deferred Manual Verification", tagged with
+    # the "### Phase N" subheading it sits under. Continuation lines are
+    # folded the same way extract_checkbox_section folds them inside a
+    # phase; non-checkbox prose that `defer` copied in verbatim (an
+    # "**Implementation Note**:" paragraph, a "---" rule) is skipped, not
+    # reported as an item. :line is 0-indexed, matching automated_items/
+    # manual_items - callers that emit it convert to 1-indexed, the same as
+    # changed_lines does elsewhere in this file. Returns [] when the section
+    # is absent.
+    def deferred_items(lines)
+      idx = lines.find_index { |l| l =~ DEFERRED_HEADING_RE }
+      return [] unless idx
+
+      deferred_items_in_section(lines, idx)
+    end
+
+    def deferred_items_in_section(lines, heading_idx)
+      end_idx = lines.length - 1
+      ((heading_idx + 1)...lines.length).each do |j|
+        if lines[j] =~ H2_RE
+          end_idx = j - 1
+          break
+        end
+      end
+
+      items = []
+      current_phase = nil
+      ((heading_idx + 1)..end_idx).each do |i|
+        line = lines[i]
+        if (m = line.match(DEFERRED_SUBHEADING_RE))
+          current_phase = m[1].to_i
+          next
+        end
+
+        if (m = line.match(CHECKBOX_RE))
+          items << { phase: current_phase, checked: m[1] == "x", text: m[2].strip, line: i }
+        elsif !items.empty? && !line.strip.empty? && line.start_with?(" ")
+          items.last[:text] = "#{items.last[:text]} #{line.strip}"
+        end
+      end
+      items
     end
 
     # The literal Manual Verification lines (checkbox + continuation lines)
@@ -192,7 +239,7 @@ end
 # reads and reports; `check`/`uncheck`/`defer` mutate the file on disk
 # (or, under --dry-run, only report what they would have written).
 module PlanStateCli
-  SUBCOMMANDS = %w[check uncheck defer validate].freeze
+  SUBCOMMANDS = %w[check uncheck defer deferred confirm validate].freeze
 
   class << self
     def run(argv, io: $stdout)
@@ -209,13 +256,15 @@ module PlanStateCli
       when "check" then run_mutate(argv, io, action: :check)
       when "uncheck" then run_mutate(argv, io, action: :uncheck)
       when "defer" then run_defer(argv, io)
+      when "deferred" then run_deferred(argv, io)
+      when "confirm" then run_confirm(argv, io)
       end
     end
 
     private
 
     def usage
-      "usage: plan_state.rb [check|uncheck|defer|validate] <path> [phase] [options]"
+      "usage: plan_state.rb [check|uncheck|defer|deferred|confirm|validate] <path> [phase] [options]"
     end
 
     # --- validate -----------------------------------------------------
@@ -399,6 +448,102 @@ module PlanStateCli
       File.write(path, new_lines.map { |l| "#{l}\n" }.join) unless options[:dry_run]
 
       env.emit(io)
+    end
+
+    # --- deferred -----------------------------------------------------------
+    #
+    # Read-only: reports the items /wurk:verify's backlog walk works from.
+    # Absence of the section is normal for a plan that never ran under
+    # --loop, so it is a warning (with an empty item list) rather than a
+    # block.
+
+    def run_deferred(argv, io)
+      parser, = Cli.build("plan_state.rb deferred <path>")
+      args = Cli.parse!(parser, argv)
+      path = args.first
+      usage_error!("plan_state.rb deferred <path>", parser) if path.to_s.strip.empty?
+
+      env = Envelope.new(script: "plan_state_deferred")
+      return missing_file!(env, io, path) unless File.exist?(path)
+
+      lines = PlanState.to_lines(File.read(path))
+      section = PlanState.find_deferred_section(lines)
+
+      env.data[:path] = path
+      env.data[:deferred_manual_section] = section
+
+      unless section[:present]
+        env.data[:items] = []
+        env.warn(code: "no_deferred_section", message: "#{path} has no Deferred Manual Verification section")
+        return env.emit(io)
+      end
+
+      env.data[:items] = PlanState.deferred_items(lines).map { |it| public_deferred_item(it) }
+      env.emit(io)
+    end
+
+    # --- confirm ------------------------------------------------------------
+    #
+    # Toggles exactly one deferred checkbox to [x] (or, under --undo, back to
+    # [ ]). No bulk form: a backlog is walked item by item (ADR-0008), so
+    # unlike check/uncheck there is no "no --line" mode here at all.
+
+    def run_confirm(argv, io)
+      options = { dry_run: false }
+      parser, options = Cli.build("plan_state.rb confirm <path> --line N [--undo]", options) do |opts|
+        opts.on("--line N", Integer, "target one deferred checkbox by absolute file line number") do |v|
+          options[:line] = v
+        end
+        opts.on("--undo", "revert a confirmed item back to unchecked") do
+          options[:undo] = true
+        end
+      end
+      args = Cli.parse!(parser, argv)
+      path = args.first
+      usage_line = "plan_state.rb confirm <path> --line N [--undo] [--dry-run]"
+      usage_error!(usage_line, parser) if path.to_s.strip.empty? || options[:line].nil?
+
+      env = Envelope.new(script: "plan_state_confirm")
+      return missing_file!(env, io, path) unless File.exist?(path)
+
+      lines = PlanState.to_lines(File.read(path))
+      section = PlanState.find_deferred_section(lines)
+      unless section[:present]
+        env.block!(code: "no_deferred_section", message: "#{path} has no Deferred Manual Verification section")
+        return env.emit(io)
+      end
+
+      idx = options[:line] - 1
+      item = PlanState.deferred_items(lines).find { |it| it[:line] == idx }
+      unless item
+        env.block!(
+          code: "not_deferred_item",
+          message: "line #{options[:line]} is not a checkbox item inside Deferred Manual Verification in #{path}"
+        )
+        return env.emit(io)
+      end
+
+      new_state = !options[:undo]
+      new_lines = lines.dup
+      changed_lines = []
+      if item[:checked] != new_state
+        new_lines[idx] = new_lines[idx].sub(/\A- \[( |x)\]/, new_state ? "- [x]" : "- [ ]")
+        changed_lines << idx + 1
+      end
+
+      env.data[:path] = path
+      env.data[:line] = options[:line]
+      env.data[:item] = item[:text]
+      env.data[:changed_lines] = changed_lines
+      env.commands << "write #{path} (confirm line #{options[:line]} #{new_state ? 'checked' : 'unchecked'})"
+
+      File.write(path, new_lines.map { |l| "#{l}\n" }.join) unless options[:dry_run] || changed_lines.empty?
+
+      env.emit(io)
+    end
+
+    def public_deferred_item(item)
+      { phase: item[:phase], checked: item[:checked], text: item[:text], line: item[:line] + 1 }
     end
 
     # --- shared -----------------------------------------------------------
