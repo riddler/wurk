@@ -942,7 +942,7 @@ class TmuxWindowSessionPerIssueTest < Minitest::Test
     expect_no_caffeinate
     @fake.expect(
       ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", NAME, "-c", PATH,
-       "-n", "nvim", "--", "nvim"],
+       "-n", "nvim", "--", "/bin/sh", "-c", "exec nvim"],
       out: "@1\n"
     )
     @fake.expect(
@@ -978,7 +978,33 @@ class TmuxWindowSessionPerIssueTest < Minitest::Test
     fixture = manifest_with(FIXTURE, "tmux" => { "editor" => ["/usr/local/bin/nvim", "-c", "Explore"] })
     @fake.expect(
       ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", NAME, "-c", PATH,
-       "-n", "nvim", "--", "/usr/local/bin/nvim", "-c", "Explore"],
+       "-n", "nvim", "--", "/bin/sh", "-c", "exec /usr/local/bin/nvim -c Explore"],
+      out: "@1\n"
+    )
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=#{NAME}:", "-n", "claude", "-c", PATH],
+      out: "@2\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@2"], out: "")
+
+    code, _env = run_tmux(open_argv, fixture: fixture)
+
+    assert_equal 0, code
+  end
+
+  # tmux hands a one-element shell-command to the shell, which leaves the
+  # editor as a non-foreground child and makes pane_current_command report
+  # the shell - close --session then reads a live editor as a bare shell and
+  # tears the session down (seen against real tmux 3.6b on 2026-08-21). The
+  # sh -c exec wrapper keeps the editor as the pane's own process, and an
+  # argv needing quoting must survive the join intact.
+  def test_open_wraps_the_editor_argv_in_sh_c_exec_so_the_editor_owns_the_pane
+    @fake.expect(["tmux", "has-session", "-t", "=#{NAME}"], exitstatus: 1)
+    expect_no_caffeinate
+    fixture = manifest_with(FIXTURE, "tmux" => { "editor" => ["nvim", "-c", "e a b.txt"] })
+    @fake.expect(
+      ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", NAME, "-c", PATH,
+       "-n", "nvim", "--", "/bin/sh", "-c", "exec nvim -c e\\ a\\ b.txt"],
       out: "@1\n"
     )
     @fake.expect(
@@ -1019,7 +1045,7 @@ class TmuxWindowSessionPerIssueTest < Minitest::Test
     expect_no_caffeinate
     @fake.expect(
       ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", NAME, "-c", PATH,
-       "-n", "nvim", "--", "nvim"],
+       "-n", "nvim", "--", "/bin/sh", "-c", "exec nvim"],
       out: "@1\n"
     )
     @fake.expect(
@@ -1055,7 +1081,7 @@ class TmuxWindowSessionPerIssueTest < Minitest::Test
     expect_no_caffeinate
     @fake.expect(
       ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", NAME, "-c", PATH,
-       "-n", "nvim", "--", "nvim"],
+       "-n", "nvim", "--", "/bin/sh", "-c", "exec nvim"],
       out: "@1\n"
     )
     @fake.expect(["tmux", "new-window"], out: "") # empty id despite success
@@ -1087,7 +1113,7 @@ class TmuxWindowSessionPerIssueTest < Minitest::Test
     expect_no_caffeinate
     @fake.expect(
       ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", NAME, "-c", PATH,
-       "-n", "nvim", "--", "nvim"],
+       "-n", "nvim", "--", "/bin/sh", "-c", "exec nvim"],
       out: "@1\n"
     )
     @fake.expect(
