@@ -1,6 +1,8 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require "shellwords"
+
 require_relative "lib/envelope"
 require_relative "lib/sh"
 require_relative "lib/cli"
@@ -465,7 +467,7 @@ module TmuxWindow
     #
     # With tmux.editor configured - three commands after the guard:
     #   tmux has-session -t =<name>                       -> skip if it exists
-    #   tmux new-session -d -s <name> -c <path> -n <editor> -- <editor argv...>
+    #   tmux new-session -d -s <name> -c <path> -n <editor> -- /bin/sh -c 'exec <editor argv>'
     #   tmux new-window  -d -P -F '#{window_id}' -t =<name>: -n claude -c <path>
     #   tmux send-keys   -t <claude window id> <keys> Enter
     #
@@ -475,7 +477,9 @@ module TmuxWindow
     #   tmux send-keys   -t <claude window id> <keys> Enter
     #
     # The editor window name is File.basename(editor_argv.first) - derived,
-    # never a literal editor name in this file. The claude window id is
+    # never a literal editor name in this file. The editor argv itself goes
+    # through editor_exec_argv, which keeps the editor as the pane's own
+    # process so a live editor still keeps its session at close time. The claude window id is
     # captured from new-window's -P -F in the editor case and from
     # new-session's own -P -F in the no-editor case; either way the captured
     # id goes through the same empty-window-id trap as window-per-issue's
@@ -508,7 +512,7 @@ module TmuxWindow
       session_new_argv =
         if editor_argv
           ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", name, "-c", path,
-           "-n", editor_name, "--"] + editor_argv
+           "-n", editor_name, "--"] + editor_exec_argv(editor_argv)
         else
           ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", name, "-c", path,
            "-n", CLAUDE_WINDOW_NAME]
@@ -873,6 +877,22 @@ module TmuxWindow
 
       commands = res.out.to_s.each_line.map(&:chomp).reject(&:empty?)
       !commands.empty? && commands.all? { |c| SHELL_COMMANDS.include?(c) }
+    end
+
+    # tmux runs a one-element `shell-command` through the shell, so a
+    # `-- nvim` editor window ends up as `fish -c nvim` with the editor a
+    # non-foreground child, and `pane_current_command` reports the *shell*.
+    # bare_shell_panes? then reads a live editor as a bare shell, and
+    # close --session tears down a session with the editor still in it
+    # (measured against tmux 3.6b on 2026-08-21; the unit tests stubbed a
+    # `pane_current_command` of "nvim" that real tmux never produces there).
+    # Wrapping in `sh -c "exec <argv>"` makes tmux execvp sh, and sh replace
+    # itself with the editor, so the pane process *is* the editor for an argv
+    # of any length. Shellwords.join, not Sh.render, does the quoting:
+    # Sh.render is the audit-trail renderer and is documented as never
+    # feeding a real execution.
+    def editor_exec_argv(editor_argv)
+      ["/bin/sh", "-c", "exec #{Shellwords.join(editor_argv)}"]
     end
 
     def blank?(value)

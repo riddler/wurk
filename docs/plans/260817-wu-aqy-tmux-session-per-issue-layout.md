@@ -858,11 +858,11 @@ before considering the plan fully landed.
 
 ### Phase 1
 
-- [ ] `docs/manifest.md`'s `## tmux` prose matches what `lib/manifest.rb`
+- [x] `docs/manifest.md`'s `## tmux` prose matches what `lib/manifest.rb`
       actually validates, field for field
-- [ ] The schema-fence comments read consistently with the `(opt)` convention
+- [x] The schema-fence comments read consistently with the `(opt)` convention
       the rest of the fence uses
-- [ ] No regressions in related features
+- [x] No regressions in related features
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
@@ -876,16 +876,16 @@ of blocking here.
 
 ### Phase 2
 
-- [ ] Against a scratch session-per-issue manifest, `open --dry-run` renders
+- [x] Against a scratch session-per-issue manifest, `open --dry-run` renders
       a pasteable three-command sequence in the right order (two with
       `tmux.editor` removed)
-- [ ] Running that sequence by hand in tmux produces a detached session named
+- [x] Running that sequence by hand in tmux produces a detached session named
       for the workspace with the editor window first and `claude` second, both
       rooted in the worktree
-- [ ] The seeded claude window is live and in auto permission mode (this is
+- [x] The seeded claude window is live and in auto permission mode (this is
       the case `docs/plan.md:539-553` records as deliberately never smoke-run
       automatically, because it launches a real session)
-- [ ] No regressions in related features
+- [x] No regressions in related features
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
@@ -899,14 +899,14 @@ of blocking here.
 
 ### Phase 3
 
-- [ ] With a real two-window per-issue session, `find <name> <path>` returns
+- [x] With a real two-window per-issue session, `find <name> <path>` returns
       the claude window id, not the editor's
-- [ ] `close --session <name> <window_id>` against a session whose editor is
+- [x] `close --session <name> <window_id>` against a session whose editor is
       still running kills the claude window and leaves the session and the
       editor alone
-- [ ] The same call against a session with only bare shells left removes the
+- [x] The same call against a session with only bare shells left removes the
       session
-- [ ] No regressions in related features
+- [x] No regressions in related features
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
@@ -920,13 +920,13 @@ of blocking here.
 
 ### Phase 4
 
-- [ ] `/wurk:branch` prose read end to end still describes one unconditional
+- [x] `/wurk:branch` prose read end to end still describes one unconditional
       two-command sequence, with no manifest branching asked of the model
-- [ ] `/wurk:cleanup` prose makes the `--session` condition decidable purely
+- [x] `/wurk:cleanup` prose makes the `--session` condition decidable purely
       from the `find` envelope
-- [ ] An operator reading `docs/manifest.md`'s `## tmux` plus these two skills
+- [x] An operator reading `docs/manifest.md`'s `## tmux` plus these two skills
       can turn on session-per-issue without reading the script
-- [ ] No regressions in related features
+- [x] No regressions in related features
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,

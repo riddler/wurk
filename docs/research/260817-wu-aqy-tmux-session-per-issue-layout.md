@@ -646,6 +646,19 @@ code.
    (`:18-21`) only carves out `kill-window` on all-bare-shell windows - it
    says nothing about `kill-session` or about a window still running an
    editor.
+
+   **Settled (2026-08-21):** `close` gained an optional `--session
+   <name>`: after a successful `kill-window` it issues `kill-session`
+   only when every pane of every remaining window is a bare shell,
+   reusing `bare_shell_panes?`. A live editor keeps its session.
+   Verifying this against real tmux on 2026-08-21 found the guarantee
+   did not actually hold - tmux runs a one-element command through the
+   shell, so `pane_current_command` reported the shell and a live editor
+   read as bare; the editor argv is now wrapped in `sh -c "exec ..."` so
+   the editor owns its pane. Confirmed with a human during a
+   `/wurk:verify` walk of
+   `docs/plans/260817-wu-aqy-tmux-session-per-issue-layout.md`.
+
 2. **What `find` should match under session-per-issue.** `find` searches the
    whole server with `list-panes -a` and matches window name + pane path
    (`:428-443`). Under the proposed layout the claude window would be named
@@ -653,31 +666,79 @@ code.
    name+path match still discriminates only because the path differs - and
    the editor window would share that same path, which is exactly the
    `ambiguous_window_match` block condition (`:453-457`).
+
+   **Settled (2026-08-21):** `find` became layout-aware: under
+   `session-per-issue` it lists `session_name` too and matches session +
+   window name `claude` + pane path, so it returns the claude window and
+   never the editor's. Under `window-per-issue`, and with no `tmux`
+   section at all, it is unchanged and still never blocks. Confirmed
+   with a human during a `/wurk:verify` walk of
+   `docs/plans/260817-wu-aqy-tmux-session-per-issue-layout.md`.
+
 3. **Whether the duplicate guard moves from window name to session name.**
    `open`'s guard lists windows in the one manifest session (`:368-376`);
    under session-per-issue the equivalent guard is "does a session of this
    name already exist", which is what `ensure-session`'s `has-session`
    already does for the shared session.
+
+   **Settled (2026-08-21):** Yes. Under `session-per-issue` `open`'s
+   guard is `tmux has-session -t =<name>`; a hit reports `skipped` and
+   creates nothing, keeping the same shape as `worktree_create.rb`'s
+   guards. Confirmed with a human during a `/wurk:verify` walk of
+   `docs/plans/260817-wu-aqy-tmux-session-per-issue-layout.md`.
+
 4. **Whether `tmux.session` stays meaningful under `session-per-issue`.** It
    is currently required-in-practice by `ensure-session` and `open`; under
    the new layout the per-issue session name comes from the workspace name
    instead, and the bead does not say whether `tmux.session` becomes unused,
    becomes a prefix, or stays as the home for non-issue work.
+
+   **Settled (2026-08-21):** `tmux.session` stays the schema's home for
+   the shared session and became conditionally required: required under
+   `window-per-issue`, permitted to be absent under `session-per-issue`,
+   where a stray value is reported as `session_name_unused` rather than
+   silently ignored. No prefix scheme. Confirmed with a human during a
+   `/wurk:verify` walk of
+   `docs/plans/260817-wu-aqy-tmux-session-per-issue-layout.md`.
+
 5. **Where the editor window's working directory and shell come from.** The
    bead says the editor runs "in the worktree"; `open` already passes
    `-c <path>`. Whether the editor argv is sent with `send-keys` (like the
    claude command) or passed as `new-window`'s command argument is
    undecided, and the two differ in what happens when the editor exits.
+
+   **Settled (2026-08-21):** The editor runs as the window's own command
+   with `-c <path>`, not via `send-keys`, so its window closes when it
+   exits and no argv is ever joined into a shell string. The argv is
+   passed as `/bin/sh -c "exec <argv>"` (added 2026-08-21, see question
+   1) so tmux execs rather than shell-wrapping it. Confirmed with a
+   human during a `/wurk:verify` walk of
+   `docs/plans/260817-wu-aqy-tmux-session-per-issue-layout.md`.
+
 6. **Which end of the contract owns the two-window sequence.** Today
    `/wurk:branch` issues two script calls (`ensure-session`, `open`) and the
    script owns everything below that. A session-per-issue layout could be a
    new subcommand, a flag on `open`, or two more skill-level calls; the
    contract permits all three and nothing in the codebase settles it.
+
+   **Settled (2026-08-21):** The script owns it. `open` grows the layout
+   branch internally and `ensure-session` becomes a reporting no-op, so
+   `/wurk:branch`'s two-command sequence is unchanged and no skill prose
+   reads `tmux.layout`. Confirmed with a human during a `/wurk:verify`
+   walk of `docs/plans/260817-wu-aqy-tmux-session-per-issue-layout.md`.
+
 7. **Whether `docs/manifest.md` gets a `## tmux` subsection.** It has none
    today (only the schema-fence lines and two cross-references), while every
    field with real prose (`gate.sabotage`, `judge`,
    `rebase.auto_resolve_paths`, `gate.cwd`) has one. A `layout` enum plus an
    `editor` argv is the first tmux material with behavior worth prose.
+
+   **Settled (2026-08-21):** Yes - `docs/manifest.md` gained a `## tmux`
+   subsection stating what each layout produces, what omitting `editor`
+   does, and what `session` means under each. Confirmed with a human
+   during a `/wurk:verify` walk of
+   `docs/plans/260817-wu-aqy-tmux-session-per-issue-layout.md`.
+
 8. **How a `tmux.editor` argv avoids the consumer-vocabulary scan.**
    `contract_test.rb`'s scan (`:153-169`) bans consumer-specific commands in
    kit source and skill markdown; a concrete `nvim`/`vim` can appear in a
@@ -685,3 +746,11 @@ code.
    question of whether the doc's example counts as scanned text was not
    resolved here (the markdown scans target `SKILL.md` files and
    `REFERENCE.md` shell fences, not `docs/manifest.md`).
+
+   **Settled (2026-08-21):** It already does; no scan change was needed.
+   `docs/manifest.md` is not scanned at all. The rule adopted: a
+   concrete editor argv may appear in a fixture manifest and in the
+   schema example, while kit source and generic skill markdown name only
+   the field `tmux.editor`. Confirmed with a human during a
+   `/wurk:verify` walk of
+   `docs/plans/260817-wu-aqy-tmux-session-per-issue-layout.md`.
