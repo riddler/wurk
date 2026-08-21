@@ -633,6 +633,30 @@ class ManifestValidationTest < Minitest::Test
                  m.errors.join("\n"))
   end
 
+  # sabotage: drop the DEFAULTS["tmux.permission_mode"] entry -> red
+  def test_tmux_permission_mode_defaults_to_auto
+    m = ManifestFixtures.load("tmux")
+    assert_equal "auto", m.tmux_permission_mode
+  end
+
+  # sabotage: drop "tmux.permission_mode" from ENUMS -> red
+  def test_unrecognized_tmux_permission_mode_blocks_rather_than_defaulting
+    m = ManifestFixtures.load_with("tmux", "tmux" => { "permission_mode" => "yolo" })
+    refute m.valid?
+    assert_match(
+      /tmux\.permission_mode is "yolo"; expected one of auto, default, acceptEdits, plan, skip-permissions/,
+      m.errors.join("\n")
+    )
+  end
+
+  # sabotage: drop "permission_mode" from KNOWN["tmux"] -> red, since a valid
+  # value would then warn as an unknown key instead of validating as known
+  def test_tmux_permission_mode_produces_no_unknown_key_warning
+    m = ManifestFixtures.load_with("tmux", "tmux" => { "permission_mode" => "skip-permissions" })
+    assert m.valid?, "expected skip-permissions to validate: #{m.errors.inspect}"
+    assert_empty m.warnings, "tmux.permission_mode must be a known key: #{m.warnings.inspect}"
+  end
+
   # sabotage: split tmux.editor on whitespace instead of enforcing argv -> red
   def test_shell_string_tmux_editor_blocks
     m = ManifestFixtures.load_with("tmux_session_per_issue", "tmux" => { "editor" => "nvim" })

@@ -62,7 +62,9 @@ session-addressing subcommands rather than inventing a session name, no
 permalink-writing scripts with `unsupported_forge` (see `lib/forge.rb`)
 instead of half-working. Within a `tmux` section, `tmux.layout` selects the
 topology and defaults to `window-per-issue` when absent; `tmux.editor` is an
-optional argv array, and its absence means no editor window is opened.
+optional argv array, and its absence means no editor window is opened;
+`tmux.permission_mode` selects the seeded session's permission flag and
+defaults to `auto` (see docs/manifest.md).
 
 ## Ruby version and syntax
 
