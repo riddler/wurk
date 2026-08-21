@@ -511,6 +511,32 @@ class TmuxWindowTest < Minitest::Test
     assert_empty env["warnings"] || []
   end
 
+  # wu-b7f: tmux.permission_mode "skip-permissions" swaps the entire flag for
+  # --dangerously-skip-permissions, with no --permission-mode alongside it.
+  def test_open_command_uses_dangerously_skip_permissions_when_manifest_selects_it
+    @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    expect_no_caffeinate
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=zz-session:", "-n", "zz-abc-thing",
+       "-c", "/repos/zz-worktrees/zz-abc-thing"],
+      out: "@42\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@42"], out: "")
+
+    fixture = manifest_with("tmux", "tmux" => { "permission_mode" => "skip-permissions" })
+    code, env = run_tmux(["open", "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing", "zz-abc",
+                           "/wurk:work zz-abc --auto"], fixture: fixture)
+
+    assert_equal 0, code
+    keys = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }.argv[4]
+    assert_equal "claude --dangerously-skip-permissions --model fakemodel " \
+                 "'/wurk:work zz-abc --auto. When the work is complete, finish with /wurk:commit --auto " \
+                 "- it writes the Refs trailer and refuses if the tree carries changes unrelated to zz-abc. " \
+                 "Do not run git commit directly.'", keys
+    refute_match(/--permission-mode/, keys)
+    assert_empty env["warnings"] || []
+  end
+
   # wu-ds2: above the 40% floor, battery is treated the same as AC - the
   # 2026-08-13 incident (four seeded sessions idle-slept unwrapped on
   # battery at 71%) is exactly the case this closes.

@@ -94,7 +94,8 @@ defaults are listed under "Defaults" below.
     "layout": "window-per-issue",     // (opt) or "session-per-issue"; see ## tmux
     "session": "statifier-ex",        // required under window-per-issue
     "model": "opus",                  // model for seeded worktree sessions
-    "editor": ["nvim"]                // (opt) session-per-issue only; omit = no editor window
+    "editor": ["nvim"],               // (opt) session-per-issue only; omit = no editor window
+    "permission_mode": "auto"         // (opt) default "auto"; see ## tmux
   },
 
   "models": {                         // (opt) stage models that differ per project
@@ -489,6 +490,21 @@ worktree running the argv as the window's command, named after the argv's
 first element's basename (`["nvim"]` names the window `nvim`). Omitting
 `tmux.editor` skips the editor window entirely.
 
+`tmux.permission_mode` selects the permission flag the seeded session's
+command line carries. Optional; absent defaults to `"auto"`, today's
+behavior. Allowed values:
+
+- `"auto"` (default), `"default"`, `"acceptEdits"`, `"plan"` - passed through
+  verbatim as `claude --permission-mode <value>`.
+- `"skip-permissions"` - swaps the flag entirely for
+  `claude --dangerously-skip-permissions`, with no `--permission-mode` flag
+  alongside it. For projects that want unattended/loop sessions to run
+  without stopping on permission prompts.
+
+An unrecognized value is a manifest validation failure naming
+`tmux.permission_mode`, not a value interpolated blind into the shell command
+line.
+
 ## Two path lists, not one
 
 `gate.build_paths` and `gate.also_gated_paths` answer different questions,
@@ -615,7 +631,8 @@ Defaults applied when a key is absent: `repo.default_branch` = `main`,
 `commits.trailer.key` = `Refs`, `models.direction` = `opus`,
 `artifacts.filename` = `YYMMDD-[id-]kebab`, `judge.model` = `sonnet`,
 `rebase.auto_resolve_paths` = `[]`, `gate.timeout_seconds` = `600`,
-`parallelism.timeout_seconds` = `600`, `tmux.layout` = `window-per-issue`.
+`parallelism.timeout_seconds` = `600`, `tmux.layout` = `window-per-issue`,
+`tmux.permission_mode` = `auto`.
 
 Everything else absent means the capability is off, and the scripts say so
 rather than guessing: no `tmux` section means no tmux integration, and a

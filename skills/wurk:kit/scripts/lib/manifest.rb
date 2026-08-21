@@ -59,7 +59,8 @@ class Manifest
     "parallelism.model" => %w[worktree-per-issue branch-in-place],
     "commits.style" => %w[s-form conventional],
     "changelog.mode" => %w[fragments keep-a-changelog none],
-    "tmux.layout" => %w[window-per-issue session-per-issue]
+    "tmux.layout" => %w[window-per-issue session-per-issue],
+    "tmux.permission_mode" => %w[auto default acceptEdits plan skip-permissions]
   }.freeze
 
   # The known key surface, for the unknown-key warning. Nested sections list
@@ -75,7 +76,7 @@ class Manifest
     "gate.sabotage" => %w[test_roots test_pattern exempt_prefixes],
     "parallelism" => %w[model worktrees_dir trust warm_clone warm_globs warm repair_when repair post_branch
                         timeout_seconds],
-    "tmux" => %w[session model layout editor],
+    "tmux" => %w[session model layout editor permission_mode],
     "models" => %w[direction],
     "artifacts" => %w[plans research filename repository],
     "commits" => %w[style package_map subject_under body_line_max total_lines_max trailer],
@@ -98,7 +99,8 @@ class Manifest
     "judge.model" => "sonnet",
     "gate.timeout_seconds" => 600,
     "parallelism.timeout_seconds" => 600,
-    "tmux.layout" => "window-per-issue"
+    "tmux.layout" => "window-per-issue",
+    "tmux.permission_mode" => "auto"
   }.freeze
 
   attr_reader :path, :raw, :errors, :warnings
@@ -418,6 +420,18 @@ class Manifest
 
   def tmux_layout
     fetch("tmux.layout")
+  end
+
+  # The flag the seeded session's command line carries for permission
+  # handling. Defaults to "auto" - today's hardcoded behavior. "skip-permissions"
+  # is not a `claude --permission-mode` value; claude_command (tmux_window.rb)
+  # maps it to `--dangerously-skip-permissions` instead, with no
+  # `--permission-mode` flag alongside it. Every other value is passed
+  # through as `--permission-mode <value>` verbatim. Validated against
+  # ENUMS, so an unrecognized value blocks rather than reaching the shell
+  # command line.
+  def tmux_permission_mode
+    fetch("tmux.permission_mode")
   end
 
   # Optional argv, same shape as trust_argv: absent stays nil, present is

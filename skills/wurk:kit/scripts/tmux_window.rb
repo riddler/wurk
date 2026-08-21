@@ -175,9 +175,17 @@ module TmuxWindow
     # skill's invocation once a session is already running, and does not
     # govern the CLI session itself being launched here. The value is
     # `tmux.model` from the manifest; the flag must not be "simplified" away.
-    def claude_command(model, seed, id, trailer_key, no_finish: false)
+    #
+    # `permission_mode` is `tmux.permission_mode` from the manifest, already
+    # validated against Manifest::ENUMS so it can only ever be one of the
+    # known values here - never blind interpolation of manifest text into a
+    # shell command line. "skip-permissions" swaps the entire flag for
+    # `--dangerously-skip-permissions`, with no `--permission-mode` alongside
+    # it; every other value is passed through as `--permission-mode <value>`.
+    def claude_command(model, seed, id, trailer_key, permission_mode, no_finish: false)
       body = no_finish ? seed : "#{seed}.#{format(FINISH_TEMPLATE, id: id, trailer: trailer_key)}"
-      "#{caffeinate_prefix}claude --permission-mode auto --model #{model} '#{body}'"
+      flag = permission_mode == "skip-permissions" ? "--dangerously-skip-permissions" : "--permission-mode #{permission_mode}"
+      "#{caffeinate_prefix}claude #{flag} --model #{model} '#{body}'"
     end
 
     # wu-esa: keep the machine from idle-sleeping out from under a seeded
@@ -414,7 +422,8 @@ module TmuxWindow
         return env.emit(io)
       end
 
-      keys = claude_command(model, seed, id, manifest.trailer_key, no_finish: options[:no_finish])
+      keys = claude_command(model, seed, id, manifest.trailer_key, manifest.tmux_permission_mode,
+                             no_finish: options[:no_finish])
       new_argv = ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "#{session_target(session)}:", "-n", name, "-c", path]
 
       if dry_run
@@ -507,7 +516,8 @@ module TmuxWindow
         return env.emit(io)
       end
 
-      keys = claude_command(model, seed, id, manifest.trailer_key, no_finish: options[:no_finish])
+      keys = claude_command(model, seed, id, manifest.trailer_key, manifest.tmux_permission_mode,
+                             no_finish: options[:no_finish])
       editor_name = editor_argv && File.basename(editor_argv.first)
       session_new_argv =
         if editor_argv
