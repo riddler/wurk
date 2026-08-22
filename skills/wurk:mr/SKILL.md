@@ -41,6 +41,30 @@ project's request-body conventions, labels the project attaches.
 `$ARGUMENTS` = optional bead ID. Omitted, the beads come from the trailers on
 the branch's own commits, falling back to the branch prefix (step 2).
 
+## Stacked branches
+
+A branch cut from a **parent branch** rather than the default branch
+(`/wurk:branch --base`) opens its request differently, and three steps
+change:
+
+- **Step 3 does not rebase onto the default branch.** Rebasing a child onto
+  the default branch folds the parent's unmerged commits into the child's
+  diff. Instead, verify the child still contains its parent:
+  `git merge-base --is-ancestor <parent-branch> HEAD`. If the parent moved
+  (it was rebased or gained commits), rebase onto the **parent**, not the
+  default branch, and re-run the gate as usual.
+- **Step 7 bases the request on the parent branch** (`--base
+  <parent-branch>` on the create command) and opens it as **DRAFT** while
+  any upstream request in the stack is unmerged. The body names the stack
+  order explicitly ("stack: #12 <- this <- #14") and says "blocked by
+  <parent request>".
+- **After the parent merges**, expect the forge to auto-retarget the child
+  onto the default branch. That is the moment to rebase onto the default
+  branch, mark the request ready, and drop the blocked-by line - the
+  normal step 3 path applies from then on. Do not assume CI ran on the
+  stacked request: trigger behavior on non-default-based requests varies
+  per repo and must be verified, not read off the workflow file.
+
 ## What to run
 
 1. **Establish where you are.**
@@ -225,6 +249,11 @@ the branch's own commits, falling back to the branch prefix (step 2).
    git push -u origin <branch>
    ```
 
+   `<branch>` comes from `git branch --show-current` in the checkout,
+   **never from the worktree directory name** - the two are allowed to
+   differ, and a ref derived from the path has pushed to the wrong branch
+   in the wild.
+
    If the branch had already been pushed before step 3 ran (the common case,
    since a branch usually gets at least one push before its request is
    ready), the rebase rewrote commits the remote already has and the two have
@@ -274,11 +303,20 @@ the branch's own commits, falling back to the branch prefix (step 2).
    Run the note once per bead step 2 resolved. A bead whose request URL was
    never recorded is one nobody can follow from the issue to the review.
 
-   `bd dolt push` is not optional. Issue state travels over the same remote
-   as the code, so a request whose bead was never pushed is invisible to
-   every other machine: a reviewer pulling the branch sees work with no issue
-   behind it. The git side has just reached the remote, which is exactly the
-   trigger the authority table names for this.
+   `bd dolt push` is not optional **unless an orchestrator owns tracker
+   pushes**. Issue state travels over the same remote as the code, so a
+   request whose bead was never pushed is invisible to every other machine:
+   a reviewer pulling the branch sees work with no issue behind it. The git
+   side has just reached the remote, which is exactly the trigger the
+   authority table names for this.
+
+   The exception is explicit, never inferred: when this skill runs inside
+   an orchestrated campaign whose dispatch names an override of this step
+   (a conductor batching tracker pushes for atomicity across paired
+   trackers), **skip the `bd dolt push`, keep the `bd note`, and say in the
+   result that the tracker push was deferred to the orchestrator**. A
+   worker that pushes anyway breaks the atomicity the orchestrator is
+   guaranteeing. Absent such a named override, push as above.
 
    Leave the bead in progress. Do not close it.
 

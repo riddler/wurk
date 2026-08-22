@@ -187,6 +187,22 @@ Omitted, sweep every worktree.
   after merge (<sha> != <sha>), skipped"`, `"merged in request #<n>,
   removed"`, `"merged in request #<n>, would remove"` (dry run), `"remove
   failed, skipped"`.
+- **`"commits after merge"` has a benign second cause worth probing before
+  reporting it as unlanded work**: someone rebased or force-updated the
+  branch's history around the merge (an operator restacking a chain, a
+  `/wurk:refresh` after the push), so the local tip is a different SHA
+  carrying the **same patches** that merged. Probe it by hand:
+
+  ```bash
+  git -C <worktree> status --porcelain        # must be empty
+  git cherry <default-branch> HEAD            # every line must start with "-"
+  ```
+
+  A clean tree plus all-`-` output means every local commit is
+  patch-equivalent to something already on the default branch - safe to
+  remove the worktree and delete the branch manually, and say in the
+  report that the patch-equivalence probe is what justified it. Any `+`
+  line or any dirt: leave it alone, the skip stands.
 - `data.beads_to_close` is already deduped and sorted per call. Union across
   calls; do not re-derive it from the forge yourself.
 - `warnings` `beads_lookup_failed`, `worktree_remove_failed`,
@@ -263,6 +279,11 @@ avoid.
   success.
 - **Do not let a `bd` failure block cleanup**, and never close a bead for a
   branch whose merge the check phase did not confirm.
+- **Enumerate beads by id, never by `bd search`.** In the current bd build,
+  `bd search` does not match description text, so searching for a marker
+  string planted in descriptions returns "no issues" for beads that exist.
+  `data.beads_to_close` and explicit id lists are the enumeration
+  primitives; a marker is for humans reading the bead, not for finding it.
 - **`bd close` stays a literal instruction here, never routed through a
   script.** No kit script may contain a code path that runs it (the
   banned-operation list in the kit REFERENCE.md). This is the one place in the
