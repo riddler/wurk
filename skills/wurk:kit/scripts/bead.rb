@@ -430,6 +430,13 @@ module Bead
     # Best-effort, never gating: a dolt sync failure is a warning, not a
     # block. bd's local database keeps working regardless of whether the
     # dolt remote is reachable.
+    #
+    # A push that exits 0 saying nothing is UNCONFIRMED, not successful
+    # (wu-hvz): `bd dolt push` has printed nothing on a first attempt
+    # while the retry showed "Push complete". So a silent push is re-run
+    # once, and `data.confirmed` reports whether any attempt produced
+    # confirming output - a caller about to depend on the push reads
+    # `confirmed`, not just `succeeded`.
 
     def run_sync(argv, io)
       parser, options = Cli.build("bead.rb sync [options] <pull|push>")
@@ -444,14 +451,35 @@ module Bead
         env.commands << Sh.render(cmd)
         env.data["direction"] = direction
         env.data["succeeded"] = nil
+        env.data["confirmed"] = nil if direction == "push"
         return env.emit(io)
       end
 
       result = Sh.run(cmd, envelope: env)
+
+      if direction == "push" && result.success? && blank_output?(result)
+        retry_result = Sh.run(cmd, envelope: env)
+        result = retry_result if retry_result.success?
+      end
+
       env.data["direction"] = direction
       env.data["succeeded"] = result.success?
+      if direction == "push"
+        confirmed = result.success? && !blank_output?(result)
+        env.data["confirmed"] = confirmed
+        if result.success? && !confirmed
+          env.warn(
+            code: "dolt_push_unconfirmed",
+            message: "bd dolt push exited 0 with no output twice; treat the push as unconfirmed and verify the remote before depending on it"
+          )
+        end
+      end
       env.warn(code: "dolt_#{direction}_failed", message: err_or(result, "bd dolt #{direction} failed")) unless result.success?
       env.emit(io)
+    end
+
+    def blank_output?(result)
+      result.out.to_s.strip.empty? && result.err.to_s.strip.empty?
     end
 
     # --- resolve --------------------------------------------------------

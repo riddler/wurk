@@ -484,6 +484,49 @@ class BeadCliTest < Minitest::Test
     assert env["warnings"].any? { |w| w["code"] == "dolt_push_failed" }
   end
 
+  def test_sync_push_with_output_is_confirmed_first_try
+    @fake.expect(%w[bd dolt push], out: "Push complete.\n")
+
+    code, env = run_bead(%w[sync push])
+
+    assert_equal 0, code
+    assert_equal true, env["data"]["succeeded"]
+    assert_equal true, env["data"]["confirmed"]
+    assert_equal [], env["warnings"]
+  end
+
+  def test_sync_push_silent_success_reruns_and_confirms_on_retry
+    @fake.expect(%w[bd dolt push], out: "")
+    @fake.expect(%w[bd dolt push], out: "Push complete.\n")
+
+    code, env = run_bead(%w[sync push])
+
+    assert_equal 0, code
+    assert_equal true, env["data"]["succeeded"]
+    assert_equal true, env["data"]["confirmed"]
+  end
+
+  def test_sync_push_silent_twice_warns_unconfirmed
+    @fake.expect(%w[bd dolt push], out: "")
+    @fake.expect(%w[bd dolt push], out: "")
+
+    code, env = run_bead(%w[sync push])
+
+    assert_equal 0, code
+    assert_equal true, env["data"]["succeeded"]
+    assert_equal false, env["data"]["confirmed"]
+    assert env["warnings"].any? { |w| w["code"] == "dolt_push_unconfirmed" }
+  end
+
+  def test_sync_pull_reports_no_confirmed_field
+    @fake.expect(%w[bd dolt pull], out: "")
+
+    code, env = run_bead(%w[sync pull])
+
+    assert_equal 0, code
+    refute env["data"].key?("confirmed")
+  end
+
   # --- resolve ----------------------------------------------------------------
 
   def test_resolve_without_seeded_bead_prefers_plan_doc_over_branch_prefix
