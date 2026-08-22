@@ -42,11 +42,22 @@ grammar, a project's warm-cache expectations, what to check after
 
 ## Input
 
-`$ARGUMENTS` = optionally `--no-finish`, then the branch name, optionally
-followed by `--` and the command to seed the new session with.
+`$ARGUMENTS` = optionally `--no-finish` and/or `--base <ref>`, then the
+branch name, optionally followed by `--` and the command to seed the new
+session with.
 
 **`--no-finish`** (optional) is passed straight through to `tmux_window.rb
 open` in step 2 - see there for when to use it.
+
+**`--base <ref>`** (optional) is passed straight through to
+`worktree_create.rb` in step 1: the branch is cut from `<ref>` instead of
+the default branch. This is the stacked-work flag - same-repo dependent
+beads cut each branch from its **parent branch**, so the child carries the
+parent's unmerged commits. A ref that does not resolve blocks with
+`base_ref_not_found` before anything is created. Without the flag, behavior
+is unchanged: the branch is cut from the default branch on the remote.
+Stacked branches pair with `/wurk:mr`'s stacked mode (request based on the
+parent, DRAFT while upstream is unmerged).
 
 **Branch name** is also the worktree directory name under
 `worktree-per-issue`: `<bead-id>-<slug>`, e.g. `zz-00p.3-regression-ratchet`.
@@ -79,12 +90,13 @@ restated description goes stale the moment the bead is edited.
 1. **Create and warm the workspace.**
 
    ```bash
-   ruby ~/.claude/skills/wurk:kit/scripts/worktree_create.rb <name>
+   ruby ~/.claude/skills/wurk:kit/scripts/worktree_create.rb [--base <ref>] <name>
    ```
 
    One call covers the guard (an existing branch or directory), cutting the
    branch from the default branch on the remote (falling back to the local
-   one if the fetch fails), trusting the new path with the project's toolchain
+   one if the fetch fails), or from `--base <ref>` when stacked work names a
+   parent branch, trusting the new path with the project's toolchain
    manager before any managed command runs there, cloning the warm caches, and
    a final `gate.loop` run to confirm the workspace comes up green.
 
@@ -145,6 +157,10 @@ restated description goes stale the moment the bead is edited.
   different name, or let the user remove the old one. **Never force**: this
   script has no path that deletes a branch or a directory to make room, and
   neither do you.
+- `blocked` `base_ref_not_found` - the `--base` ref does not resolve to a
+  commit. Report it; a typo'd parent silently cut from the wrong base is the
+  stacking defect the check exists to prevent. Do not fall back to the
+  default branch on the caller's behalf.
 - `warnings` worth surfacing in the report: `fetch_failed` (the branch was cut
   from the local default branch instead of the remote's - say so, since it may
   be behind), `trust_failed`, `cache_clone_failed`, `warm_failed`, and

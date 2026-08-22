@@ -137,6 +137,54 @@ class WorktreeCreateTest < Minitest::Test
     end
   end
 
+  def test_base_flag_cuts_from_the_given_ref
+    with_scratch_repo do |root, _worktrees_root|
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc.2-child"], out: "")
+      @fake.expect(%w[git fetch origin], out: "")
+      @fake.expect(["git", "rev-parse", "--verify", "--quiet", "zz-abc.1-parent^{commit}"], out: "deadbeef\n")
+
+      code, env = run_create(["zz-abc.2-child", "--base", "zz-abc.1-parent", "--dry-run"])
+
+      assert_equal 0, code
+      assert_equal "zz-abc.1-parent", env["data"]["base_ref"]
+      add = env["commands"].find { |c| c.include?("git worktree add") }
+      assert_includes add, "zz-abc.1-parent"
+    end
+  end
+
+  def test_base_flag_blocks_before_any_mutation_when_the_ref_does_not_resolve
+    with_scratch_repo do |root, _worktrees_root|
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc.2-child"], out: "")
+      @fake.expect(%w[git fetch origin], out: "")
+      @fake.expect(["git", "rev-parse", "--verify", "--quiet", "zz-abc.1-typo^{commit}"], exitstatus: 1)
+
+      # No expectations for mkdir or git worktree add: reaching them would
+      # raise UnexpectedCommand. This is a real run, not --dry-run.
+      code, env = run_create(["zz-abc.2-child", "--base", "zz-abc.1-typo"])
+
+      assert_equal 1, code
+      assert_equal "base_ref_not_found", env["blocked"].first["code"]
+      assert_equal "human", env["blocked"].first["needs"]
+    end
+  end
+
+  def test_base_flag_offline_fetch_keeps_the_explicit_base
+    with_scratch_repo do |root, _worktrees_root|
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc.2-child"], out: "")
+      @fake.expect(%w[git fetch origin], exitstatus: 1, err: "fatal: unable to access\n")
+      @fake.expect(["git", "rev-parse", "--verify", "--quiet", "zz-abc.1-parent^{commit}"], out: "deadbeef\n")
+
+      code, env = run_create(["zz-abc.2-child", "--base", "zz-abc.1-parent", "--dry-run"])
+
+      assert_equal 0, code
+      assert_equal "zz-abc.1-parent", env["data"]["base_ref"]
+      assert_equal "fetch_failed", env["warnings"].first["code"]
+    end
+  end
+
   def test_dry_run_never_executes_the_mutating_steps
     with_scratch_repo do |root, _worktrees_root|
       expect_location(root)

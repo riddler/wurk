@@ -18,7 +18,11 @@ require_relative "lib/manifest"
 module WorktreeCreate
   class << self
     def run(argv, io: $stdout)
-      parser, options = Cli.build("worktree_create.rb [options] <name>")
+      parser, options = Cli.build("worktree_create.rb [options] <name>") do |opts|
+        opts.on("--base REF", "cut the branch from REF instead of the default branch (stacked work: the parent branch)") do |v|
+          options[:base] = v
+        end
+      end
       args = Cli.parse!(parser, argv)
       name = args.first
       usage_error!("worktree_create.rb [options] <name>", parser) if name.to_s.strip.empty?
@@ -78,15 +82,37 @@ module WorktreeCreate
         return env.emit(io)
       end
 
-      base_ref = manifest.remote_default_branch
+      # An explicit --base wins over the default-branch ladder: stacked work
+      # cuts each branch from its parent, not from main (wu-gt5). The ref is
+      # verified after the fetch so a remote parent pushed from another
+      # machine still resolves; a ref that resolves nowhere blocks before
+      # any mutation, since a typo'd parent silently cut from the wrong
+      # base is exactly the stacking defect this flag exists to prevent.
+      explicit_base = options[:base]
+      base_ref = explicit_base || manifest.remote_default_branch
       fetch_res = Sh.run(%w[git fetch origin], chdir: root, envelope: env)
       unless fetch_res.success?
-        base_ref = manifest.default_branch
-        env.warn(
-          code: "fetch_failed",
-          message: "git fetch origin failed (offline?); cutting #{name} from local " \
-                   "#{manifest.default_branch} instead of #{manifest.remote_default_branch}"
-        )
+        if explicit_base
+          env.warn(
+            code: "fetch_failed",
+            message: "git fetch origin failed (offline?); cutting #{name} from #{explicit_base} as known locally"
+          )
+        else
+          base_ref = manifest.default_branch
+          env.warn(
+            code: "fetch_failed",
+            message: "git fetch origin failed (offline?); cutting #{name} from local " \
+                     "#{manifest.default_branch} instead of #{manifest.remote_default_branch}"
+          )
+        end
+      end
+
+      if explicit_base
+        verify_res = Sh.run(["git", "rev-parse", "--verify", "--quiet", "#{explicit_base}^{commit}"], chdir: root, envelope: env)
+        unless verify_res.success?
+          env.block!(code: "base_ref_not_found", message: "--base #{explicit_base} does not resolve to a commit", needs: "human")
+          return env.emit(io)
+        end
       end
 
       env.data[:name] = name
