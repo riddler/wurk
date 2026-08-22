@@ -535,11 +535,11 @@ Status: `accepted (2026-08-22)`.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `ruby skills/wurk:kit/scripts/test/run.rb` passes (doc-only change; the
+- [x] `ruby skills/wurk:kit/scripts/test/run.rb` passes (doc-only change; the
       gate must stay green)
-- [ ] `docs/adr/0013-machine-level-config-seam.md` exists and contains the
+- [x] `docs/adr/0013-machine-level-config-seam.md` exists and contains the
       `Status:`, `## Context`, `## Decision`, `## Consequences` headings
-- [ ] `grep -rn "ADR-0013" docs/` matches the ADR plus
+- [x] `grep -rn "ADR-0013" docs/` matches the ADR plus
       `docs/machine-config.md` and `docs/architecture.md`
 
 #### Manual Verification:
@@ -682,6 +682,23 @@ of blocking here.
       round trip is a one-line local edit
 - [ ] `docs/machine-config.md` reads as a page someone new to wurk could
       follow without reading the code
+- [ ] No regressions in related features
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 3
+
+- [ ] The ADR's placement rule is stated crisply enough to settle the next
+      "manifest or machine config?" argument without reopening this one
+- [ ] It amends rather than contradicts ADR-0004, and says so
 - [ ] No regressions in related features
 
 **Implementation Note**: Use the project's loop gate between edits while

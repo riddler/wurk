@@ -1,5 +1,8 @@
 # Machine config (`~/.claude/wurk.local.json`)
 
+See ADR-0013 for why this seam exists and how it is scoped against the
+manifest (ADR-0004).
+
 Schema version 1. `lib/user_config.rb`
 (`skills/wurk:kit/scripts/lib/user_config.rb`) is the authority; this
 document follows it in the same commit, same rule as `docs/manifest.md` and
