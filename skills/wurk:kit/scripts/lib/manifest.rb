@@ -59,8 +59,16 @@ class Manifest
     "parallelism.model" => %w[worktree-per-issue branch-in-place],
     "commits.style" => %w[s-form conventional],
     "changelog.mode" => %w[fragments keep-a-changelog none],
-    "tmux.layout" => %w[window-per-issue session-per-issue],
-    "tmux.permission_mode" => %w[auto default acceptEdits plan skip-permissions]
+    "tmux.layout" => %w[window-per-issue session-per-issue]
+  }.freeze
+
+  # Keys this schema used to carry. A consumer pinned to an older kit may
+  # still set one; the answer is a warning that names the replacement, not a
+  # block - removing a key can never be a reason to refuse to run.
+  RETIRED = {
+    "tmux.permission_mode" =>
+      "moved to the machine-level config (see docs/machine-config.md); " \
+      "the manifest value is ignored"
   }.freeze
 
   # The known key surface, for the unknown-key warning. Nested sections list
@@ -76,7 +84,7 @@ class Manifest
     "gate.sabotage" => %w[test_roots test_pattern exempt_prefixes],
     "parallelism" => %w[model worktrees_dir trust warm_clone warm_globs warm repair_when repair post_branch
                         timeout_seconds],
-    "tmux" => %w[session model layout editor permission_mode],
+    "tmux" => %w[session model layout editor],
     "models" => %w[direction],
     "artifacts" => %w[plans research filename repository],
     "commits" => %w[style package_map subject_under body_line_max total_lines_max trailer],
@@ -99,8 +107,7 @@ class Manifest
     "judge.model" => "sonnet",
     "gate.timeout_seconds" => 600,
     "parallelism.timeout_seconds" => 600,
-    "tmux.layout" => "window-per-issue",
-    "tmux.permission_mode" => "auto"
+    "tmux.layout" => "window-per-issue"
   }.freeze
 
   attr_reader :path, :raw, :errors, :warnings
@@ -422,18 +429,6 @@ class Manifest
     fetch("tmux.layout")
   end
 
-  # The flag the seeded session's command line carries for permission
-  # handling. Defaults to "auto" - today's hardcoded behavior. "skip-permissions"
-  # is not a `claude --permission-mode` value; claude_command (tmux_window.rb)
-  # maps it to `--dangerously-skip-permissions` instead, with no
-  # `--permission-mode` flag alongside it. Every other value is passed
-  # through as `--permission-mode <value>` verbatim. Validated against
-  # ENUMS, so an unrecognized value blocks rather than reaching the shell
-  # command line.
-  def tmux_permission_mode
-    fetch("tmux.permission_mode")
-  end
-
   # Optional argv, same shape as trust_argv: absent stays nil, present is
   # held to the argv rule rather than split on whitespace.
   def tmux_editor_argv
@@ -589,6 +584,7 @@ class Manifest
     validate_parallelism_timeout_seconds
     validate_gate_cwd
     validate_tmux
+    validate_retired
     collect_unknown_keys(raw, nil)
   end
 
@@ -702,6 +698,21 @@ class Manifest
 
     errors << "#{path}: tmux.session is required under tmux.layout " \
               "window-per-issue, got #{session.inspect}"
+  end
+
+  # A retired key still present in the raw manifest warns with a message
+  # naming its replacement, rather than falling through to the generic
+  # "unknown key (ignored)" collect_unknown_keys would otherwise emit for
+  # it - see RETIRED and collect_unknown_keys' `elsif !RETIRED.key?(dotted)`
+  # guard below.
+  def validate_retired
+    RETIRED.each do |dotted, note|
+      parts = dotted.split(".")
+      value = parts.inject(raw) { |node, key| node.is_a?(Hash) ? node[key] : nil }
+      next if value.nil?
+
+      warnings << "#{path}: #{dotted} is retired - #{note}"
+    end
   end
 
   JUDGE_ENTRY_STRING_FIELDS = %w[key label scope_prefix text focus].freeze
@@ -918,7 +929,7 @@ class Manifest
       dotted = prefix ? "#{prefix}.#{key}" : key
       if known.include?(key)
         collect_unknown_keys(node[key], dotted)
-      else
+      elsif !RETIRED.key?(dotted)
         warnings << "#{path}: unknown key #{dotted} (ignored)"
       end
     end

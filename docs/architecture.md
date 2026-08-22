@@ -14,6 +14,10 @@ optional extension files; they do not copy skills.
   skills/wurk:kit/            shared foundation: REFERENCE.md + scripts/
   agents/*.md                 the eight read-only research agents
 
+~/.claude/
+  wurk.local.json             the machine config: settings the machine or the
+                               person at it decides, never the project
+
 <consumer repo>/.claude/
   wurk.json                   the manifest: every project-specific constant
   wurk/<skill>.md             extensions: domain content a skill reads and honors
@@ -68,6 +72,15 @@ the other scripts.
   (`worktree-per-issue` | `branch-in-place`), forge (`github` | `gitlab`),
   tracker topology (`beads` | `beads-with-forge-projection`), changelog mode
   (`fragments` | `keep-a-changelog` | `none`).
+
+Scripts now take three inputs, not two: the manifest, extensions (below),
+and the machine config, `~/.claude/wurk.local.json`
+(`lib/user_config.rb`, `docs/machine-config.md`). It is the only one of the
+three that lives outside the consumer repo, and it settles the placement
+question a new field always raises: anything the project decides goes in
+the manifest; anything the machine or the person sitting at it decides goes
+in the machine config. `tmux.permission_mode` moved from the first to the
+second in wu-jhb, and is the schema's only member of that seam so far.
 
 ### Layer 4: extensions
 

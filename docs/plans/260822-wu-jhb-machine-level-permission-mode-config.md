@@ -451,15 +451,15 @@ it decides goes in the machine config.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `ruby skills/wurk:kit/scripts/test/run.rb` passes
-- [ ] `grep -rn "tmux_permission_mode" skills/wurk:kit/scripts/lib/manifest.rb`
+- [x] `ruby skills/wurk:kit/scripts/test/run.rb` passes
+- [x] `grep -rn "tmux_permission_mode" skills/wurk:kit/scripts/lib/manifest.rb`
       returns nothing
-- [ ] `grep -rn "tmux.permission_mode" docs/manifest.md skills/wurk:kit/REFERENCE.md`
+- [x] `grep -rn "tmux.permission_mode" docs/manifest.md skills/wurk:kit/REFERENCE.md`
       returns only the retired-key note in `docs/manifest.md`
-- [ ] `ruby skills/wurk:kit/scripts/lib/manifest.rb check` on this repo exits
+- [x] `ruby skills/wurk:kit/scripts/lib/manifest.rb check` on this repo exits
       0 with no warnings
-- [ ] `docs/machine-config.md` exists
-- [ ] Both `lib/manifest.rb` and `docs/manifest.md` are in the same commit
+- [x] `docs/machine-config.md` exists
+- [x] Both `lib/manifest.rb` and `docs/manifest.md` are in the same commit
       (`git show --stat` lists both)
 
 #### Manual Verification:
@@ -653,6 +653,35 @@ before considering the plan fully landed.
       enough that a future machine-level key has one clear place to go
 - [ ] The block message for an invalid value reads clearly at a terminal:
       it names the file, the key, the bad value, and the allowed set
+- [ ] No regressions in related features
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 2
+
+- [ ] With no `~/.claude/wurk.local.json`, a real
+      `ruby skills/wurk:kit/scripts/tmux_window.rb open --dry-run ...` shows
+      the unchanged `claude --permission-mode auto --model opus '...'` line
+- [ ] Writing `{"tmux": {"permission_mode": "acceptEdits"}}` to
+      `~/.claude/wurk.local.json` and re-running the dry run shows
+      `--permission-mode acceptEdits`, with no repo change and nothing to
+      commit
+- [ ] Setting it to `"skip-permissions"` shows
+      `--dangerously-skip-permissions` and no `--permission-mode`
+- [ ] Setting it to `"yolo"` blocks with a message a human can act on, and
+      opens no tmux window
+- [ ] Restoring the file to absent restores the default, confirming the
+      round trip is a one-line local edit
+- [ ] `docs/machine-config.md` reads as a page someone new to wurk could
+      follow without reading the code
 - [ ] No regressions in related features
 
 **Implementation Note**: Use the project's loop gate between edits while

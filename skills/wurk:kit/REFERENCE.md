@@ -62,9 +62,24 @@ session-addressing subcommands rather than inventing a session name, no
 permalink-writing scripts with `unsupported_forge` (see `lib/forge.rb`)
 instead of half-working. Within a `tmux` section, `tmux.layout` selects the
 topology and defaults to `window-per-issue` when absent; `tmux.editor` is an
-optional argv array, and its absence means no editor window is opened;
-`tmux.permission_mode` selects the seeded session's permission flag and
-defaults to `auto` (see docs/manifest.md).
+optional argv array, and its absence means no editor window is opened.
+
+## The machine config is the contract's second input
+
+Alongside the manifest, scripts read one machine-level source:
+`~/.claude/wurk.local.json`, resolved and validated by `lib/user_config.rb`.
+It carries settings that belong to the machine or the person at it, never
+the project - the seeded session's permission mode is the first example
+(wu-jhb) - and it is HOME-anchored only, absent-safe, and never checked into
+a consumer repo. Scripts consume it exactly like the manifest, through a
+typed accessor, never by reading `$HOME` or the file itself directly:
+
+```ruby
+user_config = UserConfig.require!(env)
+return env.emit(io) unless user_config
+```
+
+Schema, validation rules, and the `check` lint: `docs/machine-config.md`.
 
 ## Ruby version and syntax
 
