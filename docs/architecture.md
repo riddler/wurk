@@ -80,7 +80,9 @@ three that lives outside the consumer repo, and it settles the placement
 question a new field always raises: anything the project decides goes in
 the manifest; anything the machine or the person sitting at it decides goes
 in the machine config. `tmux.permission_mode` moved from the first to the
-second in wu-jhb, and is the schema's only member of that seam so far.
+second in wu-jhb, and is the schema's only member of that seam so far. This
+third seam and its placement rule are recorded in ADR-0013, which amends
+ADR-0004.
 
 ### Layer 4: extensions
 
