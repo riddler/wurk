@@ -196,6 +196,19 @@ module Bead
     #
     # Shorthand for `bd note <id> <text>`, which itself is append semantics
     # over `bd update --append-notes` - never `bd edit`.
+    #
+    # Hardened (wu-4in) after the notes field was clobbered four times in
+    # the wild by raw `bd update --notes`, which REPLACES the whole field:
+    # the prior notes are captured before the append and re-read after, so
+    # a lost prior text surfaces as `prior_notes_lost` instead of silence.
+    # The text also gets an ISO date header when it does not already carry
+    # one, since an undated note is unreadable a week later.
+    #
+    # Recovery for a clobbered field: the beads database's dolt history
+    # still holds the prior value until compaction - read it back with a
+    # dolt `AS OF` query (or the dolt_history_issues system table) against
+    # `.beads/`'s embedded dolt db, then re-append it, before any dolt
+    # push publishes the loss.
 
     def run_note(argv, io)
       parser, options = Cli.build("bead.rb note [options] <id> <text...>")
@@ -204,13 +217,20 @@ module Bead
       text = args.join(" ")
       usage_error!("bead.rb note <id> <text...>", parser) if id.to_s.strip.empty? || text.strip.empty?
 
+      text = date_stamped(text)
       env = Envelope.new(script: "bead_note")
       cmd = ["bd", "note", id, text]
+
+      # The pre-read is a plain read, so it runs under --dry-run too - same
+      # stance as worktree_create.rb's guards: an accurate report beats a
+      # guess.
+      prior = read_notes(id, env)
 
       if options[:dry_run]
         env.commands << Sh.render(cmd)
         env.data["id"] = id
         env.data["noted"] = nil
+        env.data["prior_preserved"] = nil
         return env.emit(io)
       end
 
@@ -222,7 +242,67 @@ module Bead
 
       env.data["id"] = id
       env.data["noted"] = true
+      verify_append(env, id, prior, text)
       env.emit(io)
+    end
+
+    # A text already leading with an ISO date (bare or bracketed) keeps it;
+    # anything else gets today's stamped on the front.
+    def date_stamped(text)
+      return text if text =~ /\A\[?\d{4}-\d{2}-\d{2}/
+
+      "#{Time.now.strftime('%Y-%m-%d')}: #{text}"
+    end
+
+    # Reads the current notes blob. :unreadable when bd show fails or
+    # returns something unparseable - the append still proceeds; the
+    # verification reports what it could not check rather than blocking
+    # the note itself.
+    def read_notes(id, env)
+      res = Sh.run(["bd", "show", id, "--json"], envelope: env)
+      return :unreadable unless res.success?
+
+      parsed = parse_json(res.out)
+      issue = parsed.is_a?(Array) ? Beads.unwrap_show(parsed) : nil
+      return :unreadable unless issue
+
+      issue["notes"].to_s
+    end
+
+    # Post-append verification: the new text must be visible, and the prior
+    # text must have survived. Either failure blocks (exit 1) so a caller
+    # never reports a note it cannot prove landed intact - the write
+    # already happened, the block is the alarm, and the recovery recipe is
+    # in the comment above run_note.
+    def verify_append(env, id, prior, text)
+      after = read_notes(id, env)
+
+      if after == :unreadable
+        env.data["prior_preserved"] = nil
+        env.warn(code: "append_unverified", message: "could not read #{id}'s notes after the append; verify by hand")
+        return
+      end
+
+      unless after.include?(text)
+        env.data["prior_preserved"] = prior.is_a?(String) ? (prior.strip.empty? || after.include?(prior)) : nil
+        env.block!(code: "note_not_visible", message: "the appended text is not visible in #{id}'s notes")
+        return
+      end
+
+      if prior == :unreadable
+        env.data["prior_preserved"] = nil
+        env.warn(code: "append_unverified", message: "could not read #{id}'s notes before the append; prior text unverifiable")
+      elsif prior.strip.empty? || after.include?(prior)
+        env.data["prior_preserved"] = true
+      else
+        env.data["prior_preserved"] = false
+        env.block!(
+          code: "prior_notes_lost",
+          message: "#{id}'s prior notes text is no longer present after the append; " \
+                   "recover it from dolt history (AS OF / dolt_history_issues) and re-append " \
+                   "before any dolt push"
+        )
+      end
     end
 
     # --- link ------------------------------------------------------------

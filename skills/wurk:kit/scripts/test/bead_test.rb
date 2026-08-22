@@ -339,12 +339,80 @@ class BeadCliTest < Minitest::Test
   # --- note -----------------------------------------------------------------
 
   def test_note_uses_bd_note_append_semantics_never_bd_edit
-    @fake.expect(["bd", "note", "zz-abc", "hello world"], out: "ok\n")
+    today = Time.now.strftime("%Y-%m-%d")
+    expect_show_notes("zz-abc", "old note")
+    @fake.expect(["bd", "note", "zz-abc", "#{today}: hello world"], out: "ok\n")
+    expect_show_notes("zz-abc", "old note\n#{today}: hello world")
 
     code, env = run_bead(["note", "zz-abc", "hello", "world"])
 
     assert_equal 0, code
     assert_equal true, env["data"]["noted"]
+    assert_equal true, env["data"]["prior_preserved"]
+  end
+
+  def test_note_keeps_a_text_that_already_leads_with_a_date
+    expect_show_notes("zz-abc", "")
+    @fake.expect(["bd", "note", "zz-abc", "2026-08-22: dated already"], out: "ok\n")
+    expect_show_notes("zz-abc", "2026-08-22: dated already")
+
+    code, env = run_bead(["note", "zz-abc", "2026-08-22:", "dated", "already"])
+
+    assert_equal 0, code
+    assert_equal true, env["data"]["prior_preserved"]
+  end
+
+  def test_note_blocks_when_the_prior_text_did_not_survive
+    expect_show_notes("zz-abc", "precious precondition note")
+    @fake.expect(["bd", "note", "zz-abc"], out: "ok\n")
+    expect_show_notes("zz-abc", "#{Time.now.strftime('%Y-%m-%d')}: hello")
+
+    code, env = run_bead(%w[note zz-abc hello])
+
+    assert_equal 1, code
+    assert_equal false, env["data"]["prior_preserved"]
+    assert env["blocked"].any? { |b| b["code"] == "prior_notes_lost" }
+  end
+
+  def test_note_blocks_when_the_new_text_is_not_visible_after_the_append
+    expect_show_notes("zz-abc", "old note")
+    @fake.expect(["bd", "note", "zz-abc"], out: "ok\n")
+    expect_show_notes("zz-abc", "old note")
+
+    code, env = run_bead(%w[note zz-abc hello])
+
+    assert_equal 1, code
+    assert env["blocked"].any? { |b| b["code"] == "note_not_visible" }
+  end
+
+  def test_note_warns_instead_of_blocking_when_the_pre_read_fails
+    @fake.expect(["bd", "show", "zz-abc", "--json"], exitstatus: 1, err: "boom\n")
+    @fake.expect(["bd", "note", "zz-abc"], out: "ok\n")
+    expect_show_notes("zz-abc", "#{Time.now.strftime('%Y-%m-%d')}: hello")
+
+    code, env = run_bead(%w[note zz-abc hello])
+
+    assert_equal 0, code
+    assert_equal true, env["data"]["noted"]
+    assert_nil env["data"]["prior_preserved"]
+    assert env["warnings"].any? { |w| w["code"] == "append_unverified" }
+  end
+
+  def test_note_dry_run_still_pre_reads_but_writes_nothing
+    expect_show_notes("zz-abc", "old note")
+
+    code, env = run_bead(%w[note zz-abc hello --dry-run])
+
+    assert_equal 0, code
+    assert_nil env["data"]["noted"]
+    assert_nil env["data"]["prior_preserved"]
+    assert_equal 2, env["commands"].length
+    assert_includes env["commands"].last, "bd note"
+  end
+
+  def expect_show_notes(id, notes)
+    @fake.expect(["bd", "show", id, "--json"],
+                 out: JSON.generate([{ "id" => id, "notes" => notes }]))
   end
 
   # --- link ------------------------------------------------------------------
