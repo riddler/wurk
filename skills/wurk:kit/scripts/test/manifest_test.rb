@@ -633,28 +633,34 @@ class ManifestValidationTest < Minitest::Test
                  m.errors.join("\n"))
   end
 
-  # sabotage: drop the DEFAULTS["tmux.permission_mode"] entry -> red
-  def test_tmux_permission_mode_defaults_to_auto
-    m = ManifestFixtures.load("tmux")
-    assert_equal "auto", m.tmux_permission_mode
+  # wu-jhb: tmux.permission_mode moved to the machine-level config
+  # (lib/user_config.rb). A manifest that still sets it stays valid and gets
+  # exactly one warning naming the key and the doc it moved to.
+  # sabotage: drop RETIRED["tmux.permission_mode"] -> red (falls through to
+  # the generic "unknown key" warning instead of naming the replacement)
+  def test_retired_tmux_permission_mode_is_still_valid_and_warns_once_naming_the_replacement
+    m = ManifestFixtures.load_with("tmux", "tmux" => { "permission_mode" => "acceptEdits" })
+    assert m.valid?, "a retired key must never block: #{m.errors.inspect}"
+    assert_equal 1, m.warnings.length, "expected exactly one warning: #{m.warnings.inspect}"
+    assert_match(/tmux\.permission_mode is retired/, m.warnings.first)
+    assert_match(/docs\/machine-config\.md/, m.warnings.first)
   end
 
-  # sabotage: drop "tmux.permission_mode" from ENUMS -> red
-  def test_unrecognized_tmux_permission_mode_blocks_rather_than_defaulting
-    m = ManifestFixtures.load_with("tmux", "tmux" => { "permission_mode" => "yolo" })
-    refute m.valid?
-    assert_match(
-      /tmux\.permission_mode is "yolo"; expected one of auto, default, acceptEdits, plan, skip-permissions/,
-      m.errors.join("\n")
-    )
+  # sabotage: leave #tmux_permission_mode defined on Manifest -> red
+  def test_manifest_no_longer_responds_to_tmux_permission_mode
+    refute_respond_to Manifest.new(path: "(n/a)", raw: {}), :tmux_permission_mode
   end
 
-  # sabotage: drop "permission_mode" from KNOWN["tmux"] -> red, since a valid
-  # value would then warn as an unknown key instead of validating as known
-  def test_tmux_permission_mode_produces_no_unknown_key_warning
-    m = ManifestFixtures.load_with("tmux", "tmux" => { "permission_mode" => "skip-permissions" })
-    assert m.valid?, "expected skip-permissions to validate: #{m.errors.inspect}"
-    assert_empty m.warnings, "tmux.permission_mode must be a known key: #{m.warnings.inspect}"
+  # A genuinely unknown tmux key (not the retired one) must still get the
+  # generic unknown-key warning - proves the retired path did not swallow
+  # the general case.
+  # sabotage: collect_unknown_keys' `elsif !RETIRED.key?(dotted)` changed to
+  # unconditionally skip warning -> red
+  def test_unrelated_unknown_tmux_key_still_gets_the_generic_warning
+    m = ManifestFixtures.load_with("tmux", "tmux" => { "bogus_key" => "x" })
+    assert m.valid?
+    assert_equal 1, m.warnings.length, "expected exactly one warning: #{m.warnings.inspect}"
+    assert_match(/unknown key tmux\.bogus_key \(ignored\)/, m.warnings.first)
   end
 
   # sabotage: split tmux.editor on whitespace instead of enforcing argv -> red

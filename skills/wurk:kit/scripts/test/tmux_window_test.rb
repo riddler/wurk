@@ -5,6 +5,7 @@ require "json"
 require "stringio"
 require_relative "../tmux_window"
 require_relative "support/manifest_helper"
+require_relative "support/user_config_helper"
 require_relative "support/fake_sh"
 
 # TmuxWindow::classify against captured fixtures, verbatim from
@@ -102,6 +103,7 @@ end
 
 class TmuxWindowTest < Minitest::Test
   include ManifestHelper
+  include UserConfigHelper
 
   # Session name and model are manifest data (`zz-session` / `fakemodel`),
   # and the main checkout is asked of git at runtime. Asserting on
@@ -122,10 +124,12 @@ class TmuxWindowTest < Minitest::Test
     Manifest.reset!
   end
 
-  def run_tmux(argv, fixture: FIXTURE)
+  def run_tmux(argv, fixture: FIXTURE, user_config: nil)
     io = StringIO.new
     code = nil
-    with_manifest(fixture) { code = TmuxWindow.run(argv, io: io) }
+    with_manifest(fixture) do
+      with_user_config(user_config) { code = TmuxWindow.run(argv, io: io) }
+    end
     [code, JSON.parse(io.string)]
   end
 
@@ -511,9 +515,98 @@ class TmuxWindowTest < Minitest::Test
     assert_empty env["warnings"] || []
   end
 
-  # wu-b7f: tmux.permission_mode "skip-permissions" swaps the entire flag for
-  # --dangerously-skip-permissions, with no --permission-mode alongside it.
-  def test_open_command_uses_dangerously_skip_permissions_when_manifest_selects_it
+  # wu-jhb: permission_mode now comes from the machine-level config
+  # (~/.claude/wurk.local.json via lib/user_config.rb), not the manifest.
+  # No machine config present -> the pre-wu-jhb default command line,
+  # unchanged - test_open_command_is_byte_identical_to_unwrapped_when_caffeinate_is_absent
+  # above already exercises this with no user_config: passed, since run_tmux
+  # defaults it to absent; this test just names that regression guard
+  # explicitly.
+  def test_open_with_no_machine_config_uses_the_default_permission_mode
+    @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    expect_no_caffeinate
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=zz-session:", "-n", "zz-abc-thing",
+       "-c", "/repos/zz-worktrees/zz-abc-thing"],
+      out: "@42\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@42"], out: "")
+
+    code, env = run_tmux(["open", "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing", "zz-abc",
+                           "/wurk:work zz-abc --auto"])
+
+    assert_equal 0, code
+    keys = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }.argv[4]
+    assert_includes keys, "claude --permission-mode auto --model fakemodel"
+  end
+
+  # One test per supported machine-config value, asserting the exact
+  # send-keys payload each produces.
+  %w[auto default acceptEdits plan].each do |mode|
+    define_method("test_open_uses_permission_mode_#{mode}_from_machine_config") do
+      @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+      expect_no_caffeinate
+      @fake.expect(
+        ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=zz-session:", "-n", "zz-abc-thing",
+         "-c", "/repos/zz-worktrees/zz-abc-thing"],
+        out: "@42\n"
+      )
+      @fake.expect(["tmux", "send-keys", "-t", "@42"], out: "")
+
+      code, env = run_tmux(["open", "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing", "zz-abc",
+                             "/wurk:work zz-abc --auto"],
+                            user_config: { "tmux" => { "permission_mode" => mode } })
+
+      assert_equal 0, code
+      keys = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }.argv[4]
+      assert_includes keys, "--permission-mode #{mode}"
+    end
+  end
+
+  # wu-b7f (now machine config, wu-jhb): "skip-permissions" swaps the entire
+  # flag for --dangerously-skip-permissions, with no --permission-mode
+  # alongside it.
+  def test_open_command_uses_dangerously_skip_permissions_when_machine_config_selects_it
+    @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    expect_no_caffeinate
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=zz-session:", "-n", "zz-abc-thing",
+       "-c", "/repos/zz-worktrees/zz-abc-thing"],
+      out: "@42\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@42"], out: "")
+
+    code, env = run_tmux(["open", "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing", "zz-abc",
+                           "/wurk:work zz-abc --auto"],
+                          user_config: { "tmux" => { "permission_mode" => "skip-permissions" } })
+
+    assert_equal 0, code
+    keys = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }.argv[4]
+    assert_equal "claude --dangerously-skip-permissions --model fakemodel " \
+                 "'/wurk:work zz-abc --auto. When the work is complete, finish with /wurk:commit --auto " \
+                 "- it writes the Refs trailer and refuses if the tree carries changes unrelated to zz-abc. " \
+                 "Do not run git commit directly.'", keys
+    refute_match(/--permission-mode/, keys)
+    assert_empty env["warnings"] || []
+  end
+
+  # An invalid machine-config value blocks before any tmux command is
+  # issued, including the caffeinate probe - a bad config costs nothing.
+  def test_open_blocks_on_an_invalid_machine_config_permission_mode_and_shells_out_nothing
+    code, env = run_tmux(["open", "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing", "zz-abc",
+                           "/wurk:work zz-abc --auto"],
+                          user_config: { "tmux" => { "permission_mode" => "yolo" } })
+
+    assert_equal 1, code
+    blocked = env["blocked"].first
+    assert_match(/tmux\.permission_mode/, blocked["message"])
+    assert_empty @fake.calls
+  end
+
+  # A manifest that still sets the retired tmux.permission_mode key must not
+  # change the composed command line - the machine config (or its default)
+  # governs regardless.
+  def test_open_ignores_a_manifest_that_still_sets_the_retired_permission_mode_key
     @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
     expect_no_caffeinate
     @fake.expect(
@@ -525,16 +618,14 @@ class TmuxWindowTest < Minitest::Test
 
     fixture = manifest_with("tmux", "tmux" => { "permission_mode" => "skip-permissions" })
     code, env = run_tmux(["open", "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing", "zz-abc",
-                           "/wurk:work zz-abc --auto"], fixture: fixture)
+                           "/wurk:work zz-abc --auto"],
+                          fixture: fixture,
+                          user_config: { "tmux" => { "permission_mode" => "plan" } })
 
     assert_equal 0, code
     keys = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }.argv[4]
-    assert_equal "claude --dangerously-skip-permissions --model fakemodel " \
-                 "'/wurk:work zz-abc --auto. When the work is complete, finish with /wurk:commit --auto " \
-                 "- it writes the Refs trailer and refuses if the tree carries changes unrelated to zz-abc. " \
-                 "Do not run git commit directly.'", keys
-    refute_match(/--permission-mode/, keys)
-    assert_empty env["warnings"] || []
+    assert_includes keys, "--permission-mode plan"
+    refute_match(/skip-permissions/, keys)
   end
 
   # wu-ds2: above the 40% floor, battery is treated the same as AC - the
@@ -895,6 +986,7 @@ end
 # no `session` key at all - see manifest fixture and Decision 4).
 class TmuxWindowSessionPerIssueTest < Minitest::Test
   include ManifestHelper
+  include UserConfigHelper
 
   FIXTURE = "tmux_session_per_issue"
   NAME = "wu-aqy-thing"
@@ -914,10 +1006,12 @@ class TmuxWindowSessionPerIssueTest < Minitest::Test
     Manifest.reset!
   end
 
-  def run_tmux(argv, fixture: FIXTURE)
+  def run_tmux(argv, fixture: FIXTURE, user_config: nil)
     io = StringIO.new
     code = nil
-    with_manifest(fixture) { code = TmuxWindow.run(argv, io: io) }
+    with_manifest(fixture) do
+      with_user_config(user_config) { code = TmuxWindow.run(argv, io: io) }
+    end
     [code, JSON.parse(io.string)]
   end
 
@@ -1155,6 +1249,114 @@ class TmuxWindowSessionPerIssueTest < Minitest::Test
     assert_includes keys, SEED
     assert_includes keys, "/wurk:commit --auto"
     assert_includes keys, "unrelated to #{ID}"
+  end
+
+  # --- machine-level permission mode (wu-jhb) -----------------------------
+
+  # No machine config present -> the pre-wu-jhb default, unchanged. Named
+  # explicitly as the regression guard for absent-safety on this path, same
+  # as the window-per-issue side.
+  def test_open_with_no_machine_config_uses_the_default_permission_mode
+    @fake.expect(["tmux", "has-session", "-t", "=#{NAME}"], exitstatus: 1)
+    expect_no_caffeinate
+    @fake.expect(
+      ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", NAME, "-c", PATH,
+       "-n", "nvim", "--", "/bin/sh", "-c", "exec nvim"],
+      out: "@1\n"
+    )
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=#{NAME}:", "-n", "claude", "-c", PATH],
+      out: "@2\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@2"], out: "")
+
+    code, env = run_tmux(open_argv)
+
+    assert_equal 0, code
+    keys = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }.argv[4]
+    assert_includes keys, "claude --permission-mode auto --model fakemodel"
+  end
+
+  %w[auto default acceptEdits plan].each do |mode|
+    define_method("test_open_uses_permission_mode_#{mode}_from_machine_config") do
+      @fake.expect(["tmux", "has-session", "-t", "=#{NAME}"], exitstatus: 1)
+      expect_no_caffeinate
+      @fake.expect(
+        ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", NAME, "-c", PATH,
+         "-n", "nvim", "--", "/bin/sh", "-c", "exec nvim"],
+        out: "@1\n"
+      )
+      @fake.expect(
+        ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=#{NAME}:", "-n", "claude", "-c", PATH],
+        out: "@2\n"
+      )
+      @fake.expect(["tmux", "send-keys", "-t", "@2"], out: "")
+
+      code, env = run_tmux(open_argv, user_config: { "tmux" => { "permission_mode" => mode } })
+
+      assert_equal 0, code
+      keys = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }.argv[4]
+      assert_includes keys, "--permission-mode #{mode}"
+    end
+  end
+
+  def test_open_command_uses_dangerously_skip_permissions_when_machine_config_selects_it
+    @fake.expect(["tmux", "has-session", "-t", "=#{NAME}"], exitstatus: 1)
+    expect_no_caffeinate
+    @fake.expect(
+      ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", NAME, "-c", PATH,
+       "-n", "nvim", "--", "/bin/sh", "-c", "exec nvim"],
+      out: "@1\n"
+    )
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=#{NAME}:", "-n", "claude", "-c", PATH],
+      out: "@2\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@2"], out: "")
+
+    code, env = run_tmux(open_argv, user_config: { "tmux" => { "permission_mode" => "skip-permissions" } })
+
+    assert_equal 0, code
+    keys = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }.argv[4]
+    assert_includes keys, "claude --dangerously-skip-permissions --model fakemodel"
+    refute_match(/--permission-mode/, keys)
+  end
+
+  # An invalid machine-config value blocks before any tmux command is
+  # issued (not even has-session), so a bad config costs nothing.
+  def test_open_blocks_on_an_invalid_machine_config_permission_mode_and_shells_out_nothing
+    code, env = run_tmux(open_argv, user_config: { "tmux" => { "permission_mode" => "yolo" } })
+
+    assert_equal 1, code
+    blocked = env["blocked"].first
+    assert_match(/tmux\.permission_mode/, blocked["message"])
+    assert_empty @fake.calls
+  end
+
+  # A manifest that still sets the retired tmux.permission_mode key does not
+  # change the composed command line - the machine config, or its default,
+  # governs regardless.
+  def test_open_ignores_a_manifest_that_still_sets_the_retired_permission_mode_key
+    @fake.expect(["tmux", "has-session", "-t", "=#{NAME}"], exitstatus: 1)
+    expect_no_caffeinate
+    @fake.expect(
+      ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", NAME, "-c", PATH,
+       "-n", "nvim", "--", "/bin/sh", "-c", "exec nvim"],
+      out: "@1\n"
+    )
+    @fake.expect(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=#{NAME}:", "-n", "claude", "-c", PATH],
+      out: "@2\n"
+    )
+    @fake.expect(["tmux", "send-keys", "-t", "@2"], out: "")
+
+    fixture = manifest_with(FIXTURE, "tmux" => { "permission_mode" => "skip-permissions" })
+    code, env = run_tmux(open_argv, fixture: fixture, user_config: { "tmux" => { "permission_mode" => "plan" } })
+
+    assert_equal 0, code
+    keys = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux send-keys] }.argv[4]
+    assert_includes keys, "--permission-mode plan"
+    refute_match(/skip-permissions/, keys)
   end
 
   # --- dry run --------------------------------------------------------------

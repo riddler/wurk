@@ -7,6 +7,7 @@ require_relative "lib/envelope"
 require_relative "lib/sh"
 require_relative "lib/cli"
 require_relative "lib/manifest"
+require_relative "lib/user_config"
 
 # TmuxWindow is the tmux mechanics shared by /new-worktree (open a seeded
 # window) and /wurk:cleanup (find, classify, quiesce, close one), per
@@ -176,12 +177,14 @@ module TmuxWindow
     # govern the CLI session itself being launched here. The value is
     # `tmux.model` from the manifest; the flag must not be "simplified" away.
     #
-    # `permission_mode` is `tmux.permission_mode` from the manifest, already
-    # validated against Manifest::ENUMS so it can only ever be one of the
-    # known values here - never blind interpolation of manifest text into a
-    # shell command line. "skip-permissions" swaps the entire flag for
-    # `--dangerously-skip-permissions`, with no `--permission-mode` alongside
-    # it; every other value is passed through as `--permission-mode <value>`.
+    # `permission_mode` comes from `UserConfig#tmux_permission_mode` (the
+    # machine-level `~/.claude/wurk.local.json`, wu-jhb) rather than the
+    # manifest - already validated against UserConfig::ENUMS so it can only
+    # ever be one of the known values here, never blind interpolation of
+    # config text into a shell command line. "skip-permissions" swaps the
+    # entire flag for `--dangerously-skip-permissions`, with no
+    # `--permission-mode` alongside it; every other value is passed through
+    # as `--permission-mode <value>`.
     def claude_command(model, seed, id, trailer_key, permission_mode, no_finish: false)
       body = no_finish ? seed : "#{seed}.#{format(FINISH_TEMPLATE, id: id, trailer: trailer_key)}"
       flag = permission_mode == "skip-permissions" ? "--dangerously-skip-permissions" : "--permission-mode #{permission_mode}"
@@ -401,8 +404,11 @@ module TmuxWindow
       manifest = tmux_manifest(env)
       return env.emit(io) unless manifest
 
+      user_config = UserConfig.require!(env)
+      return env.emit(io) unless user_config
+
       if manifest.tmux_layout == "session-per-issue"
-        return open_window_session_per_issue(manifest, name, path, id, seed, options, env, io)
+        return open_window_session_per_issue(manifest, user_config, name, path, id, seed, options, env, io)
       end
 
       session = manifest.tmux_session
@@ -422,7 +428,7 @@ module TmuxWindow
         return env.emit(io)
       end
 
-      keys = claude_command(model, seed, id, manifest.trailer_key, manifest.tmux_permission_mode,
+      keys = claude_command(model, seed, id, manifest.trailer_key, user_config.tmux_permission_mode,
                              no_finish: options[:no_finish])
       new_argv = ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "#{session_target(session)}:", "-n", name, "-c", path]
 
@@ -496,7 +502,7 @@ module TmuxWindow
     # is read-only and runs for real even under --dry-run, the same way
     # window-per-issue's list-windows guard already does; only the mutating
     # commands below it are deferred and rendered instead.
-    def open_window_session_per_issue(manifest, name, path, id, seed, options, env, io)
+    def open_window_session_per_issue(manifest, user_config, name, path, id, seed, options, env, io)
       dry_run = options[:dry_run]
       model = manifest.tmux_model
       editor_argv = manifest.tmux_editor_argv
@@ -516,7 +522,7 @@ module TmuxWindow
         return env.emit(io)
       end
 
-      keys = claude_command(model, seed, id, manifest.trailer_key, manifest.tmux_permission_mode,
+      keys = claude_command(model, seed, id, manifest.trailer_key, user_config.tmux_permission_mode,
                              no_finish: options[:no_finish])
       editor_name = editor_argv && File.basename(editor_argv.first)
       session_new_argv =
