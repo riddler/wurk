@@ -612,18 +612,35 @@ None of them block implementation.
    consumer repo). The `.local.json` infix matches Claude Code's own
    `settings.json` / `settings.local.json` convention. Renaming later is a
    one-constant change plus its doc, since nothing external depends on it.
+
+   **Settled (2026-08-22):** Confirmed. The `.local.json` convention is
+   already load-bearing in `~/.claude`, so the name needs no explaining to
+   anyone who has met `settings.local.json`.
 2. **Retire versus keep as a project default.** Settled as retire, for the
    reasons in "What We're NOT Doing". If a consumer later turns out to need a
    project-level floor on permission mode, that is a new bead and a new
    manifest field with a stated override rule, not a revival of this one.
+
+   **Settled (2026-08-22):** Confirmed as retire. Verified during the walk
+   that a manifest still setting the key stays valid and gets exactly one
+   warning pointing at `docs/machine-config.md`, so the retirement is
+   discoverable rather than silent.
 3. **Blocking on unparseable JSON.** Chosen over warning-and-defaulting so a
    typo in your own config is loud. The cost is that a corrupt machine file
    stops `tmux_window.rb open` until it is fixed - acceptable, because the
    fix is a one-line local edit and the message names the file.
+
+   **Settled (2026-08-22):** Confirmed. Verified that a malformed file
+   blocks before any tmux window is opened, so the loud failure costs
+   nothing beyond the run it stops.
 4. **Whether the `check` lint earns its keep.** It is ~30 lines mirroring
    `ManifestCli` and it gives the docs a single command that answers "what
    mode will my sessions get". Kept. If it is never used it can be dropped
    without touching the reader.
+
+   **Settled (2026-08-22):** Kept. Used during this walk to answer exactly
+   the question it was written for, which is the evidence the open question
+   was waiting on.
 
 ## References
 
@@ -649,11 +666,11 @@ before considering the plan fully landed.
 
 ### Phase 1
 
-- [ ] Reading the new file beside `lib/manifest.rb`, the parallel is obvious
+- [x] Reading the new file beside `lib/manifest.rb`, the parallel is obvious
       enough that a future machine-level key has one clear place to go
-- [ ] The block message for an invalid value reads clearly at a terminal:
+- [x] The block message for an invalid value reads clearly at a terminal:
       it names the file, the key, the bad value, and the allowed set
-- [ ] No regressions in related features
+- [x] No regressions in related features
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
@@ -667,22 +684,22 @@ of blocking here.
 
 ### Phase 2
 
-- [ ] With no `~/.claude/wurk.local.json`, a real
+- [x] With no `~/.claude/wurk.local.json`, a real
       `ruby skills/wurk:kit/scripts/tmux_window.rb open --dry-run ...` shows
       the unchanged `claude --permission-mode auto --model opus '...'` line
-- [ ] Writing `{"tmux": {"permission_mode": "acceptEdits"}}` to
+- [x] Writing `{"tmux": {"permission_mode": "acceptEdits"}}` to
       `~/.claude/wurk.local.json` and re-running the dry run shows
       `--permission-mode acceptEdits`, with no repo change and nothing to
       commit
-- [ ] Setting it to `"skip-permissions"` shows
+- [x] Setting it to `"skip-permissions"` shows
       `--dangerously-skip-permissions` and no `--permission-mode`
-- [ ] Setting it to `"yolo"` blocks with a message a human can act on, and
+- [x] Setting it to `"yolo"` blocks with a message a human can act on, and
       opens no tmux window
-- [ ] Restoring the file to absent restores the default, confirming the
+- [x] Restoring the file to absent restores the default, confirming the
       round trip is a one-line local edit
-- [ ] `docs/machine-config.md` reads as a page someone new to wurk could
+- [x] `docs/machine-config.md` reads as a page someone new to wurk could
       follow without reading the code
-- [ ] No regressions in related features
+- [x] No regressions in related features
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
@@ -696,10 +713,10 @@ of blocking here.
 
 ### Phase 3
 
-- [ ] The ADR's placement rule is stated crisply enough to settle the next
+- [x] The ADR's placement rule is stated crisply enough to settle the next
       "manifest or machine config?" argument without reopening this one
-- [ ] It amends rather than contradicts ADR-0004, and says so
-- [ ] No regressions in related features
+- [x] It amends rather than contradicts ADR-0004, and says so
+- [x] No regressions in related features
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
