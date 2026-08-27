@@ -98,6 +98,28 @@ class UserConfigResolutionTest < Minitest::Test
     end
   end
 
+  # sabotage: interpolate the rescued JSON::ParserError's own message -> red.
+  # That message quotes the offending source, and this file is where the
+  # outbound scan's control_term lives; the quoted text travels from here
+  # into a block! message and out of the pre-push hook on stdout. Position
+  # only. Every token below is invented nonsense, which is the point.
+  def test_unparseable_json_never_quotes_the_files_own_content
+    Dir.mktmpdir do |dir|
+      token = "zqorbex-control-term-7714"
+      write_raw_user_config(dir, %({"outbound_scan": {"control_term": #{token}}}))
+      in_tmp_home(nil) do
+        ENV["HOME"] = dir
+
+        error = assert_raises(JSON::ParserError) { UserConfig.load }
+        refute_includes error.message, token
+
+        env = Envelope.new(script: "probe")
+        assert_nil UserConfig.require!(env)
+        refute_includes env.to_json, token
+      end
+    end
+  end
+
   # sabotage: skip the empty-string special case and let JSON.parse("") raise
   # uncaught with a message that doesn't name the path -> red
   def test_empty_file_is_unparseable

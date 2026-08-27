@@ -111,6 +111,73 @@ the two keys is valid at load time - completeness is checked when a scan
 actually runs, not here, so an unrelated script never fails on a half-written
 scan config.
 
+## Arming the outbound scan, and checking that it is armed
+
+Configuring the section above is only half of it: the section says what to
+scan for, and the per-repo hook is what puts the scan in front of a push.
+The three steps, in order:
+
+1. **Arm the machine.** Add the `outbound_scan` section to this file, with
+   `patterns_file` pointing at a pattern file you maintain outside every
+   repo and `control_term` set to a token that file is expected to match.
+   Absent means disarmed, and disarmed pushes are allowed with an advisory
+   warning - never reported as "scanned clean".
+2. **Install the hook, per repo.** From inside the target checkout:
+
+   ```sh
+   ruby skills/wurk:kit/scripts/outbound_scan.rb install
+   ```
+
+   This is deliberately per-repo rather than part of `install.rb`, so no
+   repo gains a push gate you did not ask it to have. It writes a
+   marker-delimited block into the effective hooks directory's `pre-push`
+   file, above anything already there, and leaves the rest of that file
+   byte for byte. Takes `--dry-run` (which reports the exact action it
+   would take), and `--uninstall`, which removes only the wurk block.
+
+   If your `core.hooksPath` points somewhere outside the checkout, the
+   effective hooks directory is shared by every repo on the machine, and
+   the installer refuses rather than gating all of them behind your back.
+   Pass `--allow-shared-hooks-path` if that is genuinely what you want.
+
+3. **Check that it is armed.**
+
+   ```sh
+   ruby skills/wurk:kit/scripts/outbound_scan.rb status
+   ```
+
+   Read-only, no `--dry-run`. `data.armed` says whether this machine
+   declares a scan at all; `data.probe_ok` says whether the pipeline was
+   proved able to hit, by running the pattern set over a synthesized string
+   containing your `control_term`; `data.patterns_count` says how many
+   patterns were compiled. A count, never a listing - nothing from the
+   pattern file is ever rendered. `armed: true` with `probe_ok: false` is
+   the important state to notice: the gate is on but cannot hit, so a
+   zero-hit result would mean nothing, and pushes are refused rather than
+   trusted.
+
+### What it covers, and what it does not
+
+Covered: the two push paths this kit can reach. Git's own `pre-push` hook
+scans everything a push would publish to that remote - the full post-image
+content of every added or modified file in every newly published commit
+(a rename included, so a move cannot carry content past the gate
+invisibly), every one of those commits' messages, and the ref names
+themselves. `bead.rb sync push` scans every string in the full tracker
+export before it shells the tracker's own push.
+
+Not covered: anything that leaves the machine by a route the kit never
+touches - a push run from another tool or another checkout that has no hook
+installed, a web UI, a paste into a browser, an attachment. A deletion (an
+all-zero local sha) is not scanned, because it publishes no content. And
+the gate only ever refuses: it never rewrites, redacts, or amends anything
+for you.
+
+On a hit, the refusal names locations and counts and nothing else - never
+the matched text, never the pattern that matched. That is the whole point
+of it, and it means a refusal tells you where to look rather than
+reproducing the thing you were trying not to publish.
+
 ## Absent-safe behavior
 
 No file at all is a normal, valid state: every value falls back to its

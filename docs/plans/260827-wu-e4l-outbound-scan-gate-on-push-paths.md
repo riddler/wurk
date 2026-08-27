@@ -1097,9 +1097,33 @@ before considering the plan fully landed.
 
 - [ ] The doc's new section is readable on its own terms by someone who has
       never seen ADR-0014
+
+      **Machine-checked (unattended, 2026-08-27):** partially. The
+      `outbound_scan` section explains the two keys, the disarmed default,
+      and the shape-only validation without leaning on ADR-0014 - but it
+      documented no way to arm the gate or to check that it is armed. Fixed
+      in this pass: a new "Arming the outbound scan, and checking that it is
+      armed" section. The remaining judgment - does it *read* well to a
+      stranger - is a human call and stays deferred.
+
 - [ ] Nothing in the diff names or hints at any real guarded term, and
       `docs/machine-config.md` carries no pattern text and no filesystem
       path outside a `<placeholder>` form
+
+      **Machine-checked (unattended, 2026-08-27):** verified as a property,
+      not by searching for known strings. Every token of length >= 4 in the
+      added documentation was extracted and reduced against the system
+      dictionary and the vocabulary already on the base commit; all 263
+      survivors are ordinary English inflections, repo identifiers, or
+      technical terms - none is product, employer, or vendor vocabulary,
+      and none is pattern-shaped. No line of added doc text carries regex
+      metacharacters or a term enumeration. `patterns_file` and
+      `control_term` appear only in `<placeholder>` form, and the only
+      paths in the changed docs are the kit's own `~/.claude/...` install
+      locations. The only fixture strings that appear in any document are
+      the invented `zqiblorf-` and `zqorbex-` prefixes, named in this
+      pass's own notes below - nonsense by construction, which is the whole
+      reason the fixtures use them.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
@@ -1116,10 +1140,53 @@ of blocking here.
 - [ ] Read `lib/outbound_scan.rb` end to end asking one question: is there
       any path by which pattern text or matched text reaches a string that
       leaves this object?
+
+      **Machine-checked (unattended, 2026-08-27):** read end to end, along
+      with `outbound_scan.rb`, `lib/user_config.rb`, `lib/sh.rb`,
+      `lib/envelope.rb`, and `bead.rb`'s tracker path. `Hit` carries a
+      location and a count; `Result#to_h` adds nothing; `apply_to_envelope`
+      renders sums and locations only; `Sh` records argv (shas, refs,
+      flags) and never output. Three defects found and fixed in this pass,
+      each with a regression test:
+
+      1. **A real leak.** `UserConfig.parse` re-raised `JSON::ParserError`
+         with the parser's own message interpolated. That message quotes
+         the offending source, and the file it parses is where
+         `control_term` lives - so a malformed machine config would carry
+         the operator's control term into a `block!` message, out of the
+         pre-push hook on stdout, and into a terminal or a CI log. Now
+         redacted to the `at line N column M` position only.
+      2. **The loader named the pattern file.** Both `PatternSet.load`
+         failure messages interpolated the configured path. An operator
+         names that file after what it guards, so the path is itself part
+         of the guarded vocabulary, and both messages reach the envelope
+         the hook prints. The path is gone from both.
+      3. **A crash, not a leak.** `Scanner#normalize` forced
+         `Encoding::BINARY` for NUL-bearing text, which raises
+         `Encoding::CompatibilityError` against any pattern with a
+         non-ASCII character in it - taking the whole scan down mid-push
+         for any operator whose guarded vocabulary is not pure ASCII,
+         contradicting the method's own stated intent. Now every text is
+         scrubbed into UTF-8 instead, which also lets a well-formed term
+         inside a binary blob still match.
+
 - [ ] The suite passes on a machine with no `~/.claude/wurk.local.json`
+
+      **Machine-checked (unattended, 2026-08-27):** verified without
+      touching the operator's real file, by running the full gate under a
+      `HOME` pointed at an empty scratch directory: 852 runs, 3071
+      assertions, 0 failures, 0 errors.
+
 - [ ] Every fixture in this phase uses invented nonsense tokens written
       inline in the test, and no fixture reads anything outside the repo
       (a property of how the tests are written, so it is read, not run)
+
+      **Machine-checked (unattended, 2026-08-27):** read, not run. Every
+      token in `outbound_scan_test.rb` is an invented `zqiblorf-` or
+      `zqorbex-` string written inline; every pattern file is written into
+      a `Dir.mktmpdir`; the config comes from the `with_user_config`
+      injection seam or a scratch `HOME`. Nothing reads outside the repo.
+      The tests added in this verification pass hold to the same rule.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
@@ -1133,12 +1200,36 @@ of blocking here.
 
 ### Phase 3
 
+All three of this phase's items were run for real, in a throwaway repo with
+a bare local remote (no network), under a scratch `HOME` carrying a fixture
+pattern file of invented tokens.
+
 - [ ] In a throwaway git repo with a fixture patterns file configured, feed
       a hand-written ref line to `git-refs` on stdin and confirm a term
       introduced only by a `git mv` is reported
+
+      **Machine-checked (unattended, 2026-08-27):** confirmed. The token
+      was committed and pushed first, so the rename commit introduced no
+      new content at all; `git-refs` still reported
+      `{"location":"blob:<short>:b.txt","count":1}` and exited 1. The
+      `--no-renames` post-image read is doing exactly what it was added
+      for.
+
 - [ ] Confirm a term present only in a commit message is reported
+
+      **Machine-checked (unattended, 2026-08-27):** confirmed. A commit
+      whose content was clean and whose message carried the token was
+      reported as `{"location":"commit-message:<short>","count":1}`,
+      exit 1.
+
 - [ ] Confirm the printed refusal names locations and counts and shows no
       content
+
+      **Machine-checked (unattended, 2026-08-27):** confirmed on both runs
+      above. The blocked entry reads "1 outbound scan hit(s) in 1
+      location(s); see data.outbound_scan.hits for locations and counts".
+      Neither stdout nor stderr contained the fixture token or the control
+      term, asserted directly against the captured output.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
@@ -1155,10 +1246,41 @@ of blocking here.
 - [ ] In a throwaway repo with a local `core.hooksPath`, install, then run
       `bd hooks install`, then confirm both blocks are present and the wurk
       block is above the beads block
+
+      **Machine-checked (unattended, 2026-08-27):** confirmed, in the same
+      throwaway repo, with `core.hooksPath` set repo-locally to a directory
+      inside the repo's own git dir before any installer ran. `install`
+      reported `hooks_dir_scope: "repo"`, `action: "create"`; `bd hooks
+      install` (1.2.2) then wrote its own block into the same file and
+      preserved the wurk block above it. Both markers present, wurk first.
+
+      Worth recording, because it is the installer working correctly and
+      not a fixture mistake: a first attempt pointed `core.hooksPath` at a
+      directory in the working tree but outside `.git`, and `install`
+      refused it as `shared_hooks_path`. Anything not under the git common
+      dir is treated as machine-wide, which is the conservative reading.
+
+      Also verified beyond the item, because a silent failure here would
+      break the participant below us: a probe appended under the wurk block
+      received the exact ref line on stdin, so the shim's
+      `exec < "$tmp"` restore genuinely feeds later participants.
+
 - [ ] With a fixture patterns file configured, attempt a real push of a
       commit containing the fixture token to a local bare remote and confirm
       git refuses; remove the token, confirm it succeeds
+
+      **Machine-checked (unattended, 2026-08-27):** confirmed, both
+      directions, against a bare local remote so nothing left the machine.
+      The push carrying the token was refused (`error: failed to push some
+      refs`, exit 1, remote unmoved); amending the token out and pushing
+      again succeeded and advanced the remote.
+
 - [ ] Confirm the refusal output contains no matched text
+
+      **Machine-checked (unattended, 2026-08-27):** confirmed. The refusal
+      git printed carried the envelope's locations and counts only; the
+      captured stdout and stderr were asserted not to contain the fixture
+      token, and not to contain the control term either.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
@@ -1173,8 +1295,28 @@ of blocking here.
 ### Phase 5
 
 - [ ] Run `bead.rb sync push --dry-run` in this repo and read the envelope
+
+      **Machine-checked (unattended, 2026-08-27):** run, envelope read.
+      `ok: true`, `succeeded: null`, `confirmed: null`,
+      `scan_would_run: false` (this machine is disarmed, see below), and
+      `commands` lists `bd dolt push` and `bd list --all --json` as the two
+      it *would* run. Nothing was shelled and nothing was pushed, which is
+      what `--dry-run` is supposed to mean here.
+
 - [ ] On the operator's machine, with the real configuration in place, run
       `outbound_scan.rb status` and confirm `probe_ok` is true
+
+      **Machine-checked (unattended, 2026-08-27):** cannot be confirmed by
+      an agent, and stays deferred. `status` on this machine reports
+      `armed: false`, `probe_ok: null`, with the `outbound_scan_disarmed`
+      advisory: the real configuration is not in place yet. Arming it means
+      writing a private pattern set and pointing this machine's config at
+      it, which is the operator's own step.
+
+      What was proved instead, so what is missing is the operator's data
+      and not the pipeline: with a fixture pattern file under a scratch
+      `HOME`, the real CLI reports `armed: true`, `probe_ok: true`,
+      `patterns_count: 2` - a count, never a listing.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
@@ -1191,11 +1333,36 @@ of blocking here.
 - [ ] A reader who has not seen ADR-0014 can install the hook, verify it is
       armed, and understand what it does and does not cover, from the docs
       alone
+
+      **Machine-checked (unattended, 2026-08-27):** this item caught a real
+      gap. As shipped, `outbound_scan.rb install` was named once in
+      `docs/architecture.md` and the `status` subcommand appeared in no
+      operator-facing doc at all - not even in ADR-0014 - so "verify it is
+      armed" was not answerable from the docs. Fixed in this pass:
+      `docs/machine-config.md` gains "Arming the outbound scan, and
+      checking that it is armed" (the three steps, the `--dry-run` /
+      `--uninstall` / `--allow-shared-hooks-path` flags, how to read
+      `armed` vs `probe_ok` vs `patterns_count`) and a "What it covers, and
+      what it does not" subsection naming both push paths, the rename and
+      commit-message coverage, the deletion case, and the routes the gate
+      cannot see. Whether a stranger actually follows it is a human read
+      and stays deferred.
+
 - [ ] The follow-up bead exists and is linked to wu-e4l
+
+      **Machine-checked (unattended, 2026-08-27):** confirmed. `wu-q2h`
+      ("Amend ADR-0014 with the shipped pre-push shim mechanism", P3, open)
+      exists and shows in `bd dep tree wu-e4l` as a `related` edge.
+
 - [ ] No pattern text, no real path, and no guarded term appears in any
       changed doc - read the whole diff, not a search for known strings,
       since the terms this guards against are exactly the ones that must
       not be written down to search for
+
+      **Machine-checked (unattended, 2026-08-27):** confirmed by the
+      property check recorded under Phase 1's second item, re-run over the
+      documentation added in this pass. No known-string search was used,
+      for the reason the item gives.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
