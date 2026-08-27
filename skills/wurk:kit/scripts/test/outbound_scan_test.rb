@@ -137,6 +137,31 @@ class OutboundScanScannerTest < Minitest::Test
     refute scanner.probe
   end
 
+  # sabotage: force Encoding::BINARY for binary-looking text instead of
+  # scrubbing into UTF-8 -> red with Encoding::CompatibilityError. A blob
+  # with a NUL byte in it is ordinary in a push (any compiled or image file),
+  # and an operator whose guarded vocabulary is not pure ASCII must not have
+  # the whole scan blow up mid-push because of one.
+  def test_binary_blob_scans_against_a_non_ascii_pattern_without_raising
+    scanner = scanner_for(["zqiblorf-café"])
+    blob = "\x00\x01\xffleading zqiblorf-café trailing\x00".dup.force_encoding(Encoding::BINARY)
+    hits, locations = scanner.scan_payload([["blob/binary.bin", blob]])
+    assert_equal 1, locations
+    assert_equal 1, hits.length
+    assert_equal 1, hits.first.count
+  end
+
+  # sabotage: skip invalid-encoding text instead of scrubbing it -> red. A
+  # term in the valid part of a mis-encoded file must still be found.
+  def test_invalid_encoding_text_is_scrubbed_and_still_matches
+    scanner = scanner_for(["zqiblorf-secret"])
+    text = "bad \xff\xfe bytes then zqiblorf-secret".dup.force_encoding(Encoding::UTF_8)
+    refute text.valid_encoding?, "the fixture is expected to be mis-encoded so this test proves something"
+    hits, = scanner.scan_payload([["file/a.txt", text]])
+    assert_equal 1, hits.length
+    assert_equal 1, hits.first.count
+  end
+
   # A location with zero matches contributes nothing to hits, but still
   # counts toward scanned_locations.
   def test_clean_payload_produces_no_hits_but_counts_locations
@@ -369,6 +394,34 @@ class OutboundScanRedactionTest < Minitest::Test
         refute_includes envelope_json, pattern_line
         refute_includes result_json, patterns_content
         refute_includes envelope_json, patterns_content
+      end
+    end
+  end
+
+  # sabotage: name the configured patterns file in either loader error
+  # message -> red. An operator names that file after what it guards, so the
+  # path is part of the guarded vocabulary, and both of these messages reach
+  # the envelope the pre-push hook prints.
+  def test_loader_errors_never_name_the_configured_patterns_file
+    Dir.mktmpdir do |dir|
+      guarded_dir = File.join(dir, "zqorbex-guarded-vocabulary-3312")
+      FileUtils.mkdir_p(guarded_dir)
+      empty_path = File.join(guarded_dir, "patterns.txt")
+      File.write(empty_path, "# only a comment\n")
+      missing_path = File.join(guarded_dir, "absent-patterns.txt")
+
+      [[empty_path, "patterns_file_empty"], [missing_path, "patterns_file_unreadable"]].each do |path, code|
+        with_user_config(
+          "outbound_scan" => { "patterns_file" => path, "control_term" => "zqorbex-control-4471" }
+        ) do |config|
+          result = OutboundScan.run([], config: config)
+          assert_equal [code], result.errors.map { |e| e["code"] }
+
+          env = Envelope.new(script: "probe")
+          OutboundScan.apply_to_envelope(result, env, path_label: "git")
+          refute_includes result.to_h.to_json, guarded_dir
+          refute_includes env.to_json, guarded_dir
+        end
       end
     end
   end

@@ -93,7 +93,22 @@ class UserConfig
     def parse(path)
       JSON.parse(File.read(path))
     rescue JSON::ParserError => e
-      raise JSON::ParserError, "#{path} is not valid JSON: #{e.message}"
+      # Never interpolate the parser's own message: JSON::ParserError quotes
+      # the offending source text, and this file is where the outbound scan's
+      # control_term and patterns_file path live (ADR-0014). A malformed
+      # value would otherwise travel from here into a block! message, out of
+      # the pre-push hook on stdout, and into a terminal or a CI log - which
+      # is exactly the leak the scan exists to prevent. Position only.
+      raise JSON::ParserError, "#{path} is not valid JSON#{parse_position(e)}"
+    end
+
+    private
+
+    # The "at line N column M" tail of a parser message, when it has one.
+    # Digits and fixed words only, so nothing from the file can ride along.
+    def parse_position(error)
+      match = error.message.to_s.match(/\bat line \d+ column \d+/)
+      match ? " (#{match[0]})" : ""
     end
   end
 

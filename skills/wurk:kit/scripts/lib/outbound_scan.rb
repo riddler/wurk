@@ -94,19 +94,25 @@ module OutboundScan
       def load(path)
         content = read(path)
         patterns = compile_lines(content)
-        raise LoadError.new("patterns_file_empty", "the configured patterns file (#{path}) contains no usable patterns") if patterns.empty?
+        raise LoadError.new("patterns_file_empty", "the configured patterns file contains no usable patterns") if patterns.empty?
 
         patterns
       end
 
       private
 
+      # The configured path is deliberately NOT named in the message. An
+      # operator names this file after what it guards, so the path is itself
+      # part of the guarded vocabulary - and this message reaches an
+      # envelope, a terminal, and a log. The exception class says what went
+      # wrong; there is only one configured patterns file, so nothing is
+      # ambiguous without it.
       def read(path)
         File.read(path)
       rescue Errno::ENOENT, Errno::EACCES, Errno::EISDIR => e
         raise LoadError.new(
           "patterns_file_unreadable",
-          "the configured patterns file (#{path}) could not be read: #{e.class}"
+          "the configured patterns file could not be read: #{e.class}"
         )
       end
 
@@ -137,10 +143,6 @@ module OutboundScan
   # Runs a compiled pattern set over a payload and over the positive-control
   # probe. No git, no bd, no shelling out - just strings.
   class Scanner
-    # Bytes examined at the front of each text when deciding whether it
-    # looks binary.
-    BINARY_SNIFF_BYTES = 8192
-
     def initialize(patterns, control_term:)
       @patterns = patterns
       @control_term = control_term
@@ -172,16 +174,21 @@ module OutboundScan
 
     private
 
-    # Binary-looking content (a NUL byte in the first BINARY_SNIFF_BYTES) is
-    # scanned as-is after forcing Encoding::BINARY, so a mis-encoded blob
-    # cannot raise mid-scan and silently drop out of the gate. An
-    # invalid-encoding string is scrubbed before matching, never skipped -
-    # skipping is how a gate quietly stops gating.
+    # Every text is matched as UTF-8, scrubbed when it does not already hold
+    # valid UTF-8, so a mis-encoded or binary blob cannot raise mid-scan and
+    # silently drop out of the gate. Scrubbing replaces only the invalid byte
+    # sequences, so ASCII and well-formed UTF-8 terms inside a binary blob
+    # still match - and nothing is ever skipped, because skipping is how a
+    # gate quietly stops gating.
+    #
+    # Forcing Encoding::BINARY here instead would look equivalent and is not:
+    # a pattern with any non-ASCII character in it raises
+    # Encoding::CompatibilityError against a BINARY string, which would take
+    # the whole scan down mid-push for any operator whose guarded vocabulary
+    # is not pure ASCII.
     def normalize(text)
-      sniff = text.byteslice(0, BINARY_SNIFF_BYTES) || text
-      return text.dup.force_encoding(Encoding::BINARY) if sniff.include?("\x00")
-
-      text.valid_encoding? ? text : text.scrub
+      utf8 = text.encoding == Encoding::UTF_8 ? text : text.dup.force_encoding(Encoding::UTF_8)
+      utf8.valid_encoding? ? utf8 : utf8.scrub
     end
 
     def count_matches(text)
