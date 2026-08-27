@@ -60,6 +60,17 @@ New in wurk: `lib/manifest.rb`, the single place that locates, parses, and
 validates the consumer repo's `.claude/wurk.json` and hands typed values to
 the other scripts.
 
+The kit also ships a refusal-only outbound-scan gate (ADR-0014): a
+machine-configured pattern set is run over outbound content on the two push
+paths the kit can reach, and any hit refuses the push. This is consistent
+with the banned-operations rule above, not an exception to it - a component
+that can only refuse an operation performs nothing irreversible, so it is
+itself one of the human-meaningful gates that rule exists to keep in front
+of every push. It covers two paths: git's own `pre-push` hook (installed
+per repo, see below) and `bead.rb sync push`, which already owned the
+tracker's push code path and now runs the same scan in-process before it
+shells out. Configuration and schema: `docs/machine-config.md`.
+
 ### Layer 3: the manifest
 
 `.claude/wurk.json` in the consumer repo. Schema and per-repo example values:
@@ -136,6 +147,16 @@ existing non-symlink entry. Updating wurk = `git pull` in this repo; the
 symlinks pick it up. This follows the pattern already proven by
 `~/.claude/skills/present:kit` (colon-named skill directories are plain
 directories; nothing special is needed for the namespace).
+
+Hook installation for the outbound-scan gate is deliberately not part of
+`install.rb`: it is a per-repo opt-in the operator runs from the target
+checkout (`outbound_scan.rb install`, ADR-0014), not a machine-level step
+that happens once for every repo automatically. The installer resolves the
+effective hooks directory the same way git does - which is whatever
+`core.hooksPath` says it is, not always the checkout's own `.git/hooks` -
+classifies it as scoped to this repo or shared across every repo on the
+machine, and refuses to install into a shared directory silently, the same
+never-widen-without-being-told rule as the symlink refusal above.
 
 ## Testing and gates for this repo
 

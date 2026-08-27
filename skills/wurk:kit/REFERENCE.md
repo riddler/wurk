@@ -81,6 +81,11 @@ return env.emit(io) unless user_config
 
 Schema, validation rules, and the `check` lint: `docs/machine-config.md`.
 
+The schema has a second section, `outbound_scan` - the machine-configured
+outbound-scan gate (ADR-0014). Its keys, validation, and what a script does
+with them are all documented at `docs/machine-config.md`; this file states
+only that the section exists.
+
 ## Ruby version and syntax
 
 **System Ruby 2.6.10 only** (`/usr/bin/ruby` on macOS). A consumer repo's
@@ -197,6 +202,14 @@ fixture, which is the same edit a real consumer makes in its own
 A drift check re-reads ADR-0006 on every run, so an operation named in that
 ADR without a matching `Contract` rule fails the suite. Add rules to both
 places or neither.
+
+A script that can only *refuse* an operation performs nothing irreversible;
+it is itself the human-meaningful gate this list exists to keep in front of
+a push, not an exception carved out of it. `outbound_scan.rb` and the scan
+`bead.rb sync push` runs before shelling `bd dolt push` are both this
+shape - each blocks a push on a hit and neither ever issues one - so they
+extend what the list protects rather than needing an entry of their own
+(ADR-0014). The list itself does not change.
 
 The banned list is the mechanical floor, not the whole story: judgment calls
 (phase sizing, `bd close` triggers, a project's own testing protocol) stay in
