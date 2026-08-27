@@ -875,8 +875,8 @@ command into `commands` alongside the existing `bd dolt push`.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `ruby skills/wurk:kit/scripts/test/run.rb` passes
-- [ ] New tests in `test/bead_test.rb` alongside the existing sync tests:
+- [x] `ruby skills/wurk:kit/scripts/test/run.rb` passes
+- [x] New tests in `test/bead_test.rb` alongside the existing sync tests:
       with no `outbound_scan` section, `sync push` behaves exactly as today
       plus one `outbound_scan_disarmed` warning, and every existing sync test
       still passes; with a fixture section and a clean export, `bd dolt push`
@@ -885,11 +885,11 @@ command into `commands` alongside the existing `bd dolt push`.
       envelope has an `outbound_scan_hit` block; a failing `bd list --all
       --json` blocks with `tracker_export_unavailable` and does not push; a
       dolt push failure is still a warning, not a block, in the armed case
-- [ ] A redaction test: the serialized `sync push` envelope from a hit run
+- [x] A redaction test: the serialized `sync push` envelope from a hit run
       contains neither the fixture token nor the fixture pattern text
-- [ ] `--dry-run` emits `scan_would_run` and shells nothing (asserted by an
+- [x] `--dry-run` emits `scan_would_run` and shells nothing (asserted by an
       empty `FakeSh#calls`)
-- [ ] `contract_test.rb` passes unchanged
+- [x] `contract_test.rb` passes unchanged
 
 #### Manual Verification:
 - [ ] Run `bead.rb sync push --dry-run` in this repo and read the envelope
@@ -1159,6 +1159,22 @@ of blocking here.
       commit containing the fixture token to a local bare remote and confirm
       git refuses; remove the token, confirm it succeeds
 - [ ] Confirm the refusal output contains no matched text
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 5
+
+- [ ] Run `bead.rb sync push --dry-run` in this repo and read the envelope
+- [ ] On the operator's machine, with the real configuration in place, run
+      `outbound_scan.rb status` and confirm `probe_ok` is true
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,

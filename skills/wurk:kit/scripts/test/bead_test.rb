@@ -3,10 +3,12 @@
 require "minitest/autorun"
 require "json"
 require "stringio"
+require "tmpdir"
 require_relative "../lib/beads"
 require_relative "../bead"
 require_relative "support/manifest_helper"
 require_relative "support/fake_sh"
+require_relative "support/user_config_helper"
 
 # Beads (lib/beads.rb): the pure logic - notes-blob splitting, the --loop
 # grammar, --label-any union, and candidate ranking. No Sh involved.
@@ -195,6 +197,7 @@ end
 # Bead (bead.rb): the CLI subcommands, driven end to end through FakeSh.
 class BeadCliTest < Minitest::Test
   include ManifestHelper
+  include UserConfigHelper
 
   # Bead id resolution (the plan-doc filename scan and the branch-prefix
   # scan) is built from the manifest's `beads.prefix`, so the fixture's "zz"
@@ -204,11 +207,19 @@ class BeadCliTest < Minitest::Test
   def setup
     @fake = FakeSh.new
     Sh.runner = @fake
+    # Every sync push test below runs through the outbound-scan gate now
+    # (Phase 5), which reads UserConfig.current. Default every test to the
+    # disarmed instance so none of them depends on this machine's real
+    # ~/.claude/wurk.local.json; a test that needs the scan armed installs
+    # its own fixture with with_user_config, which restores this default
+    # afterward.
+    UserConfig.current = UserConfig.new(path: "(fixture)", raw: {}, exists: false)
   end
 
   def teardown
     Sh.runner = nil
     Manifest.reset!
+    UserConfig.reset!
   end
 
   def run_bead(argv)
@@ -473,6 +484,7 @@ class BeadCliTest < Minitest::Test
   end
 
   def test_sync_push_failure_is_a_warning_never_a_block
+    expect_clean_tracker_export
     @fake.expect(%w[bd dolt push], exitstatus: 1, err: "no remote\n")
 
     code, env = run_bead(%w[sync push])
@@ -485,6 +497,7 @@ class BeadCliTest < Minitest::Test
   end
 
   def test_sync_push_with_output_is_confirmed_first_try
+    expect_clean_tracker_export
     @fake.expect(%w[bd dolt push], out: "Push complete.\n")
 
     code, env = run_bead(%w[sync push])
@@ -492,10 +505,15 @@ class BeadCliTest < Minitest::Test
     assert_equal 0, code
     assert_equal true, env["data"]["succeeded"]
     assert_equal true, env["data"]["confirmed"]
-    assert_equal [], env["warnings"]
+    # No outbound_scan section is configured (see setup) - one
+    # outbound_scan_disarmed warning is the only new thing here, per
+    # Phase 5's success criteria: with no outbound_scan section, sync push
+    # behaves exactly as today plus this one warning.
+    assert_equal ["outbound_scan_disarmed"], env["warnings"].map { |w| w["code"] }
   end
 
   def test_sync_push_silent_success_reruns_and_confirms_on_retry
+    expect_clean_tracker_export
     @fake.expect(%w[bd dolt push], out: "")
     @fake.expect(%w[bd dolt push], out: "Push complete.\n")
 
@@ -507,6 +525,7 @@ class BeadCliTest < Minitest::Test
   end
 
   def test_sync_push_silent_twice_warns_unconfirmed
+    expect_clean_tracker_export
     @fake.expect(%w[bd dolt push], out: "")
     @fake.expect(%w[bd dolt push], out: "")
 
@@ -525,6 +544,157 @@ class BeadCliTest < Minitest::Test
 
     assert_equal 0, code
     refute env["data"].key?("confirmed")
+  end
+
+  # --- sync push: the outbound-scan gate (Phase 5, ADR-0014) ----------------
+
+  def expect_clean_tracker_export(issues: [])
+    @fake.expect(%w[bd list --all --json], out: JSON.generate(issues))
+  end
+
+  def armed_config(patterns_path, control_term)
+    { "outbound_scan" => { "patterns_file" => patterns_path, "control_term" => control_term } }
+  end
+
+  def write_patterns(dir, content)
+    path = File.join(dir, "patterns.txt")
+    File.write(path, content)
+    path
+  end
+
+  def test_sync_push_armed_and_clean_export_still_pushes
+    Dir.mktmpdir do |dir|
+      path = write_patterns(dir, "zqiblorf-control-1\nzqiblorf-secret")
+      expect_clean_tracker_export(issues: [{ "id" => "zz-abc", "title" => "nothing guarded here" }])
+      @fake.expect(%w[bd dolt push], out: "Push complete.\n")
+
+      with_user_config(armed_config(path, "zqiblorf-control-1")) do
+        code, env = run_bead(%w[sync push])
+
+        assert_equal 0, code
+        assert_equal true, env["data"]["succeeded"]
+        assert_equal true, env["data"]["pushed"]
+        assert_equal true, env["data"]["outbound_scan"]["armed"]
+        assert_empty env["data"]["outbound_scan"]["hits"]
+      end
+    end
+  end
+
+  def test_sync_push_a_tracker_hit_blocks_and_never_shells_dolt_push
+    Dir.mktmpdir do |dir|
+      token = "zqiblorf-secret-fixture-1"
+      path = write_patterns(dir, "zqiblorf-control-1\n#{token}")
+      @fake.expect(
+        %w[bd list --all --json],
+        out: JSON.generate([{ "id" => "zz-abc", "title" => "clean", "description" => "leading #{token} trailing" }])
+      )
+      # deliberately no "bd dolt push" expectation registered: if bead.rb
+      # shells it anyway, FakeSh raises UnexpectedCommand and this test
+      # fails loudly rather than silently passing.
+
+      with_user_config(armed_config(path, "zqiblorf-control-1")) do
+        code, env = run_bead(%w[sync push])
+
+        assert_equal 1, code
+        refute env["ok"]
+        assert_equal ["outbound_scan_hit"], env["blocked"].map { |b| b["code"] }
+        assert_equal false, env["data"]["pushed"]
+        assert_nil env["data"]["succeeded"]
+      end
+
+      refute(@fake.calls.any? { |c| c.argv == %w[bd dolt push] })
+    end
+  end
+
+  def test_sync_push_tracker_hit_redacts_the_fixture_token_from_the_envelope
+    Dir.mktmpdir do |dir|
+      token = "zqiblorf-secret-fixture-2"
+      path = write_patterns(dir, "zqiblorf-control-1\n#{token}")
+      @fake.expect(
+        %w[bd list --all --json],
+        out: JSON.generate([{ "id" => "zz-abc", "notes" => "leading #{token} trailing" }])
+      )
+
+      with_user_config(armed_config(path, "zqiblorf-control-1")) do
+        code, env = run_bead(%w[sync push])
+
+        assert_equal 1, code
+        assert_equal ["outbound_scan_hit"], env["blocked"].map { |b| b["code"] }
+        serialized = env.to_json
+        refute_includes serialized, token
+        refute_includes serialized, "zqiblorf-control-1"
+      end
+    end
+  end
+
+  def test_sync_push_failing_tracker_export_blocks_and_never_shells_dolt_push
+    @fake.expect(%w[bd list --all --json], exitstatus: 1, err: "bd: no such database\n")
+
+    code, env = run_bead(%w[sync push])
+
+    assert_equal 1, code
+    refute env["ok"]
+    assert_equal ["tracker_export_unavailable"], env["blocked"].map { |b| b["code"] }
+    assert_equal false, env["data"]["pushed"]
+    assert_nil env["data"]["succeeded"]
+    refute(@fake.calls.any? { |c| c.argv == %w[bd dolt push] })
+  end
+
+  def test_sync_push_unparseable_tracker_export_blocks
+    @fake.expect(%w[bd list --all --json], out: "not json at all")
+
+    code, env = run_bead(%w[sync push])
+
+    assert_equal 1, code
+    assert_equal ["tracker_export_unavailable"], env["blocked"].map { |b| b["code"] }
+    refute(@fake.calls.any? { |c| c.argv == %w[bd dolt push] })
+  end
+
+  def test_sync_push_dolt_push_failure_is_still_a_warning_not_a_block_when_armed
+    Dir.mktmpdir do |dir|
+      path = write_patterns(dir, "zqiblorf-control-1\nzqiblorf-secret")
+      expect_clean_tracker_export(issues: [{ "id" => "zz-abc", "title" => "clean" }])
+      @fake.expect(%w[bd dolt push], exitstatus: 1, err: "no remote\n")
+
+      with_user_config(armed_config(path, "zqiblorf-control-1")) do
+        code, env = run_bead(%w[sync push])
+
+        assert_equal 0, code
+        assert env["ok"]
+        assert_equal [], env["blocked"]
+        assert_equal false, env["data"]["succeeded"]
+        assert env["warnings"].any? { |w| w["code"] == "dolt_push_failed" }
+      end
+    end
+  end
+
+  def test_sync_push_dry_run_reports_scan_would_run_and_shells_nothing
+    with_user_config(nil) do
+      code, env = run_bead(%w[sync push --dry-run])
+
+      assert_equal 0, code
+      assert_nil env["data"]["succeeded"]
+      assert_equal false, env["data"]["scan_would_run"]
+      assert_includes env["commands"].join("\n"), "bd list --all --json"
+      assert_includes env["commands"].join("\n"), "bd dolt push"
+    end
+
+    assert_empty @fake.calls
+  end
+
+  def test_sync_push_dry_run_scan_would_run_true_when_armed
+    Dir.mktmpdir do |dir|
+      path = write_patterns(dir, "zqiblorf-control-1\nzqiblorf-secret")
+
+      with_user_config(armed_config(path, "zqiblorf-control-1")) do
+        code, env = run_bead(%w[sync push --dry-run])
+
+        assert_equal 0, code
+        assert_equal true, env["data"]["scan_would_run"]
+      end
+    end
+
+    assert_empty @fake.calls
   end
 
   # --- resolve ----------------------------------------------------------------

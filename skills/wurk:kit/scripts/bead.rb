@@ -9,6 +9,7 @@ require_relative "lib/manifest"
 require_relative "lib/refs"
 require_relative "lib/beads"
 require_relative "lib/base_ref"
+require_relative "lib/outbound_scan"
 
 # Bead is the bd wrapper: `bd show` is parsed as prose in at least four
 # skills today, so this is the single biggest parsing win in the extraction
@@ -437,6 +438,19 @@ module Bead
     # once, and `data.confirmed` reports whether any attempt produced
     # confirming output - a caller about to depend on the push reads
     # `confirmed`, not just `succeeded`.
+    #
+    # ADR-0014 (ADR-0014's plan Phase 5, wu-e4l): a push also runs the
+    # outbound-content scan over the full tracker export first, in-process,
+    # before `bd dolt push` is ever shelled. Reading the tracker is a
+    # precondition - a failed or unparseable `bd list --all --json` is a
+    # BLOCK (`tracker_export_unavailable`), deliberately asymmetric with the
+    # best-effort `dolt_push_failed` warning for the push itself, which
+    # stays a warning unchanged. A scan hit is a BLOCK
+    # (`outbound_scan_hit`, from OutboundScan.apply_to_envelope) and the
+    # push never runs. Only the push direction is gated - pull gains
+    # nothing.
+
+    TRACKER_EXPORT_SIZE_WARNING_BYTES = 5 * 1024 * 1024 # 5 MB, ADR-0014's measurement point
 
     def run_sync(argv, io)
       parser, options = Cli.build("bead.rb sync [options] <pull|push>")
@@ -445,14 +459,29 @@ module Bead
       usage_error!("bead.rb sync <pull|push>", parser) unless %w[pull push].include?(direction)
 
       env = Envelope.new(script: "bead_sync")
+      env.data["direction"] = direction
       cmd = ["bd", "dolt", direction]
 
       if options[:dry_run]
         env.commands << Sh.render(cmd)
-        env.data["direction"] = direction
         env.data["succeeded"] = nil
-        env.data["confirmed"] = nil if direction == "push"
+        if direction == "push"
+          env.data["confirmed"] = nil
+          env.data["scan_would_run"] = UserConfig.current.outbound_scan_declared?
+          env.commands << Sh.render(%w[bd list --all --json])
+        end
         return env.emit(io)
+      end
+
+      if direction == "push"
+        scan_result = perform_tracker_scan(env)
+        return env.emit(io) if scan_result.nil?
+
+        if scan_result.refuse?
+          env.data["succeeded"] = nil
+          env.data["pushed"] = false
+          return env.emit(io)
+        end
       end
 
       result = Sh.run(cmd, envelope: env)
@@ -462,9 +491,9 @@ module Bead
         result = retry_result if retry_result.success?
       end
 
-      env.data["direction"] = direction
       env.data["succeeded"] = result.success?
       if direction == "push"
+        env.data["pushed"] = true
         confirmed = result.success? && !blank_output?(result)
         env.data["confirmed"] = confirmed
         if result.success? && !confirmed
@@ -476,6 +505,75 @@ module Bead
       end
       env.warn(code: "dolt_#{direction}_failed", message: err_or(result, "bd dolt #{direction} failed")) unless result.success?
       env.emit(io)
+    end
+
+    # Reads the full tracker export and scans it before any push is
+    # shelled. Returns the OutboundScan::Result on a completed scan attempt
+    # (armed or not; the caller checks #refuse?), or nil when the export
+    # itself could not be read - in which case this method has already
+    # blocked the envelope and the caller must emit without pushing.
+    #
+    # `bd search`-style title-only scanning is deliberately not used here
+    # (wu-caq): it excludes closed issues and reads titles only, which is
+    # the known-weak form. The full `bd list --all --json` export is what
+    # gets scanned, every string field, walked generically so a bd schema
+    # addition is covered with no code change here.
+    def perform_tracker_scan(env)
+      config = UserConfig.require!(env)
+      return nil unless config
+
+      result = Sh.run(%w[bd list --all --json], envelope: env)
+      parsed = result.success? ? parse_json(result.out) : nil
+
+      unless result.success? && parsed.is_a?(Array)
+        env.block!(
+          code: "tracker_export_unavailable",
+          message: err_or(result, "bd list --all --json returned no usable JSON")
+        )
+        env.data["succeeded"] = nil
+        env.data["pushed"] = false
+        return nil
+      end
+
+      bytesize = result.out.to_s.bytesize
+      if bytesize > TRACKER_EXPORT_SIZE_WARNING_BYTES
+        env.warn(
+          code: "outbound_scan_large_tracker",
+          message: "the tracker export is #{bytesize} bytes, above the 5 MB measurement point; " \
+                   "the full export was still scanned"
+        )
+      end
+
+      scan_result = OutboundScan.run(tracker_payload(parsed), config: config)
+      OutboundScan.apply_to_envelope(scan_result, env, path_label: "tracker")
+      scan_result
+    end
+
+    # Builds [location, text] pairs for every string value in the parsed
+    # `bd list --all --json` export, one issue at a time: `tracker:<issue
+    # id>` for the issue's own top-level fields, extended with the JSON
+    # path for anything nested, so a schema addition is scanned without a
+    # code change here.
+    def tracker_payload(issues)
+      payload = []
+      issues.each do |issue|
+        next unless issue.is_a?(Hash)
+
+        id = issue["id"].is_a?(String) ? issue["id"] : "unknown"
+        walk_tracker_json(issue, "tracker:#{id}", payload)
+      end
+      payload
+    end
+
+    def walk_tracker_json(node, location, payload)
+      case node
+      when String
+        payload << [location, node] unless node.empty?
+      when Hash
+        node.each { |key, value| walk_tracker_json(value, "#{location}:#{key}", payload) }
+      when Array
+        node.each_with_index { |value, index| walk_tracker_json(value, "#{location}[#{index}]", payload) }
+      end
     end
 
     def blank_output?(result)
