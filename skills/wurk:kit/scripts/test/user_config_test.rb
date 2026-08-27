@@ -156,6 +156,133 @@ class UserConfigResolutionTest < Minitest::Test
   end
 end
 
+class UserConfigOutboundScanTest < Minitest::Test
+  include UserConfigHelper
+
+  def teardown
+    UserConfig.reset!
+  end
+
+  # sabotage: make outbound_scan_declared? default to true -> red
+  def test_absent_section_is_valid_and_not_declared
+    in_tmp_home(nil) do
+      config = UserConfig.load
+      assert config.valid?
+      refute config.outbound_scan_declared?
+      assert_nil config.outbound_scan_patterns_file
+      assert_nil config.outbound_scan_control_term
+      assert_empty config.warnings
+    end
+  end
+
+  # sabotage: swap the two accessor fetches -> red
+  def test_full_section_reads_both_values_back
+    in_tmp_home(
+      "outbound_scan" => {
+        "patterns_file" => "(fixture patterns path)",
+        "control_term" => "fixture-control-token"
+      }
+    ) do
+      config = UserConfig.load
+      assert config.valid?, config.errors.inspect
+      assert config.outbound_scan_declared?
+      assert_equal "(fixture patterns path)", config.outbound_scan_patterns_file
+      assert_equal "fixture-control-token", config.outbound_scan_control_term
+    end
+  end
+
+  # sabotage: drop "outbound_scan" from KNOWN's nil-prefix list, or drop the
+  # "outbound_scan" => %w[patterns_file control_term] entry -> red (the
+  # unknown-key walk would then warn on the whole section, or on the known
+  # keys within it)
+  def test_unknown_key_under_section_warns_and_does_not_block
+    in_tmp_home(
+      "outbound_scan" => {
+        "patterns_file" => "(fixture patterns path)",
+        "control_term" => "fixture-control-token",
+        "extra_future_key" => "x"
+      }
+    ) do
+      config = UserConfig.load
+      assert config.valid?, config.errors.inspect
+      assert_equal 1, config.warnings.size
+      assert_match(/unknown key outbound_scan\.extra_future_key/, config.warnings.first)
+    end
+  end
+
+  # sabotage: accept a non-string patterns_file silently -> red
+  def test_non_string_patterns_file_blocks
+    in_tmp_home("outbound_scan" => { "patterns_file" => 5 }) do
+      config = UserConfig.load
+      refute config.valid?
+      assert_match(/outbound_scan\.patterns_file must be a string/, config.errors.join("\n"))
+    end
+  end
+
+  # sabotage: accept a non-string control_term silently -> red
+  def test_non_string_control_term_blocks
+    in_tmp_home(
+      "outbound_scan" => { "patterns_file" => "(fixture patterns path)", "control_term" => false }
+    ) do
+      config = UserConfig.load
+      refute config.valid?
+      assert_match(/outbound_scan\.control_term must be a string/, config.errors.join("\n"))
+    end
+  end
+
+  # sabotage: skip the blank-after-strip check -> red
+  def test_blank_patterns_file_blocks
+    in_tmp_home("outbound_scan" => { "patterns_file" => "   " }) do
+      config = UserConfig.load
+      refute config.valid?
+      assert_match(/outbound_scan\.patterns_file must not be blank/, config.errors.join("\n"))
+    end
+  end
+
+  # sabotage: accept a non-object outbound_scan section (e.g. an array or
+  # string) as if it were a hash -> red
+  def test_non_object_section_blocks
+    in_tmp_home("outbound_scan" => "not-an-object") do
+      config = UserConfig.load
+      refute config.valid?
+      assert_match(/outbound_scan must be a JSON object/, config.errors.join("\n"))
+    end
+  end
+
+  # sabotage: skip the empty-hash special case -> red
+  def test_empty_object_section_blocks
+    in_tmp_home("outbound_scan" => {}) do
+      config = UserConfig.load
+      refute config.valid?
+      assert_match(/configures neither patterns_file nor control_term/, config.errors.join("\n"))
+    end
+  end
+
+  # sabotage: turn the one-key case into a load-time error -> red. Per the
+  # plan, incompleteness with exactly one key present is a Phase 2
+  # scan-time concern, not a UserConfig validation error.
+  def test_section_with_only_patterns_file_is_valid_at_load_time
+    in_tmp_home("outbound_scan" => { "patterns_file" => "(fixture patterns path)" }) do
+      config = UserConfig.load
+      assert config.valid?, config.errors.inspect
+      assert config.outbound_scan_declared?
+      assert_equal "(fixture patterns path)", config.outbound_scan_patterns_file
+      assert_nil config.outbound_scan_control_term
+    end
+  end
+
+  # sabotage: same as above, the other key
+  def test_section_with_only_control_term_is_valid_at_load_time
+    in_tmp_home("outbound_scan" => { "control_term" => "fixture-control-token" }) do
+      config = UserConfig.load
+      assert config.valid?, config.errors.inspect
+      assert config.outbound_scan_declared?
+      assert_nil config.outbound_scan_patterns_file
+      assert_equal "fixture-control-token", config.outbound_scan_control_term
+    end
+  end
+end
+
 class UserConfigRequireTest < Minitest::Test
   include UserConfigHelper
 
@@ -257,6 +384,23 @@ class UserConfigCliTest < Minitest::Test
     assert_equal true, env["ok"]
     assert_equal false, env["data"]["exists"]
     assert_equal "auto", env["data"]["tmux_permission_mode"]
+    assert_equal false, env["data"]["outbound_scan_declared"]
+  end
+
+  # sabotage: leave outbound_scan_declared off the emitted envelope, or add
+  # outbound_scan_patterns_file to it -> red
+  def test_check_reports_outbound_scan_declared_but_not_the_patterns_path
+    with_config_file(
+      "outbound_scan" => {
+        "patterns_file" => "(fixture patterns path)",
+        "control_term" => "fixture-control-token"
+      }
+    ) do |path|
+      code, env = run_cli(["check", "--file", path])
+      assert_equal 0, code
+      assert_equal true, env["data"]["outbound_scan_declared"]
+      refute env["data"].key?("outbound_scan_patterns_file")
+    end
   end
 
   def test_check_reports_unparseable_json_without_crashing

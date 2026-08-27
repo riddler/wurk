@@ -345,14 +345,14 @@ pattern, an example pattern, or a real path. Cite ADR-0014.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `ruby skills/wurk:kit/scripts/test/run.rb` passes
-- [ ] New tests in `skills/wurk:kit/scripts/test/user_config_test.rb` cover:
+- [x] `ruby skills/wurk:kit/scripts/test/run.rb` passes
+- [x] New tests in `skills/wurk:kit/scripts/test/user_config_test.rb` cover:
       absent section is valid and `outbound_scan_declared?` is false; a full
       section reads both values back; an unknown key under the section warns
       and does not block; a non-string `patterns_file` blocks; a non-object
       section blocks; an empty-object section blocks; a section with one key
       only is **valid at load time**
-- [ ] `ruby skills/wurk:kit/scripts/lib/user_config.rb check` exits 0 on a
+- [x] `ruby skills/wurk:kit/scripts/lib/user_config.rb check` exits 0 on a
       machine with no section and reports `data.outbound_scan_declared: false`
 
 #### Manual Verification:
@@ -1086,3 +1086,27 @@ operator's data is a suite nobody else can run.
   directory as a side effect (because `bd hooks install` honors
   `core.hooksPath`); the five created files were removed and the directory
   restored to its prior contents. No hooks were installed into this repo.
+
+## Deferred Manual Verification
+
+Manual verification items are deferred during looped (--loop) execution and
+surfaced here once, rather than blocking after each phase. Confirm these
+before considering the plan fully landed.
+
+### Phase 1
+
+- [ ] The doc's new section is readable on its own terms by someone who has
+      never seen ADR-0014
+- [ ] Nothing in the diff names or hints at any real guarded term, and
+      `docs/machine-config.md` carries no pattern text and no filesystem
+      path outside a `<placeholder>` form
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---

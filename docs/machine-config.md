@@ -62,6 +62,11 @@ the point.
 
   "tmux": {                           // (opt) omit = today's default behavior
     "permission_mode": "auto"         // (opt) default "auto"; see enum below
+  },
+
+  "outbound_scan": {                  // (opt) omit = disarmed, pushes allowed
+    "patterns_file": "<path to a pattern file this operator maintains outside any repo>",
+    "control_term": "<a token the pattern file is expected to match>"
   }
 }
 ```
@@ -78,12 +83,41 @@ Optional; absent defaults to `"auto"`, today's behavior. Allowed values:
   alongside it. For a machine where unattended/loop sessions should run
   without stopping on permission prompts.
 
+## `outbound_scan`
+
+See ADR-0014 for why this section exists and what it gates: a refusal-only
+scan of outbound content on the two push paths the kit can reach, configured
+here because the pattern set it points at is decided by the operator, not
+the project.
+
+- `outbound_scan.patterns_file` (opt) - a path to an operator-maintained
+  pattern file that lives outside every repo. A pointer, not an inline list:
+  the pattern set itself is never written into this file, into any tracked
+  file, or into any envelope this kit emits.
+- `outbound_scan.control_term` (opt) - a positive-control token the pattern
+  file is expected to match, used to prove the scan pipeline can actually
+  hit before a clean result is trusted.
+
+`UserConfig` validates only the **shape** of this section - it never reads
+the pattern file itself, since that would mean every script that loads the
+config also touches the filesystem for a value most scripts never use.
+Whether the file exists, is readable, and is non-empty is checked at scan
+time instead (see the outbound-scan tooling this section feeds).
+
+Section absent is the normal, valid, disarmed state. When present, this
+section must configure something: an empty `outbound_scan` object, or a
+non-string or blank value for either key, blocks. A section with only one of
+the two keys is valid at load time - completeness is checked when a scan
+actually runs, not here, so an unrelated script never fails on a half-written
+scan config.
+
 ## Absent-safe behavior
 
 No file at all is a normal, valid state: every value falls back to its
-default (`"auto"` for `tmux.permission_mode`), and `tmux_window.rb open`
-composes exactly the command line it always has. A new machine onboards with
-zero files - there is nothing to seed and nothing to opt into.
+default (`"auto"` for `tmux.permission_mode`; `outbound_scan` absent means
+disarmed), and `tmux_window.rb open` composes exactly the command line it
+always has. A new machine onboards with zero files - there is nothing to
+seed and nothing to opt into.
 
 ## Validation: block vs warn
 
@@ -97,6 +131,10 @@ asymmetry (`docs/manifest.md`'s Validation section):
   line, and guessing one is worse than stopping - `tmux_window.rb open`
   refuses to run rather than reach the shell with an unvalidated value.
 - **A schema version other than the one this kit implements blocks.**
+- **`outbound_scan`, when present, must configure something.** A non-object
+  section, an empty object, or a non-string or blank `patterns_file` /
+  `control_term` blocks. A section with only one of the two keys does not
+  block here - see `## outbound_scan` above.
 - **An unknown key warns**, never blocks - a machine may be running an
   older or newer kit than the file was written for.
 
@@ -113,7 +151,10 @@ ruby skills/wurk:kit/scripts/lib/user_config.rb check
 Read-only, no `--dry-run`. Emits the kit's standard JSON envelope; exits 0
 on a valid config (including no file at all) and 1 on an invalid one.
 `data.tmux_permission_mode` answers "what mode will my sessions get" without
-reading the code.
+reading the code. `data.outbound_scan_declared` answers "is an outbound scan
+configured at all" the same way - deliberately without a
+`data.outbound_scan_patterns_file` field, since a lint envelope has no reason
+to carry even a pointer at the pattern set.
 
 ## Not a consumer concern
 
