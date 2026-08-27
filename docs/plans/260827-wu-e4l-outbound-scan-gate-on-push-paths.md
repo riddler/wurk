@@ -971,9 +971,9 @@ updating.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `ruby skills/wurk:kit/scripts/test/run.rb` passes (the markdown scans
+- [x] `ruby skills/wurk:kit/scripts/test/run.rb` passes (the markdown scans
       in `contract_test.rb` cover `REFERENCE.md` shell fences)
-- [ ] Plain ASCII punctuation throughout the changed docs, checked by a
+- [x] Plain ASCII punctuation throughout the changed docs, checked by a
       command that must produce no output over them:
       `LC_ALL=C grep -n '[^ -~\t]' <changed docs>`
 
@@ -1175,6 +1175,27 @@ of blocking here.
 - [ ] Run `bead.rb sync push --dry-run` in this repo and read the envelope
 - [ ] On the operator's machine, with the real configuration in place, run
       `outbound_scan.rb status` and confirm `probe_ok` is true
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 6
+
+- [ ] A reader who has not seen ADR-0014 can install the hook, verify it is
+      armed, and understand what it does and does not cover, from the docs
+      alone
+- [ ] The follow-up bead exists and is linked to wu-e4l
+- [ ] No pattern text, no real path, and no guarded term appears in any
+      changed doc - read the whole diff, not a search for known strings,
+      since the terms this guards against are exactly the ones that must
+      not be written down to search for
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
