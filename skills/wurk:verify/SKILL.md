@@ -1,6 +1,6 @@
 ---
 name: wurk:verify
-description: Work the deferred-verification and open-question backlog - enumerate every Deferred Manual Verification item a loop pushed into a plan and every open question a stage recorded in its artifact, walk them with a human one at a time, and mark each as it is confirmed. Reads .claude/wurk.json; honors .claude/wurk/verify.md.
+description: Work the deferred-verification and open-question backlog - enumerate every Deferred Manual Verification item a loop pushed into a plan and every open question a stage recorded in its artifact, then either walk them with a human one at a time (default) or, with --unattended, machine-check and fix what an agent can verify while leaving human-only items deferred. Reads .claude/wurk.json; honors .claude/wurk/verify.md.
 model: opus
 argument-hint: ["a bead id, or a plan/research document path"]
 ---
@@ -35,12 +35,23 @@ Parse `$ARGUMENTS`:
   directories hold for that bead.
 - **One or more document paths** -> enumerate exactly those documents.
 
-There is no `--auto` form. The items in this backlog exist because
-`/wurk:implement --loop` ran with no human available; ticking them with no
-human here would convert a human gate into an automated one on the whole
-skill. What an unattended caller needs - the enumeration - is already
-available read-only through `backlog.rb` directly; the confirming half is
-the point of this skill and stays interactive.
+There is no `--auto` form, but there is `--unattended` (added 2026-08-26,
+operator decision: unattended verify passes after implementation kept
+turning up and fixing real findings). The two modes differ in who confirms:
+
+- Default (interactive): walk items one at a time with a human, as below.
+- `--unattended`: an agent ATTEMPTS every item that is machine-checkable -
+  actually runs the check the item describes, fixes real defects it finds
+  (within the bead's scope, gate re-run afterward), and records the outcome
+  as `**Machine-checked (unattended, YYYY-MM-DD):**` with the evidence.
+  It NEVER uses the human-confirmed marker or `plan_state.rb confirm`:
+  those stay reserved for a human walk. Items that genuinely need human
+  eyes or judgment (visual checks, product calls, anything the item text
+  says only the operator can decide) are left untouched and re-listed in
+  the summary as still-deferred. An unattended pass therefore shrinks the
+  backlog's defect count, not its human gate: a later interactive pass
+  still walks what remains, plus the machine-checked markers if the human
+  wants to spot-check them.
 
 ## Step 1: Enumerate
 
@@ -144,9 +155,12 @@ close the bead they belong to.
   not chased now.** A fix that turns out to be its own project belongs on
   its own bead, referenced from the note or the summary, not folded into
   this pass.
-- **No unattended form, and why**: see Input above. A backlog built entirely
-  out of "no human was available" items is exactly the wrong place to remove
-  the human again.
+- **Unattended checks, human confirmations**: `--unattended` (see Input)
+  lets an agent run the checks and fix what they catch, because in practice
+  those passes surface real defects. What it never does is tick the human
+  gate: `plan_state.rb confirm` and `**Settled**` notes record a HUMAN
+  walking the item, and an agent writing them would erase the distinction
+  the whole backlog exists to keep.
 - **The deferred section stays in the plan when the walk is done.** A fully
   walked backlog is a record of what was checked, not clutter to remove;
   `/wurk:implement`'s own handoff rule says the same thing about the section
