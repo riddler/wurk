@@ -623,8 +623,8 @@ text is ever an argument to any of them.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `ruby skills/wurk:kit/scripts/test/run.rb` passes
-- [ ] New tests in `test/outbound_scan_test.rb` (or a sibling
+- [x] `ruby skills/wurk:kit/scripts/test/run.rb` passes
+- [x] New tests in `test/outbound_scan_test.rb` (or a sibling
       `outbound_scan_cli_test.rb`) using `FakeSh`: `git-refs` issues
       `rev-list`, `diff-tree`, `cat-file`, and `log` with the expected argv;
       a deletion ref line is skipped entirely; an all-zero remote sha still
@@ -632,14 +632,14 @@ text is ever an argument to any of them.
       across commits produce one `cat-file` call; a hit in blob content
       blocks and exits 1; a hit in a commit message blocks; a hit in a ref
       name blocks; a clean push exits 0
-- [ ] A test asserts **no `Sh.run` argv in any recorded `FakeSh` call
+- [x] A test asserts **no `Sh.run` argv in any recorded `FakeSh` call
       contains the fixture pattern token** - the process-table invariant,
       made mechanical
-- [ ] `status` exits 0 and reports `armed: false` under `with_user_config(nil)`
-- [ ] `outbound_scan.rb` has the `#!/usr/bin/env ruby` shebang and the
+- [x] `status` exits 0 and reports `armed: false` under `with_user_config(nil)`
+- [x] `outbound_scan.rb` has the `#!/usr/bin/env ruby` shebang and the
       executable bit (enforced by the existing
       `test_top_level_scripts_have_shebang_and_executable_bit`)
-- [ ] The existing `contract_test.rb` passes **unchanged**
+- [x] The existing `contract_test.rb` passes **unchanged**
 
 #### Manual Verification:
 - [ ] In a throwaway git repo with a fixture patterns file configured, feed
@@ -1120,6 +1120,25 @@ of blocking here.
 - [ ] Every fixture in this phase uses invented nonsense tokens written
       inline in the test, and no fixture reads anything outside the repo
       (a property of how the tests are written, so it is read, not run)
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 3
+
+- [ ] In a throwaway git repo with a fixture patterns file configured, feed
+      a hand-written ref line to `git-refs` on stdin and confirm a term
+      introduced only by a `git mv` is reported
+- [ ] Confirm a term present only in a commit message is reported
+- [ ] Confirm the printed refusal names locations and counts and shows no
+      content
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
