@@ -1,6 +1,8 @@
 # ADR-0014: An outbound-scan gate on both push paths, configured at the machine seam
 
-Status: accepted (2026-08-27)
+Status: accepted (2026-08-27), amended (2026-08-27) - see "Amendment
+(2026-08-27)" below. The amendment corrects *mechanism prose only*; every
+decision in this record stands exactly as written.
 
 ## Context
 
@@ -69,6 +71,12 @@ of an operation the script was already permitted. The banned-operation list
 itself does not change under this ADR.
 
 **2. Coexistence with `bd hooks install`: chain, never clobber.**
+
+*(Amended 2026-08-27: the shipped shim prepends a marker-delimited block and
+falls through rather than exec-ing a preserved hook, and the hooks directory
+it installs into is not assumed to be per-checkout. See "Amendment
+(2026-08-27)" below. The composition rule stated at the end of this point is
+unchanged and is what the shipped mechanism implements.)*
 
 The hook installer (point 6) must treat the `pre-push` file as shared
 territory:
@@ -149,6 +157,12 @@ wherever the kit's `sync push` runs (tracker path).
 
 **5. What is and is not covered.**
 
+*(Amended 2026-08-27: "the shared hooks directory covers all worktrees" holds
+for a repo-scoped hooks directory; where `core.hooksPath` points outside the
+checkout the effective directory is shared by every repo on the machine. See
+"Amendment (2026-08-27)" below. The covered/not-covered lists themselves are
+unchanged.)*
+
 Covered:
 
 - `git push` from any worktree of a checkout where the hook is installed
@@ -172,6 +186,10 @@ mechanical layer under the operator's scan discipline, covering the two
 paths the harness can reach.
 
 **6. Installation is per-repo, explicit, by the operator.**
+
+*(Amended 2026-08-27: "that checkout's shared hooks directory" is resolved,
+classified, and guarded rather than assumed. See "Amendment (2026-08-27)"
+below. Per-repo, explicit, and operator-run all stand.)*
 
 A kit script subcommand (working form: the scan script's `install` mode,
 run from the target checkout) installs the pre-push shim into that
@@ -208,6 +226,11 @@ whenever the machine config declares a scan.
 
 ## Open questions
 
+*(Amended 2026-08-27: all three are answered by the implementation and its
+probes; see "Answers to the Open questions" in the amendment below. They are
+left here as written, unedited, so the record still shows what was and was
+not known at acceptance time.)*
+
 Recorded for the plan stage; none block accepting the shape:
 
 - The exact preservation mechanics of `bd hooks install` when a foreign
@@ -221,3 +244,139 @@ Recorded for the plan stage; none block accepting the shape:
 - Whether the git-path scan reads the pushed ref ranges' diffs only or
   full blob content of new commits; the plan stage picks the form that
   cannot miss a term introduced in a moved or renamed file.
+
+## Amendment (2026-08-27): the shim prepends and falls through, and the hooks directory is resolved rather than assumed
+
+Recorded under wu-q2h, as a dated fix-forward marker on an already-accepted
+record. This amendment corrects **mechanism prose only** - how the shipped
+implementation achieves what points 2, 5, and 6 decided - and answers the
+Open questions. It changes no decision: the composition rule ("every
+installed pre-push participant runs, and any participant's refusal refuses
+the push"), the per-repo-by-installation scope rule, the config seam, the
+fail-closed table, and the covered/not-covered lists all stand exactly as
+written above.
+
+The amendment is authorized as prose-only by the operator, quoted verbatim:
+
+> wu-q2h "amend accepted ADR-0014's mechanism prose to the shipped
+> prepend-with-fallthrough + hooksPath guard, as a dated fix-forward
+> marker - agent-executable on your word... it edits an accepted record's
+> PROSE, so your word IS the carve-out-1 authorization, scoped to this
+> bead."
+
+### What was probed
+
+Against `bd` 1.2.2 on 2026-08-27, while implementing wu-e4l:
+
+1. `bd hooks install` honors `core.hooksPath`; it does not hardcode
+   `.git/hooks`. On a machine with a global `core.hooksPath` it writes into
+   that global directory, which is shared by every repo on the machine.
+2. Over an existing foreign `pre-push`, `bd hooks install` **appends** a
+   marker-delimited section to the end of the file and preserves what was
+   there verbatim above it. It does not rename, back up, or refuse, and no
+   special flag is needed for that append - it is the default. (`--force`
+   overwrites instead.)
+3. That append is textually preserving but semantically fragile: a
+   pre-existing hook that ends in `exit 0` means the appended section never
+   runs, while `bd hooks list` still reports the hook as installed.
+4. `git rev-parse --git-path hooks` returns the effective hooks directory,
+   honoring `core.hooksPath`, and returns the shared common hooks directory
+   from inside a linked worktree.
+
+### Correction 1: prepend with fall-through, not exec of a preserved hook
+
+Point 2 says the shim "execs the preserved hook with the same
+stdin/arguments after its own scan passes". Given probe 2, an exec-based
+shim would exec and never return, so any beads section appended *below* it
+would be dead code while `bd hooks list` still reported beads as installed -
+a participant silently not running, which is precisely what the composition
+rule forbids.
+
+What shipped (`HookInstaller` in
+`skills/wurk:kit/scripts/outbound_scan.rb`) instead inserts a
+marker-delimited block (`# --- BEGIN WURK OUTBOUND SCAN v1 ---` /
+`# --- END WURK OUTBOUND SCAN v1 ---`) immediately after the shebang of the
+`pre-push` file, leaving everything else byte for byte, and **falls
+through** on a clean scan - the block contains no `exit 0`. So the
+pre-existing content, and anything a later `bd hooks install` appends below,
+all still run in file order, with the wurk refusal first. Stdin is preserved
+by capturing git's ref lines to a temp file, running the scan against that
+file, and re-pointing the script's own stdin at it (`exec < "$tmp"`) before
+falling through, so later participants read the same lines. A nonzero scan
+exit removes the temp file and exits 1; a missing scan script or a missing
+`ruby` also exits 1, so the block fails closed rather than allowing a push
+it could not scan.
+
+Two composition details follow from probe 3 and are shipped as such: the
+installer refuses a `pre-push` whose shebang is not a POSIX shell rather
+than inserting shell into it, and it warns (`hook_participant_above_scan`)
+when it finds another participant, or an `exit` statement, above its own
+block - the case where the wurk scan would be reached late or not at all.
+Re-running the installer restores the ordering; nothing is auto-repaired.
+
+An existing wurk block is replaced in place when stale and left untouched
+when current, and `--uninstall` removes only the wurk block, never the file.
+
+### Correction 2: `core.hooksPath` means the hooks directory is not always per-checkout
+
+Points 2, 5, and 6 assume the hooks directory is per-checkout ("Git
+worktrees share the common hooks directory, so one installed hook covers
+every worktree of a checkout"). That is true of a repo-scoped hooks
+directory and false when `core.hooksPath` points outside the checkout, as it
+does globally on the machine this work came from: installing there would
+silently convert the per-repo opt-in point 6 decided into a machine-wide
+gate. Installing into `.git/hooks` regardless would be worse - git would
+never run the hook, and a gate that looks armed and is not is the failure
+mode point 4's advisory line exists to prevent.
+
+What shipped: the installer resolves the effective hooks directory with
+`git rev-parse --git-path hooks` (probe 4), classifies it as `repo` when it
+lies inside the git common directory and `shared` otherwise, reports both
+`hooks_dir` and `hooks_dir_scope` in its envelope either way, and **refuses
+to install into a `shared` directory** with `shared_hooks_path` unless
+`--allow-shared-hooks-path` is passed. Per-repo remains the default;
+machine-wide stays available, explicit, and visible - the same
+never-widen-without-being-told rule `install.rb` applies to symlinks.
+
+The operator-side consequence, recorded because it is the shape the guard is
+actually used in: on a machine whose *global* `core.hooksPath` is a shared
+dotfiles hooks directory, a repo opts in by setting a repo-local
+`core.hooksPath` back to `.git/hooks`, which makes the installer classify
+that repo as `repo` and install there. The shared global hooks directory is
+deliberately left ungated - it would gate every repo on the machine, which
+is the widening the guard exists to refuse.
+
+### Answers to the Open questions
+
+All three are answered; none remain open.
+
+1. **`bd hooks install` preservation mechanics.** Answered by probes 1-3:
+   it appends a marker-delimited section, preserving prior content verbatim,
+   with no flag required, and it honors `core.hooksPath`. The consequence
+   for the ADR's advice is that re-running the wurk installer after
+   `bd hooks install` is **advice, not a hard requirement** - bd's append
+   does not disturb the wurk block - but the installer detects the
+   participant-above case and warns, so the advice has a mechanical prompt
+   behind it. Nothing auto-repairs it.
+2. **Cost of the full-database tracker scan.** Measured, not guessed:
+   `bd list --all --json` in this repo ran 0.25-0.28 s wall for ~188 KB
+   across 82 issues, three times. Cheap enough to sit inside every
+   `sync push`; no size-triggered warning was added.
+3. **Git-path payload shape.** Resolved to full content, not diffs: the
+   git-path scan reads the full post-image content of every added or
+   modified file in every newly published commit (renames included, so a
+   move cannot carry content past the gate), plus those commits' messages
+   and the ref names themselves. A diff-only form could miss a guarded term
+   introduced in a moved or renamed file, which is the case the question was
+   asked about.
+
+### Consequences of this amendment
+
+- No behavior changes. The shipped implementation is unchanged by this
+  record; the record is what moved.
+- The original point 2, 5, 6, and Open questions text is left in place
+  unedited, marked with a pointer to this section, so the record still
+  shows what was decided and what was known when it was accepted.
+- `docs/architecture.md` and `docs/machine-config.md` already describe the
+  shipped mechanism; this amendment removes the disagreement between them
+  and the ADR they cite.
