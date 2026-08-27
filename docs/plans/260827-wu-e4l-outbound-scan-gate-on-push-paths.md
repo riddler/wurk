@@ -771,8 +771,8 @@ surfaces that. Document both facts in Phase 6.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `ruby skills/wurk:kit/scripts/test/run.rb` passes
-- [ ] Tests using a `Dir.mktmpdir` hooks directory and `FakeSh` for the
+- [x] `ruby skills/wurk:kit/scripts/test/run.rb` passes
+- [x] Tests using a `Dir.mktmpdir` hooks directory and `FakeSh` for the
       `git rev-parse` calls cover: fresh install creates an executable
       `pre-push` containing the markers; re-install is a no-op (`unchanged`);
       install over a foreign hook preserves every original byte and places
@@ -781,11 +781,11 @@ surfaces that. Document both facts in Phase 6.
       reports the same actions; `--uninstall` removes only our block;
       refusal on a non-shell shebang; refusal on a `BEGIN` with no `END`;
       refusal on `shared` scope without the flag, and success with it
-- [ ] A test asserts the generated block contains no backtick and does not
+- [x] A test asserts the generated block contains no backtick and does not
       contain the banned push phrase outside a comment line
-- [ ] A test executes the generated block with `/bin/sh -n` (syntax check
+- [x] A test executes the generated block with `/bin/sh -n` (syntax check
       only, no side effects) and asserts it parses
-- [ ] `contract_test.rb` passes unchanged
+- [x] `contract_test.rb` passes unchanged
 
 #### Manual Verification:
 - [ ] In a throwaway repo with a local `core.hooksPath`, install, then run
@@ -1139,6 +1139,26 @@ of blocking here.
 - [ ] Confirm a term present only in a commit message is reported
 - [ ] Confirm the printed refusal names locations and counts and shows no
       content
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 4
+
+- [ ] In a throwaway repo with a local `core.hooksPath`, install, then run
+      `bd hooks install`, then confirm both blocks are present and the wurk
+      block is above the beads block
+- [ ] With a fixture patterns file configured, attempt a real push of a
+      commit containing the fixture token to a local bare remote and confirm
+      git refuses; remove the token, confirm it succeeds
+- [ ] Confirm the refusal output contains no matched text
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,

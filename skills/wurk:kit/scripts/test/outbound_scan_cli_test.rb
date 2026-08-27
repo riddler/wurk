@@ -116,14 +116,10 @@ class OutboundScanCliTest < Minitest::Test
     end
   end
 
-  # sabotage: dispatch "install" to a real installer instead of a usage
-  # error -> red (Phase 4's job, not Phase 3's)
-  def test_install_is_not_yet_reachable
-    capture_stderr do
-      exc = assert_raises(SystemExit) { OutboundScanCli.run(["install"]) }
-      assert_equal 2, exc.status
-    end
-  end
+  # install is Phase 4's subcommand - see outbound_scan_install_test.rb for
+  # its coverage. It is still a dispatched subcommand (not a usage error) as
+  # of Phase 4, which is the property test_dispatches_every_known_subcommand
+  # over in that file checks.
 
   def capture_stderr
     original = $stderr
