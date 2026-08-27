@@ -486,8 +486,8 @@ tracker path, and the CLI cannot drift in what they disclose.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `ruby skills/wurk:kit/scripts/test/run.rb` passes
-- [ ] New `skills/wurk:kit/scripts/test/outbound_scan_test.rb` covers: a
+- [x] `ruby skills/wurk:kit/scripts/test/run.rb` passes
+- [x] New `skills/wurk:kit/scripts/test/outbound_scan_test.rb` covers: a
       pattern file with comments and blanks compiles only the real lines;
       missing / unreadable / empty file each produce their own error code; an
       uncompilable line reports its line number; a hit reports location and
@@ -497,12 +497,12 @@ tracker path, and the CLI cannot drift in what they disclose.
       refuses even with zero payload hits; an absent section is `armed:
       false` and does not refuse; a one-key section refuses with
       `scan_config_incomplete`
-- [ ] **The redaction test**: build a fixture pattern file matching an
+- [x] **The redaction test**: build a fixture pattern file matching an
       invented token, scan a payload containing that token, serialize the
       whole `Result#to_h` and the rendered envelope to JSON, and assert the
       token, the pattern text, and the pattern file's contents appear
       nowhere in either string
-- [ ] **The unparseable-line redaction test**: a pattern line that is an
+- [x] **The unparseable-line redaction test**: a pattern line that is an
       invalid regex and also contains an invented token; assert the token
       does not appear in the error message (this is the case where Ruby's
       own `RegexpError` would leak it)
@@ -1100,6 +1100,26 @@ before considering the plan fully landed.
 - [ ] Nothing in the diff names or hints at any real guarded term, and
       `docs/machine-config.md` carries no pattern text and no filesystem
       path outside a `<placeholder>` form
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 2
+
+- [ ] Read `lib/outbound_scan.rb` end to end asking one question: is there
+      any path by which pattern text or matched text reaches a string that
+      leaves this object?
+- [ ] The suite passes on a machine with no `~/.claude/wurk.local.json`
+- [ ] Every fixture in this phase uses invented nonsense tokens written
+      inline in the test, and no fixture reads anything outside the repo
+      (a property of how the tests are written, so it is read, not run)
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
