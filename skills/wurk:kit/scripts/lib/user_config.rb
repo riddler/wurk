@@ -38,8 +38,9 @@ class UserConfig
   # Manifest::KNOWN: nested sections list their own keys; a section absent
   # from this map is not validated further.
   KNOWN = {
-    nil => %w[wurk tmux],
-    "tmux" => %w[permission_mode]
+    nil => %w[wurk tmux outbound_scan],
+    "tmux" => %w[permission_mode],
+    "outbound_scan" => %w[patterns_file control_term]
   }.freeze
 
   DEFAULTS = {
@@ -129,6 +130,28 @@ class UserConfig
     fetch("tmux.permission_mode")
   end
 
+  # The path to the operator's outbound-scan pattern file, or nil if the
+  # section (or this key within it) is absent. No default: absent means
+  # disarmed, and a default here would invent a policy the machine never
+  # opted into.
+  def outbound_scan_patterns_file
+    fetch("outbound_scan.patterns_file")
+  end
+
+  # The positive-control token the scan pipeline must be able to hit before
+  # a zero-hit payload result is trusted. No default, same reasoning as
+  # outbound_scan_patterns_file.
+  def outbound_scan_control_term
+    fetch("outbound_scan.control_term")
+  end
+
+  # Whether the machine declares an outbound scan at all. False means the
+  # gate is disarmed and pushes are allowed with an advisory; it never
+  # means "scanned clean".
+  def outbound_scan_declared?
+    raw.key?("outbound_scan")
+  end
+
   # Dotted lookup with defaults applied. Returns nil for an absent optional
   # key that has no default.
   def fetch(dotted)
@@ -145,6 +168,7 @@ class UserConfig
   def validate!
     validate_version
     validate_enums
+    validate_outbound_scan
     collect_unknown_keys(raw, nil)
   end
 
@@ -163,6 +187,42 @@ class UserConfig
       next if allowed.include?(value)
 
       errors << "#{path}: #{dotted} is #{value.inspect}; expected one of #{allowed.join(', ')}"
+    end
+  end
+
+  # Shape validation only - no filesystem access. Whether the pattern file
+  # exists, is readable, and is non-empty is a scan-time concern (see
+  # lib/outbound_scan.rb), not a load-time one: UserConfig is a parser and
+  # must stay cheap enough for every script to require unconditionally.
+  #
+  # A section with exactly one of the two keys is deliberately NOT an error
+  # here. A machine may carry a half-written section that only matters when
+  # something actually scans; making it a load-time error would block
+  # tmux_window.rb open and every other unrelated script on a config problem
+  # that has nothing to do with them. The scan engine blocks on it instead.
+  def validate_outbound_scan
+    return unless raw.key?("outbound_scan")
+
+    section = raw["outbound_scan"]
+    unless section.is_a?(Hash)
+      errors << "#{path}: outbound_scan must be a JSON object, got #{section.class}"
+      return
+    end
+
+    if section.empty?
+      errors << "#{path}: outbound_scan is present but configures neither patterns_file nor control_term"
+      return
+    end
+
+    %w[patterns_file control_term].each do |key|
+      next unless section.key?(key)
+
+      value = section[key]
+      if !value.is_a?(String)
+        errors << "#{path}: outbound_scan.#{key} must be a string, got #{value.class}"
+      elsif value.strip.empty?
+        errors << "#{path}: outbound_scan.#{key} must not be blank"
+      end
     end
   end
 
@@ -208,6 +268,7 @@ module UserConfigCli
       env.data[:valid] = config.valid?
       env.data[:errors] = config.errors
       env.data[:tmux_permission_mode] = config.tmux_permission_mode
+      env.data[:outbound_scan_declared] = config.outbound_scan_declared?
 
       config.warnings.each { |w| env.warn(code: "unknown_key", message: w) }
       config.errors.each { |e| env.block!(code: "invalid", message: e) }
