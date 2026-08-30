@@ -914,6 +914,38 @@ class GateTest < Minitest::Test
     assert_empty result[:missing]
   end
 
+  # sabotage: drop the `i` flag from SABOTAGE_NOTE_RE -> red (the
+  # capitalised note reads as missing, which is exactly the wu-meh
+  # false positive)
+  def test_sabotage_scan_accepts_a_capitalised_house_style_note
+    diff = <<~DIFF
+      diff --git a/test/acme/foo_test.exs b/test/acme/foo_test.exs
+      --- a/test/acme/foo_test.exs
+      +++ b/test/acme/foo_test.exs
+      @@ -10,0 +11,5 @@
+      +  # Sabotage: enter_states/2 skips the initial child -> red
+      +  test "does the thing" do
+      +  end
+      +  # Sabotage: n/a - generated corpus fixture
+      +  test "does the other thing" do
+    DIFF
+    file = <<~EX
+      defmodule Acme.FooTest do
+        # Sabotage: enter_states/2 skips the initial child -> red
+        test "does the thing" do
+        end
+        # Sabotage: n/a - generated corpus fixture
+        test "does the other thing" do
+        end
+      end
+    EX
+
+    result = Gate.scan_sabotage(diff, test_re: EXUNIT_TEST_RE,
+                                        file_reader: sabotage_files("test/acme/foo_test.exs" => file))
+
+    assert_empty result[:missing]
+  end
+
   # sabotage: change `i -= 1` to `i -= 2` in sabotage_comment_block_above? ->
   # red
   def test_sabotage_scan_accepts_a_two_line_wrapped_note
