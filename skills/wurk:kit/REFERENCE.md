@@ -354,7 +354,8 @@ the checkout root); `data.gate_cwd` reports the resolved directory. See
   (exit 2), not a narrower run.
 - **`data.sabotage.missing` and `data.sabotage.unverifiable` are a report,
   not a gate.** Neither ever blocks or flips `ok`. A present `# sabotage:`
-  note (either a real mutation or a stated `n/a` exemption) is not evidence
+  note (either a real mutation or a stated `n/a` exemption; the prefix is
+  matched case-insensitively, so `# Sabotage:` house style counts) is not evidence
   the mutation described was actually run against broken code - only reading
   the diff by hand and confirming the test failed for the right reason is.
   `/commit`'s own Step 0 carries that judgment call; this script only reports

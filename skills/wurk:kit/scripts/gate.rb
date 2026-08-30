@@ -69,11 +69,14 @@ module Gate
   # Matches both accepted note forms - a real mutation
   # (`# sabotage: <what> -> red`) and a stated exemption
   # (`# sabotage: n/a - <why>`) - because both start with the same prefix.
-  # Presence is all this checks: docs/testing.md and /wurk:commit's Step 0 own the
+  # Case-insensitive: consumer repos write the prefix as `# sabotage:` or
+  # `# Sabotage:` (house style differs per repo, and the operator ruled
+  # 2026-08-27 to fix the scanner, not the convention). Presence is all
+  # this checks: docs/testing.md and /wurk:commit's Step 0 own the
   # judgment call about whether the mutation was actually run. This is
   # wurk's own comment-shape grammar, not consumer data - it stays a
   # constant.
-  SABOTAGE_NOTE_RE = /#\s*sabotage:/.freeze
+  SABOTAGE_NOTE_RE = /#\s*sabotage:/i.freeze
 
   # Any comment line, used to walk the contiguous comment block above a test
   # line - a `# sabotage:` note may wrap across several `#`-prefixed lines,
