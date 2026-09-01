@@ -372,6 +372,57 @@ module Gate
       [res, report]
     end
 
+    # The last lines of the gate command's captured output, where a gate that
+    # prints a trailing VERDICT/summary line puts its verdict. Combines stdout
+    # and stderr because a gate command may write its failure to either.
+    GATE_OUTPUT_TAIL_LINES = 40
+
+    def gate_output_tail(res)
+      [res.out, res.err]
+        .map(&:to_s)
+        .reject(&:empty?)
+        .join("\n")
+        .lines
+        .last(GATE_OUTPUT_TAIL_LINES)
+        .join
+        .strip
+    end
+
+    # A structured summary of a tier-0 gate command that exited non-zero (or
+    # timed out). Tier 0 has no per-stage report, so without this the failure
+    # is illegible: the envelope is {ok:false, stages:[]} and nothing else,
+    # and an empty stages array reads as "nothing needed checking" exactly as
+    # easily as "the gate ran and failed". This is the only place that
+    # ambiguity gets resolved, so it carries the exit status, the timeout
+    # flag, and the output tail rather than leaving all three in res, which
+    # the envelope never surfaces.
+    def gate_failure_output(res)
+      {
+        exit_status: res.status && res.status.exitstatus,
+        timed_out: res.timed_out?,
+        output_tail: gate_output_tail(res)
+      }
+    end
+
+    # The human-readable companion to data.gate_output. States in one sentence
+    # the thing the empty stages array otherwise leaves ambiguous: the gate
+    # ran and failed, and stages is empty because this project reports at
+    # tier 0 (no machine-readable per-stage report), NOT because nothing was
+    # checked. The timeout case is named separately - a killed gate that never
+    # printed its verdict is the shape most often misread as a pass.
+    def tier0_failure_message(res)
+      if res.timed_out?
+        "the tier-0 gate command timed out and was killed before it finished; data.stages is " \
+          "empty because no per-stage report was produced, not because nothing needed checking - " \
+          "see data.gate_output for the captured output tail"
+      else
+        code = res.status && res.status.exitstatus
+        "the tier-0 gate command exited #{code.nil? ? 'non-zero' : code} and this project has no " \
+          "machine-readable report command; data.stages is empty because none was reported, not " \
+          "because nothing needed checking - see data.gate_output for the exit status and output tail"
+      end
+    end
+
     def build_parser(options)
       Cli.build("gate.rb [--profile loop]", options) do |opts|
         opts.separator ""
@@ -526,6 +577,9 @@ module Gate
       # shows it via Sh.render; this makes it machine-readable for the
       # skills.
       env.data[:gate_cwd] = manifest.gate_chdir
+      # Populated only on a tier-0 failure (below); nil otherwise so the key is
+      # always present. Tier 1 already carries its failure in data.stages.
+      env.data[:gate_output] = nil
 
       if loop_mode
         env.data[:attested] = false
@@ -565,7 +619,16 @@ module Gate
       # the other: a tier-0 green is "the gate command passed", never "a full
       # attested gate is green".
       if tier.zero?
-        env.fail! unless res.success?
+        unless res.success?
+          # Without this, a tier-0 failure is {ok:false, stages:[]} with no
+          # message and the command's own output surfaced nowhere - an empty
+          # stages array that reads as "nothing needed checking" as readily as
+          # "the gate failed". data.gate_output + this warning make which one
+          # it is legible; the timeout case is called out by name.
+          env.data[:gate_output] = gate_failure_output(res)
+          env.warn(code: "gate_tier0_failure", message: tier0_failure_message(res))
+          env.fail!
+        end
       elsif report["status"] && report["status"] != "ok"
         env.fail!
       end
