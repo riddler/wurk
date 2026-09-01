@@ -633,6 +633,71 @@ class GateTest < Minitest::Test
     end
   end
 
+  # A tier-0 failure must be legible. Without data.gate_output and the paired
+  # warning, the envelope is {ok:false, stages:[]} with the command's own
+  # output surfaced nowhere, and an empty stages array reads as "nothing
+  # needed checking" exactly as readily as "the gate ran and failed".
+  #
+  # sabotage: drop the data.gate_output / warn(gate_tier0_failure) branch -> red
+  def test_tier_0_failure_carries_a_legible_diagnostic
+    in_tmp_cwd(fixture: "gate_tier0") do
+      expect_elixir_diff
+      @fake.expect(%w[make check], out: "compiling...\nboom: it failed\n", err: "stderr detail\n",
+                                    exitstatus: 3)
+
+      _code, env = run_gate
+
+      out = env["data"]["gate_output"]
+      refute_nil out, "a tier-0 failure must carry data.gate_output"
+      assert_equal 3, out["exit_status"]
+      assert_equal false, out["timed_out"]
+      assert_match(/boom: it failed/, out["output_tail"])
+      assert_match(/stderr detail/, out["output_tail"])
+
+      warning = env["warnings"].find { |w| w["code"] == "gate_tier0_failure" }
+      refute_nil warning, "a tier-0 failure must warn"
+      assert_match(/not because nothing needed checking/, warning["message"])
+    end
+  end
+
+  # A killed/timed-out gate that never printed its verdict is the tier-0
+  # failure most often misread as a pass; the diagnostic names it as a timeout
+  # rather than an ordinary non-zero exit.
+  #
+  # sabotage: collapse the timed_out branch of tier0_failure_message -> red
+  def test_tier_0_timeout_is_reported_as_a_timeout
+    in_tmp_cwd(fixture: "gate_tier0") do
+      expect_elixir_diff
+      @fake.expect(%w[make check], out: "started...\n", timed_out: true, exitstatus: nil)
+
+      code, env = run_gate
+
+      assert_equal 1, code
+      assert_equal false, env["ok"]
+      out = env["data"]["gate_output"]
+      assert_equal true, out["timed_out"]
+      assert_nil out["exit_status"]
+      warning = env["warnings"].find { |w| w["code"] == "gate_tier0_failure" }
+      refute_nil warning
+      assert_match(/timed out/, warning["message"])
+    end
+  end
+
+  # A green tier-0 run is unambiguous (ok:true), so it manufactures no failure
+  # diagnostic - gate_output stays nil rather than reading as a failure.
+  #
+  # sabotage: set data.gate_output on the green path too -> red
+  def test_tier_0_green_has_no_gate_output
+    in_tmp_cwd(fixture: "gate_tier0") do
+      expect_elixir_diff
+      @fake.expect(%w[make check], out: "fine\n")
+
+      _code, env = run_gate
+
+      assert_nil env["data"]["gate_output"]
+    end
+  end
+
   # No gate.attest command means "prove it was a full gate" degrades to the
   # exit code of the run - and says so, rather than reporting an attestation
   # that never happened (docs/gate-contract.md, degradation summary).
