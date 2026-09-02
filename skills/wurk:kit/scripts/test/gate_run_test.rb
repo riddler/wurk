@@ -132,6 +132,63 @@ class GateRunTest < Minitest::Test
     end
   end
 
+def test_start_on_an_unusable_run_dir_blocks_with_an_envelope
+  in_tmp_repo("gate_tier1") do |dir|
+    file_parent = File.join(dir, "not-a-dir")
+    File.write(file_parent, "")
+
+    code, env = run_gr(%W[start --run-dir #{File.join(file_parent, "run")}])
+
+    assert_equal 1, code
+    refute env["ok"]
+    assert_equal "run_dir_unusable", env["blocked"].first["code"]
+  end
+end
+
+  # Both of start's filesystem preconditions - the lock path and the run dir
+  # - must leave via the envelope when the filesystem refuses them. An
+  # unhandled Errno here would reach a caller as a backtrace on stderr and
+  # nothing on stdout, which is the one thing the envelope contract forbids.
+  # The parent is made unwritable rather than made a file on purpose: a lock
+  # path that already EXISTS is contention (Errno::EEXIST), a different
+  # answer that Lock.try_acquire is right to keep.
+  def test_start_on_an_unusable_lock_path_blocks_with_an_envelope
+    in_tmp_repo("gate_tier1") do |dir|
+      closed = File.join(dir, "closed")
+      FileUtils.mkdir_p(closed)
+      File.chmod(0o500, closed)
+
+      begin
+        code, env = run_gr(%W[start --run-dir #{dir}/run --gate-lock #{File.join(closed, "gate")}
+                              --campaign c1 --bead zz-1 --wait-seconds 0])
+
+        assert_equal 1, code
+        refute env["ok"]
+        assert_equal "lock_path_unusable", env["blocked"].first["code"]
+      ensure
+        File.chmod(0o700, closed)
+      end
+    end
+  end
+
+  def test_start_on_an_unusable_run_dir_blocks_with_an_envelope
+    in_tmp_repo("gate_tier1") do |dir|
+      closed = File.join(dir, "closed")
+      FileUtils.mkdir_p(closed)
+      File.chmod(0o500, closed)
+
+      begin
+        code, env = run_gr(%W[start --run-dir #{File.join(closed, "run")}])
+
+        assert_equal 1, code
+        refute env["ok"]
+        assert_equal "run_dir_unusable", env["blocked"].first["code"]
+      ensure
+        File.chmod(0o700, closed)
+      end
+    end
+  end
+
   def test_start_usage_error_on_slots_dir_without_slots_count
     in_tmp_repo("gate_tier1") do |dir|
       err = capture_io_stderr do

@@ -66,7 +66,19 @@ module LockCli
 
       return emit_acquire_dry_run(env, io, specs, order, owner) if options[:dry_run]
 
-      result = Lock.acquire_all(specs, owner: owner, wait_seconds: options[:wait_seconds], poll_seconds: options[:poll_seconds])
+begin
+  result = Lock.acquire_all(specs, owner: owner, wait_seconds: options[:wait_seconds], poll_seconds: options[:poll_seconds])
+rescue SystemCallError => e
+  # A lock path the filesystem will not let us create (read-only mount,
+  # no permission, missing parent) is not contention and never becomes
+  # true by waiting - it is a caller error about WHERE the lock lives.
+  # It still owes the envelope contract an envelope rather than a
+  # backtrace, so it is reported as blocked, not raised.
+  env.data[:acquired] = []
+  env.block!(code: "lock_path_unusable",
+             message: "cannot create a lock directory under the requested path: #{e.message}")
+  return env.emit(io)
+end
 
       env.data[:order] = result[:order]
       env.data[:waited_seconds] = result[:waited_seconds]
