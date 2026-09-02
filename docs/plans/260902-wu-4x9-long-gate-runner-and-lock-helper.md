@@ -510,12 +510,12 @@ validation failure, and the `long < short` warning fires.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] `manifest_test.rb` asserts `gate_long_timeout_seconds == 3600` for a
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] `manifest_test.rb` asserts `gate_long_timeout_seconds == 3600` for a
       manifest that omits the field
-- [ ] `manifest_test.rb` asserts a zero/negative/non-integer value fails
+- [x] `manifest_test.rb` asserts a zero/negative/non-integer value fails
       validation
-- [ ] `grep -n long_timeout_seconds docs/manifest.md` returns hits in the
+- [x] `grep -n long_timeout_seconds docs/manifest.md` returns hits in the
       schema block, the defaults list, and the validation list
 
 #### Manual Verification:
@@ -870,6 +870,25 @@ of blocking here.
 - [ ] Run an existing `Sh.run` caller by hand (`repo_state.rb`) before and
       after this phase and confirm identical output and comparable timing -
       the blocking path must be untouched
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 3
+
+- [ ] Set `gate.long_timeout_seconds` below `gate.timeout_seconds` in a
+      scratch manifest and confirm the warning fires with wording that names
+      which field bounds which kind of run
+- [ ] Run `manifest.rb`-consuming scripts (`gate.rb`, `worktree_create.rb
+      --dry-run`) against a manifest that omits the new field and confirm no
+      new warning or unknown-key message appears
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,

@@ -80,7 +80,7 @@ class Manifest
     "beads.areas" => %w[labels lands_alone always_batchable],
     "forge" => %w[kind labels],
     "gate" => %w[cwd full loop report report_loop attest guard_ledger build_paths also_gated_paths moving_files
-                 project_level_skips not_applicable_skips sabotage timeout_seconds],
+                 project_level_skips not_applicable_skips sabotage timeout_seconds long_timeout_seconds],
     "gate.sabotage" => %w[test_roots test_pattern exempt_prefixes],
     "parallelism" => %w[model worktrees_dir trust warm_clone warm_globs warm repair_when repair post_branch
                         timeout_seconds],
@@ -106,6 +106,7 @@ class Manifest
     "artifacts.filename" => "YYMMDD-[id-]kebab",
     "judge.model" => "sonnet",
     "gate.timeout_seconds" => 600,
+    "gate.long_timeout_seconds" => 3600,
     "parallelism.timeout_seconds" => 600,
     "tmux.layout" => "window-per-issue"
   }.freeze
@@ -299,6 +300,18 @@ class Manifest
   # deps fetch, full test battery) can plausibly need longer than that cold.
   def gate_timeout_seconds
     fetch("gate.timeout_seconds")
+  end
+
+  # Seconds the detached long-gate runner (gate_run.rb) allows the gate
+  # command before killing it. Defaults to 3600. Deliberately a separate
+  # field from gate.timeout_seconds rather than a multiple of it:
+  # gate.timeout_seconds bounds a FOREGROUND gate run whose caller (a
+  # subagent's Bash tool) is blocked waiting on it, so it has to stay under
+  # the harness's own hard cap; this one bounds the DETACHED long-gate run,
+  # which exists precisely to outlive that cap and run unattended, so it
+  # needs its own, much longer, bound.
+  def gate_long_timeout_seconds
+    fetch("gate.long_timeout_seconds")
   end
 
   # The repo-root-relative directory the five consumer gate commands run in,
@@ -581,6 +594,7 @@ class Manifest
     validate_judge
     validate_rebase
     validate_gate_timeout_seconds
+    validate_gate_long_timeout_seconds
     validate_parallelism_timeout_seconds
     validate_gate_cwd
     validate_tmux
@@ -648,6 +662,28 @@ class Manifest
     return if value.is_a?(Integer) && value.positive?
 
     errors << "#{path}: gate.timeout_seconds must be a positive integer, got #{value.inspect}"
+  end
+
+  # validate_gate_long_timeout_seconds needs no nil guard, same reason as
+  # validate_gate_timeout_seconds: fetch applies the 3600 default, so the
+  # value is only ever absent-and-defaulted or explicitly wrong. Also warns
+  # (never blocks) when the long timeout is shorter than the short one -
+  # legal, since nothing enforces an ordering between the two fields, but
+  # almost certainly a mistake given what each one bounds.
+  def validate_gate_long_timeout_seconds
+    value = fetch("gate.long_timeout_seconds")
+    unless value.is_a?(Integer) && value.positive?
+      errors << "#{path}: gate.long_timeout_seconds must be a positive integer, got #{value.inspect}"
+      return
+    end
+
+    short = fetch("gate.timeout_seconds")
+    return unless short.is_a?(Integer) && value < short
+
+    warnings << "#{path}: gate.long_timeout_seconds (#{value}) is less than gate.timeout_seconds " \
+                "(#{short}) - gate.timeout_seconds bounds a foreground gate run whose caller is " \
+                "blocked waiting on it, gate.long_timeout_seconds bounds the detached long-gate run " \
+                "that exists to outlive it, so this is legal but almost certainly a mistake"
   end
 
   # validate_parallelism_timeout_seconds needs no nil guard, same reason as

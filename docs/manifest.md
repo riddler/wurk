@@ -66,10 +66,17 @@ defaults are listed under "Defaults" below.
       "test_pattern": "\\btest\\s+\"",
       "exempt_prefixes": ["test/scion_tests/", "test/scxml_tests/"]
     },
-    "timeout_seconds": 600            // (opt) default 600; seconds Sh.run allows
+    "timeout_seconds": 600,           // (opt) default 600; seconds Sh.run allows
                                       // gate.full/gate.loop and gate.attest before
                                       // killing them - raise it for a gate that
                                       // runs inside e.g. docker-compose
+    "long_timeout_seconds": 3600      // (opt) default 3600; seconds the detached
+                                      // long-gate runner (gate_run.rb) allows the
+                                      // gate command before killing it. Separate
+                                      // from timeout_seconds: that one bounds a
+                                      // FOREGROUND run whose caller is blocked, this
+                                      // one bounds the DETACHED run that exists to
+                                      // outlive that bound
   },
 
   "parallelism": {
@@ -615,6 +622,7 @@ Defaults applied when a key is absent: `repo.default_branch` = `main`,
 `commits.trailer.key` = `Refs`, `models.direction` = `opus`,
 `artifacts.filename` = `YYMMDD-[id-]kebab`, `judge.model` = `sonnet`,
 `rebase.auto_resolve_paths` = `[]`, `gate.timeout_seconds` = `600`,
+`gate.long_timeout_seconds` = `3600`,
 `parallelism.timeout_seconds` = `600`, `tmux.layout` = `window-per-issue`.
 
 Everything else absent means the capability is off, and the scripts say so
@@ -656,6 +664,11 @@ gate commands run at the root of the checkout being gated.
   not disjointness surfaces.
 - **`gate.timeout_seconds` must be a positive integer.** Zero, a negative
   number, a float, and a non-numeric value all block.
+- **`gate.long_timeout_seconds` must be a positive integer.** Same rule as
+  `gate.timeout_seconds` above. A value less than `gate.timeout_seconds` is
+  legal but warns, naming which field bounds which kind of run - it is
+  almost certainly a mistake, since the long-gate run exists to outlive the
+  short one, not the other way around.
 - **`parallelism.timeout_seconds` must be a positive integer.** Same rule,
   same validation, as `gate.timeout_seconds` above.
 - **`gate.cwd` must be a relative subdirectory path.** An absolute path,

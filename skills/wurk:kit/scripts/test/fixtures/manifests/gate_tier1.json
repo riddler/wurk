@@ -56,7 +56,8 @@
       "test_roots": ["test/"],
       "test_pattern": "\\btest\\s+\"",
       "exempt_prefixes": ["test/scion_tests/", "test/scxml_tests/"]
-    }
+    },
+    "long_timeout_seconds": 3600
   },
   "parallelism": {
     "model": "worktree-per-issue"
