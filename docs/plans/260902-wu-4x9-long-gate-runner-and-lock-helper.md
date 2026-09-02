@@ -319,14 +319,14 @@ directory and records the intended commands.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] `skills/wurk:kit/scripts/lock.rb` exists, starts with
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] `skills/wurk:kit/scripts/lock.rb` exists, starts with
       `#!/usr/bin/env ruby`, and is executable (asserted by
       `contract_test.rb:544-552`)
-- [ ] `lock_test.rb` asserts a dead-holder probe returns
+- [x] `lock_test.rb` asserts a dead-holder probe returns
       `stale: true, staleness_reason: "dead_holder_pid"`
-- [ ] `lock_test.rb` asserts `--dry-run` creates nothing on disk
-- [ ] `lock_test.rb`'s contention test asserts the injected sleeper recorded
+- [x] `lock_test.rb` asserts `--dry-run` creates nothing on disk
+- [x] `lock_test.rb`'s contention test asserts the injected sleeper recorded
       at least one call **and** that the test's own wall clock stayed under
       0.5s - together these decide mechanically that the wait loop went
       through the seam and never reached `Kernel.sleep`
@@ -834,3 +834,30 @@ the meantime so the plan stays actionable.
 - Schema precedent: `skills/wurk:kit/scripts/lib/manifest.rb:108`,
   `docs/manifest.md:69-72`
 - Epic: `wu-ddi`. Bead: `wu-4x9`
+
+## Deferred Manual Verification
+
+Manual verification items are deferred during looped (--loop) execution and
+surfaced here once, rather than blocking after each phase. Confirm these
+before considering the plan fully landed.
+
+### Phase 1
+
+- [ ] Two shells contending on one lock dir behave as specified: the second
+      waits, then reports the first as the live holder
+- [ ] `kill -9` the first holder, then `lock.rb status` reports
+      `stale: true`, and `lock.rb clear` removes it
+- [ ] `lock.rb clear` on a live holder refuses and says why
+- [ ] Take a lock, then `Ctrl-C` the acquiring shell before releasing:
+      confirm the lock dir survives with its owner file intact and that
+      `status` still reads it (the crash case the whole probe exists for)
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
