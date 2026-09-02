@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "minitest/autorun"
+require "tmpdir"
 require_relative "../lib/sh"
 require_relative "../lib/envelope"
 
@@ -93,5 +94,152 @@ class ShTest < Minitest::Test
 
     assert_equal "clean", result.out
     assert_equal [["git", "status"]], fake.calls.map(&:argv)
+  end
+
+  def test_spawn_detached_returns_a_live_pid_and_writes_output_to_out_path
+    Dir.mktmpdir do |dir|
+      out_path = File.join(dir, "out.log")
+
+      pid = Sh.spawn_detached(["/bin/sh", "-c", "echo hello"], out_path: out_path)
+
+      begin
+        _, status = Process.waitpid2(pid)
+        assert status.success?
+        assert_equal "hello\n", File.read(out_path)
+      rescue Errno::ECHILD
+        # Process.detach already reaped it - the assertion above on the
+        # written file is the meaningful one regardless.
+        sleep 0.2
+        assert_equal "hello\n", File.read(out_path)
+      end
+    end
+  end
+
+  def test_spawn_detached_starts_its_own_process_group
+    Dir.mktmpdir do |dir|
+      out_path = File.join(dir, "out.log")
+
+      pid = Sh.spawn_detached(["/bin/sleep", "1"], out_path: out_path)
+
+      assert_equal pid, Process.getpgid(pid)
+      Process.kill("TERM", pid)
+    rescue Errno::ESRCH
+      # already exited before we could kill it - fine, the assertion ran
+    end
+  end
+
+  def test_spawn_detached_survives_the_caller_continuing_past_the_call
+    Dir.mktmpdir do |dir|
+      out_path = File.join(dir, "out.log")
+
+      pid = Sh.spawn_detached(["/bin/sh", "-c", "sleep 0.3; echo done"], out_path: out_path)
+
+      # The caller keeps running immediately; spawn_detached does not block
+      # on the child the way Sh.run does.
+      assert_equal "", File.read(out_path)
+
+      sleep 0.5
+      assert_equal "done\n", File.read(out_path)
+    rescue Errno::ESRCH
+      flunk "spawned process #{pid} was already gone - detached spawn did not outlive the call"
+    end
+  end
+
+  def test_run_streaming_writes_the_log_incrementally
+    Dir.mktmpdir do |dir|
+      log_path = File.join(dir, "run.log")
+
+      thread = Thread.new do
+        Sh.run_streaming(["/bin/sh", "-c", "echo first; sleep 0.4; echo second"], log_path: log_path)
+      end
+
+      sleep 0.15
+      assert_match(/first/, File.read(log_path))
+
+      result = thread.value
+      assert result.success?
+      assert_match(/first/, File.read(log_path))
+      assert_match(/second/, File.read(log_path))
+    end
+  end
+
+  def test_run_streaming_returns_a_result_whose_out_is_the_tail
+    Dir.mktmpdir do |dir|
+      log_path = File.join(dir, "run.log")
+
+      result = Sh.run_streaming(["/bin/echo", "-n", "hello"], log_path: log_path)
+
+      assert result.success?
+      assert_equal "hello", result.out
+      assert_equal "hello", File.read(log_path)
+    end
+  end
+
+  def test_run_streaming_on_timeout_kills_the_whole_process_group
+    Dir.mktmpdir do |dir|
+      log_path = File.join(dir, "run.log")
+      pid_file = File.join(dir, "grandchild.pid")
+
+      # bash -c backgrounds a grandchild sleep and then waits on it. Both
+      # bash and the backgrounded sleep share the process group created by
+      # pgroup: true, so killing the group (not just bash's own pid) is
+      # what's needed to reap the grandchild.
+      script = "sleep 30 & echo $! > #{pid_file}; wait"
+      result = Sh.run_streaming(["/bin/bash", "-c", script], timeout: 0.3, log_path: log_path)
+
+      assert result.timed_out?
+      refute result.success?
+
+      # Give the pid file a moment to land, then confirm the grandchild is
+      # actually gone rather than orphaned.
+      deadline = Time.now + 2
+      grandchild_pid = nil
+      until grandchild_pid || Time.now > deadline
+        grandchild_pid = File.read(pid_file).strip.to_i if File.exist?(pid_file) && !File.zero?(pid_file)
+        sleep 0.05
+      end
+      refute_nil grandchild_pid, "grandchild never recorded its pid - test setup broke"
+
+      sleep 0.3
+      assert_raises(Errno::ESRCH) { Process.kill(0, grandchild_pid) }
+    end
+  end
+
+  def test_fake_sh_spawn_detached_records_argv_and_returns_a_canned_pid
+    require_relative "support/fake_sh"
+    fake = FakeSh.new
+    Sh.runner = fake
+
+    pid = Sh.spawn_detached(["gate_run.rb", "supervise"], out_path: "/tmp/out.log")
+
+    assert_kind_of Integer, pid
+    assert_equal [["gate_run.rb", "supervise"]], fake.detached_calls.map(&:argv)
+    assert_equal ["/tmp/out.log"], fake.detached_calls.map(&:out_path)
+  end
+
+  def test_fake_sh_run_streaming_matches_an_expectation_and_writes_the_log
+    require_relative "support/fake_sh"
+    Dir.mktmpdir do |dir|
+      log_path = File.join(dir, "run.log")
+      fake = FakeSh.new
+      fake.expect(["make", "quality"], out: "ok", exitstatus: 0, log: "line one\nline two\n")
+      Sh.runner = fake
+
+      result = Sh.run_streaming(["make", "quality"], log_path: log_path)
+
+      assert_equal "ok", result.out
+      assert_equal "line one\nline two\n", File.read(log_path)
+      assert_equal [["make", "quality"]], fake.calls.map(&:argv)
+    end
+  end
+
+  def test_fake_sh_run_streaming_raises_on_an_unexpected_command
+    require_relative "support/fake_sh"
+    fake = FakeSh.new
+    Sh.runner = fake
+
+    assert_raises(FakeSh::UnexpectedCommand) do
+      Sh.run_streaming(["make", "quality"], log_path: "/tmp/whatever.log")
+    end
   end
 end

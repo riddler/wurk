@@ -91,6 +91,24 @@ class Sh
       runner.run(argv, chdir: chdir, timeout: timeout)
     end
 
+    # Starts argv detached from this process's lifetime, in its own process
+    # group, with stdout/stderr redirected to out_path. Returns the pid, not
+    # a Result - nobody downstream of a detached spawn is the child's parent,
+    # so there is no exit status to hand back here (see lib/sh.rb's own
+    # supervisor-design note in the long-gate-runner plan: whatever wants an
+    # exit status must be the process that actually waits on this pid).
+    def spawn_detached(argv, chdir: nil, out_path:)
+      runner.spawn_detached(argv, chdir: chdir, out_path: out_path)
+    end
+
+    # Same popen3 shape as #run, but the child runs in its own process group
+    # and its output is streamed to log_path as it arrives rather than only
+    # buffered - see RealRunner#run_streaming for the reason and the
+    # in-memory tail tradeoff.
+    def run_streaming(argv, chdir: nil, timeout: 60, log_path:)
+      runner.run_streaming(argv, chdir: chdir, timeout: timeout, log_path: log_path)
+    end
+
     # Renders argv the way it would be typed at a shell, for the `commands`
     # audit trail only - never used to actually execute anything.
     def render(argv, chdir: nil)
@@ -158,6 +176,75 @@ class Sh
       Result.new(out: "", err: start_failure_message(argv, chdir, e), status: StartFailureStatus.new)
     end
 
+    # Starts argv in its own process group, fully detached from this
+    # process's lifetime, with stdout/stderr redirected to out_path. Returns
+    # the pid. Its own process group (pgroup: true) is what lets a later
+    # signal reach the whole tree; #run above deliberately keeps its
+    # existing single-pid kill semantics (kill_process_group, below) so this
+    # method changes no existing call site.
+    def spawn_detached(argv, chdir: nil, out_path:)
+      opts = { pgroup: true, out: out_path, err: [:child, :out] }
+      opts[:chdir] = chdir if chdir
+      pid = Process.spawn(*argv, opts)
+      Process.detach(pid)
+      pid
+    end
+
+    # The number of trailing lines of combined stdout/stderr kept in memory
+    # for a streaming run's Result. The full output always lives on disk at
+    # log_path; this bound only protects a long-running gate from growing an
+    # unbounded in-memory buffer while it streams.
+    STREAMING_TAIL_LINES = 200
+
+    # Same popen3/thread/timeout shape as #run, with two differences: the
+    # reader threads also append every line to log_path as it arrives, so a
+    # poller elsewhere has something to tail while the command is still
+    # running, and the child starts in its own process group (pgroup: true)
+    # so a timeout kill signals the whole group instead of leaving
+    # grandchildren orphaned the way #run's single-pid kill can.
+    #
+    # The full output is on disk at log_path. The returned Result's #out and
+    # #err carry only the last STREAMING_TAIL_LINES lines of each stream, not
+    # the whole thing - a caller that needs the complete output must read
+    # log_path itself.
+    def run_streaming(argv, chdir: nil, timeout: 60, log_path:)
+      opts = { pgroup: true }
+      opts[:chdir] = chdir if chdir
+
+      out_tail = []
+      err_tail = []
+      status = nil
+      timed_out = false
+      log = File.open(log_path, "w")
+      log_mutex = Mutex.new
+
+      begin
+        Open3.popen3(*argv, opts) do |stdin, stdout, stderr, wait_thr|
+          stdin.close
+          out_thr = Thread.new { stream_to_log(stdout, log, log_mutex, out_tail) }
+          err_thr = Thread.new { stream_to_log(stderr, log, log_mutex, err_tail) }
+
+          unless wait_thr.join(timeout)
+            timed_out = true
+            kill_pgid(wait_thr.pid)
+            wait_thr.join(2)
+          end
+
+          out_thr.join
+          err_thr.join
+          status = timed_out ? TimeoutStatus.new : wait_thr.value
+        end
+      ensure
+        log.close
+      end
+
+      Result.new(out: out_tail.join, err: err_tail.join, status: status, timed_out: timed_out)
+    rescue SystemCallError => e
+      # Same rationale as #run's rescue above: Open3.popen3 can raise before
+      # a child exists at all (missing executable, bad chdir).
+      Result.new(out: "", err: start_failure_message(argv, chdir, e), status: StartFailureStatus.new)
+    end
+
     private
 
     # Names the concrete cause in the same message a reader sees in
@@ -171,10 +258,42 @@ class Sh
       "could not start command - #{detail}"
     end
 
+    # Reads io line by line, writing each line to log immediately (so a
+    # `tail -f` on log_path sees output as it happens) while keeping only
+    # the last STREAMING_TAIL_LINES lines in tail. Two threads (stdout and
+    # stderr) share log and log_mutex, so writes are serialized to keep a
+    # single line from interleaving with another mid-write.
+    def stream_to_log(io, log, log_mutex, tail)
+      io.each_line do |line|
+        log_mutex.synchronize do
+          log.write(line)
+          log.flush
+        end
+        tail << line
+        tail.shift while tail.length > STREAMING_TAIL_LINES
+      end
+    rescue IOError
+      # The stream was closed out from under us during shutdown; nothing
+      # left to read.
+    end
+
     def kill_process_group(pid)
       Process.kill("TERM", pid)
       sleep 0.2
       Process.kill("KILL", pid)
+    rescue Errno::ESRCH
+      # already exited
+    end
+
+    # Like kill_process_group, but signals the negative pid - the whole
+    # process group - instead of the single pid. Only used by
+    # #run_streaming's timeout path: #run keeps kill_process_group's
+    # single-pid semantics untouched (see the "Process groups, only on the
+    # new path" design note in the long-gate-runner plan).
+    def kill_pgid(pid)
+      Process.kill("TERM", -pid)
+      sleep 0.2
+      Process.kill("KILL", -pid)
     rescue Errno::ESRCH
       # already exited
     end

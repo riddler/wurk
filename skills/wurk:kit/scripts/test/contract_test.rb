@@ -121,6 +121,29 @@ module Contract
     hits
   end
 
+  # Returns lines that start a process directly instead of going through
+  # lib/sh.rb - the same family as system_or_backticks, for the primitives
+  # system_or_backticks doesn't see: Process.spawn, Process.detach,
+  # Process.fork, a bare fork(, IO.popen, Open3.*, and exec(. Scoped to
+  # process *creation*, not to the Process namespace as a whole - lock.rb's
+  # Process.kill(0, pid) and Process.pid start nothing and are exempt by
+  # this regex, deliberately, since they are the whole basis of the
+  # staleness probe (a blanket `Process\.` scan would make that rule and
+  # this one mutually unlandable).
+  def process_creation(content)
+    hits = []
+    each_code_line(content) do |code, lineno|
+      hits << lineno if code =~ /\bProcess\.spawn\b/ ||
+                         code =~ /\bProcess\.detach\b/ ||
+                         code =~ /\bProcess\.fork\b/ ||
+                         code =~ /(^|[^\w.])fork\s*\(/ ||
+                         code =~ /\bIO\.popen\b/ ||
+                         code =~ /\bOpen3\./ ||
+                         code =~ /(^|[^\w.])exec\s*\(/
+    end
+    hits
+  end
+
   # Returns argv-literal lines starting with "cp"/"rm"/"mv" that carry no
   # non-interactive flag anywhere on the same line.
   def unsafe_cp_rm_mv(content)
@@ -372,6 +395,22 @@ class ContractRulesTest < Minitest::Test
     assert_empty Contract.system_or_backticks(%(# never call system(...) here\n))
   end
 
+  def test_process_creation_detected
+    assert_equal [1], Contract.process_creation(%(Process.spawn(*argv, opts)\n))
+    assert_equal [1], Contract.process_creation(%(Process.detach(pid)\n))
+    assert_equal [1], Contract.process_creation(%(Process.fork { exit(0) }\n))
+    assert_equal [1], Contract.process_creation(%(pid = fork(&block)\n))
+    assert_equal [1], Contract.process_creation(%(IO.popen(["ls"])\n))
+    assert_equal [1], Contract.process_creation(%(Open3.popen3("ls")\n))
+    assert_equal [1], Contract.process_creation(%(exec("ls")\n))
+  end
+
+  def test_process_creation_exempts_liveness_probes_and_comments
+    assert_empty Contract.process_creation(%(Process.kill(0, pid)\n))
+    assert_empty Contract.process_creation(%(Process.pid\n))
+    assert_empty Contract.process_creation(%(# Open3.popen3 in a comment\n))
+  end
+
   def test_unsafe_cp_rm_mv_detected
     assert_equal [[1, "rm"]], Contract.unsafe_cp_rm_mv(%(Sh.run(["rm", path])\n))
     assert_empty Contract.unsafe_cp_rm_mv(%(Sh.run(["rm", "-rf", path])\n))
@@ -536,6 +575,20 @@ class ContractTest < Minitest::Test
     assert_empty offenders, "system(...)/backticks found (must go through Sh) in: #{offenders.join(', ')}"
   end
 
+  # lib/sh.rb is the one sanctioned place for Process.spawn/Process.detach/
+  # IO.popen/Open3.*/fork/exec - everything else, including lock.rb's
+  # Process.kill(0, pid) staleness probe, must go through it instead.
+  def test_no_process_creation_outside_sh_everything_goes_through_sh
+    sh_rb = File.join(SCRIPTS_ROOT, "lib", "sh.rb")
+    offenders = []
+    non_test_files.each do |file|
+      next if file == sh_rb
+
+      Contract.process_creation(File.read(file)).each { |lineno| offenders << "#{file}:#{lineno}" }
+    end
+    assert_empty offenders, "process creation found outside lib/sh.rb (must go through Sh) in: #{offenders.join(', ')}"
+  end
+
   # Every direct child of .claude/scripts/*.rb is a top-level, directly
   # invokable script and must carry the shebang and the executable bit. In
   # Phase 1 there are none yet (only lib/ and test/ files exist) - this test
@@ -691,6 +744,26 @@ class ContractTest < Minitest::Test
                    "the contract scan failed to catch a planted hardcoded default-branch ref"
       refute_empty Contract.forge_vocabulary(content),
                    "the contract scan failed to catch a planted forge-CLI vocabulary leak"
+    end
+  end
+
+  # A meta-check on the process-creation guardrail itself, in the same
+  # planted-fixture style as the check above: prove a Process.spawn dropped
+  # into a script outside lib/sh.rb is actually caught, both at the
+  # function level and by the real file scan that runs against
+  # non_test_files.
+  def test_meta_the_process_creation_scan_actually_catches_a_planted_violation
+    Dir.mktmpdir do |dir|
+      planted = File.join(dir, "planted.rb")
+      File.write(planted, %(Process.spawn(["git", "status"])\n))
+
+      refute_empty Contract.process_creation(File.read(planted)),
+                   "the process-creation scan failed to catch a planted Process.spawn"
+
+      offenders = []
+      Contract.process_creation(File.read(planted)).each { |lineno| offenders << "#{planted}:#{lineno}" }
+      refute_empty offenders,
+                   "the process-creation file scan failed to catch a planted Process.spawn outside lib/sh.rb"
     end
   end
 

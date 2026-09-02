@@ -438,13 +438,13 @@ open on the existing path.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] `sh_test.rb` asserts `Process.getpgid(pid) == pid` for a detached spawn
-- [ ] `sh_test.rb` asserts a grandchild of a `run_streaming` timeout victim
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] `sh_test.rb` asserts `Process.getpgid(pid) == pid` for a detached spawn
+- [x] `sh_test.rb` asserts a grandchild of a `run_streaming` timeout victim
       is reaped
-- [ ] `contract_test.rb` fails when a planted `Process.spawn` is added to a
+- [x] `contract_test.rb` fails when a planted `Process.spawn` is added to a
       script outside `lib/sh.rb` (meta-test)
-- [ ] `Sh.run`'s existing tests are unmodified and still pass
+- [x] `Sh.run`'s existing tests are unmodified and still pass
 
 #### Manual Verification:
 - [ ] A detached spawn genuinely outlives its launcher shell (`ps` after the
@@ -851,6 +851,25 @@ before considering the plan fully landed.
 - [ ] Take a lock, then `Ctrl-C` the acquiring shell before releasing:
       confirm the lock dir survives with its owner file intact and that
       `status` still reads it (the crash case the whole probe exists for)
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 2
+
+- [ ] A detached spawn genuinely outlives its launcher shell (`ps` after the
+      launcher exits)
+- [ ] The streamed log is readable with `tail -f` while the command runs
+- [ ] Run an existing `Sh.run` caller by hand (`repo_state.rb`) before and
+      after this phase and confirm identical output and comparable timing -
+      the blocking path must be untouched
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
