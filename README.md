@@ -17,8 +17,9 @@ land everywhere at once.
 ## Status
 
 Phase 2 (lifting the workflow into this repo) is underway and most of it is
-done: the kit's Ruby scripts layer, all 13 generic `wurk:*` skills, and the
-eight read-only research agents are ported and pass their test suite, and
+done: the kit's Ruby scripts layer, all 14 generic `wurk:*` skills, and the
+ten agents (eight read-only research agents plus the campaign pair) are
+ported and pass their test suite, and
 `install.rb` symlinks them into `~/.claude`. Phase 1 (parameterizing
 statifier-ex in place) landed on a statifier-ex branch but is not yet merged,
 which blocks the remaining phase 2 steps (slimming statifier-ex back down).
@@ -30,7 +31,7 @@ Phases 3 (predicator-ex adoption) and 4 (fixative) have not started. See
 ```
 skills/wurk:*/       generic skills (wurk:work, wurk:plan, wurk:commit, ...)
 skills/wurk:kit/     shared foundation: REFERENCE.md + the Ruby scripts layer
-agents/              the eight read-only research agents
+agents/              eight read-only research agents + wurk-repo-worker, wurk-fleet-scout
 install.rb           symlinks skills + agents into ~/.claude
 docs/                plan, architecture, manifest schema, gate contract
 docs/adr/            settled decisions; cite numbers instead of re-arguing
