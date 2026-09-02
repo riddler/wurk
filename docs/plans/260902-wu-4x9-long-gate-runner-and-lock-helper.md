@@ -714,12 +714,12 @@ unambiguous to the next author.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
       (this includes `contract_test.rb`'s scans over `REFERENCE.md`'s shell
       fences and every `SKILL.md`)
-- [ ] `grep -n "gate_run.rb" skills/wurk:kit/REFERENCE.md` and
+- [x] `grep -n "gate_run.rb" skills/wurk:kit/REFERENCE.md` and
       `grep -n "lock.rb" skills/wurk:kit/REFERENCE.md` both return hits
-- [ ] No skill cross-reference breaks (`contract_test.rb:652-668`)
+- [x] No skill cross-reference breaks (`contract_test.rb:652-668`)
 
 #### Manual Verification:
 - [ ] Follow the `gate_run.rb` section top to bottom in a scratch repo
@@ -914,6 +914,23 @@ of blocking here.
 - [ ] Run `gate.rb` normally in this repo afterward and confirm the
       foreground path is untouched: same envelope keys, same tier, same
       timeout behavior as before this phase
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 5
+
+- [ ] Follow the `gate_run.rb` section top to bottom in a scratch repo
+      using only what it says: `start`, then repeated `poll`, then read the
+      finished envelope. Confirm no step required knowledge from this plan
+      or from the script source.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,

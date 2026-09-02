@@ -386,6 +386,185 @@ the checkout root); `data.gate_cwd` reports the resolved directory. See
   `gate.rb` that writes `docs/quality-gate-changes.md` - `test/contract_test.rb`
   asserts that mechanically over every file under `scripts/`.
 
+## `gate_run.rb`: the long-gate runner
+
+Runs the manifest's gate detached, so a gate that outruns a foreground Bash
+timeout still finishes and reports rather than dying silently mid-run
+(`docs/research/260902-wu-4x9-subagent-long-gate-runs-and-locks.md`). Names
+no gate tool of its own: `start` resolves the same manifest fields `gate.rb`
+does (`gate.report`/`gate.report_loop`, falling back to `gate.full`/`gate.loop`,
+and `gate.cwd`), and bounds the run with `gate.long_timeout_seconds` rather
+than `gate.timeout_seconds` - the two timeouts stay separate on purpose: one
+bounds a foreground, blocked caller, the other bounds a detached runner that
+exists precisely to outlive that bound.
+
+The mechanism is a supervisor, not a bare backgrounded command. `start`
+spawns *itself* (`gate_run.rb supervise --run-dir DIR`) detached via
+`Sh.spawn_detached`; the supervisor is the gate's real parent, so it is the
+only thing that can ever capture and persist the gate's exit status - a
+later poller is not the gate's parent and cannot wait on it. The finished
+result is written as `result.json.part` and `File.rename`d to `result.json`,
+so a reader only ever observes a complete envelope or nothing, never a
+half-written one.
+
+### Subcommands
+
+- **`start`** - resolves the manifest, optionally acquires one or more locks
+  (see `lock.rb` below), spawns the detached supervisor, and returns
+  immediately with the run's identity and a ready-to-run `poll_command`. Does
+  not run the gate itself and does not wait for it.
+- **`supervise`** - the detached child `start` spawns; not meant to be run by
+  hand. Reads `meta.json` from `--run-dir`, runs the resolved gate argv
+  through `Sh.run_streaming`, releases any locks named in `meta.json`, and
+  writes the `result.json` sentinel.
+- **`poll`** - a bounded foreground wait (default 60s) that reports the run's
+  current state, re-checking every second until either the state changes or
+  the wait elapses.
+- **`status`** - the same state computation as `poll` with no wait
+  (`--wait-seconds 0` in effect); always exits 0, never blocks or fails,
+  because it reports whatever it finds without waiting for it to change.
+
+### Flags
+
+- `start`: `--profile loop` (selects the loop gate commands the way
+  `gate.rb` does), `--run-dir DIR` (override the generated run directory),
+  `--gate-lock DIR --campaign ID --bead ID` (acquire a gate lock before
+  spawning), `--slots-dir DIR --slots N` (acquire a machine gate slot
+  instead of or alongside the gate lock - `--slots-dir` and `--slots` must
+  be given together), `--wait-seconds N` (bounded lock-acquire wait, default
+  600), `--dry-run`.
+- `supervise`: `--run-dir DIR` only.
+- `poll` and `status`: `--run-dir DIR`, `--wait-seconds N` (`poll` only,
+  default 60), `--tail-lines N` (log tail length, default 40).
+
+### The poll loop, worked
+
+```sh
+ruby skills/wurk:kit/scripts/gate_run.rb start --profile loop
+# -> data.run_dir, data.poll_command (a literal command to run next, verbatim)
+
+ruby skills/wurk:kit/scripts/gate_run.rb poll --run-dir RUN_DIR
+# -> data.state: "running" - repeat this exact command
+# -> data.state: "finished" - read data.ok and stop
+# -> data.state: "abandoned" - the supervisor died or the deadline passed; stop
+```
+
+Run `start` once, then run `poll` against the returned `run_dir` (or the
+returned `poll_command` verbatim) repeatedly until `data.state` is no longer
+`"running"`. Nothing about the loop requires reading this script's source -
+`start`'s envelope already hands back the next command to run.
+
+**A `"running"` poll exits 0 by design.** It is not an error or a timeout;
+it means the wait elapsed with the gate still going, and the caller's only
+job is to run the same `poll_command` again. Only `"finished"` carries the
+gate's own `ok`, and only then does `env.fail!` (exit 1) when the gate
+itself failed.
+
+### `data` keys
+
+- `data.state` - one of four values:
+  - `"running"` - neither a sentinel nor an abandonment reason was found
+    within `--wait-seconds`. Carries `elapsed_seconds`, `deadline_at`,
+    `log_tail`, and `poll_command`.
+  - `"finished"` - `result.json` exists; its own `data` is merged in
+    directly (so a finished poll looks like a `gate.rb` envelope), plus
+    `ok`.
+  - `"abandoned"` - no sentinel, and either the supervisor's pid is
+    provably dead (`Process.kill(0, pid)` raised `Errno::ESRCH`) or the
+    run's deadline has passed. `poll` reports this as a `blocked` envelope
+    (`gate_run_abandoned`) rather than waiting forever on a supervisor that
+    can never finish; `data.reason` is `"supervisor_pid_dead"` or
+    `"deadline_exceeded"`.
+  - `"not_found"` - no `meta.json` in `--run-dir` at all (a bad `--run-dir`,
+    or a run directory that was never `start`ed). `poll` reports this as a
+    `blocked` envelope (`gate_run_not_found`) too.
+- `start` additionally returns `data.run_id`, `data.run_dir`,
+  `data.log_path`, `data.sentinel_path`, `data.pid` (the supervisor's),
+  `data.deadline_at`, `data.locks` (the locks acquired, if any), and
+  `data.poll_command`.
+
+### Exit codes
+
+Standard kit exit codes (see above), with one script-specific rule: `poll`
+and `status` never fail or block on `"running"` - only `"finished"` (via the
+gate's own `ok`), `"abandoned"`, and `"not_found"` can make either exit
+nonzero.
+
+## `lock.rb`: the mkdir-mutex
+
+A lock is a directory. Acquiring one is an atomic `Dir.mkdir` - two
+processes racing to create the same directory, exactly one succeeds. Backs
+`gate_run.rb start`'s optional `--gate-lock`/`--slots-dir` flags and is also
+usable standalone by any caller (a campaign mutex, a tracker lock, a
+registry lock) that needs the same mutual exclusion. No manifest and no
+`Sh` - a lock directory is a plain CLI argument.
+
+### The owner file
+
+Each held lock directory contains one `owner` file: `key=value` lines, one
+per key, written in a fixed order (`campaign`, `bead`, `pid`, `host`,
+`purpose`, `acquired_at`). Not every key is present on every lock - a
+human-held lock may carry no `pid` - and an absent key is simply omitted,
+never written empty. A directory that exists with no readable owner file
+(briefly, between `mkdir` and the owner file's write, or because a human
+made the directory by hand) is reported as held with `owner: null`, never as
+an error.
+
+### Subcommands
+
+- **`acquire`** - takes one or more locks (`--campaign-mutex`, `--gate-lock`,
+  `--tracker-lock`, `--registry-lock` DIRs, and/or a machine slot pool via
+  `--slots-dir DIR --slots N`) in one bounded wait, all or nothing: if any
+  named lock cannot be acquired before the wait elapses, every lock already
+  acquired in this call is released and the call reports contention on the
+  one that blocked. Requires `--campaign ID --bead ID`, recorded in the
+  owner file.
+- **`release`** - releases one lock directory, refusing (`lock_not_owned`)
+  unless the supplied `--campaign`/`--bead`/`--pid` match the recorded owner
+  field by field. There is deliberately no `--force`: a foreign or
+  ownerless lock is always refused back to a human.
+- **`status`** - a read-only probe of one lock directory: whether it is
+  held, its owner, its age, and whether it is stale. Always exits 0.
+- **`clear`** - removes a lock directory, but only when `status`'s own probe
+  would report it provably stale with `staleness_reason: "dead_holder_pid"`.
+  Anything else - no owner file, a live holder, an ownerless lock merely
+  older than the staleness cutoff - is refused (`lock_not_provably_stale`)
+  with the probe attached as evidence, because only a dead holder pid is
+  something a script may decide on its own; every other case needs a human.
+
+### The fixed acquisition order
+
+`acquire` always sorts the locks it was given into one fixed order before
+taking any of them, regardless of the order the flags were passed in:
+campaign mutex and registry lock first (rank 1), then gate lock and tracker
+lock (rank 2), then a machine slot (rank 3). Locks release in the reverse of
+the order they were acquired. A caller never has to think about
+interleaving - it hands `acquire` every lock it wants in any order, and the
+normalization here is what turns an out-of-order request into a non-event
+instead of a deadlock.
+
+### `data` keys
+
+- `acquire`: `data.acquired` (the locks taken, each `{kind, dir, owner}`),
+  `data.order` (the kinds, in the fixed order), `data.waited_seconds`. On
+  contention, `data.acquired` is `[]` and `data.contended` carries
+  `{kind, dir, probe}` for the lock that blocked, with `probe` the same
+  shape `status` returns.
+- `release`: `data.dir`, `data.released` (`true`/`false`).
+- `status`: `data.dir`, `data.held`, `data.owner`, `data.age_seconds`,
+  `data.holder_alive` (`true`, `false`, or `null` when it cannot be
+  determined - no pid recorded, or the owner file could not be read),
+  `data.stale`, `data.staleness_reason` (`"dead_holder_pid"`,
+  `"ownerless_and_older_than_cutoff"`, or `null`).
+- `clear`: `data.dir`, `data.probe` (the same shape as `status`'s payload),
+  `data.cleared` (`true`/`false`).
+
+### Exit codes
+
+Standard kit exit codes. `status` always exits 0 (a read-only probe, never
+a judgment); `acquire`, `release`, and `clear` exit 1 when they report
+`blocked` (contention, a foreign owner, or an unprovable staleness claim).
+
 ## `judge.rb`: the merge-time prose judge
 
 The mechanism ADR-0008 decided on: a merge-time model judge over
