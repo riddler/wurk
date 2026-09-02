@@ -408,6 +408,31 @@ class LockCliTest < Minitest::Test
     assert_equal "gate", env["data"]["acquired"].first["kind"]
   end
 
+  # A lock path the filesystem refuses (here: an unwritable parent, so mkdir
+  # raises Errno::EACCES) is not contention and never becomes true by
+  # waiting. It must still leave via the envelope rather than a backtrace -
+  # the whole contract rests on one JSON object reaching stdout, so an
+  # unhandled Errno is a contract break, not a rough edge. Note the
+  # deliberate contrast with EEXIST, which IS contention: see
+  # Lock.try_acquire.
+  def test_acquire_on_an_unusable_lock_path_blocks_with_an_envelope
+    closed = File.join(@dir, "closed")
+    FileUtils.mkdir_p(closed)
+    File.chmod(0o500, closed)
+
+    begin
+      code, env = run_cli(%W[acquire --gate-lock #{File.join(closed, "gate")} --campaign c1 --bead zz-1
+                             --wait-seconds 0])
+
+      assert_equal 1, code
+      refute env["ok"]
+      assert_equal "lock_path_unusable", env["blocked"].first["code"]
+      assert_equal [], env["data"]["acquired"]
+    ensure
+      File.chmod(0o700, closed)
+    end
+  end
+
   def test_acquire_dry_run_creates_no_directory_and_records_intended_commands
     code, env = run_cli(%W[acquire --gate-lock #{lock_dir} --campaign c1 --bead zz-1 --dry-run])
 

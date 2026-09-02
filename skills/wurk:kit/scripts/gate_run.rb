@@ -152,8 +152,17 @@ module GateRun
           "pid" => Process.pid.to_s,
           "acquired_at" => started_at.iso8601
         }
-        result = Lock.acquire_all(lock_specs, owner: lock_owner, wait_seconds: options[:wait_seconds],
-                                               poll_seconds: DEFAULT_LOCK_POLL_SECONDS)
+begin
+  result = Lock.acquire_all(lock_specs, owner: lock_owner, wait_seconds: options[:wait_seconds],
+                                         poll_seconds: DEFAULT_LOCK_POLL_SECONDS)
+rescue SystemCallError => e
+  # Same reasoning as lock.rb: an uncreatable lock path is a caller
+  # error about WHERE the lock lives, not contention, and it owes an
+  # envelope rather than a backtrace.
+  env.block!(code: "lock_path_unusable",
+             message: "cannot create a lock directory under the requested path: #{e.message}")
+  return env.emit(io)
+end
         unless result[:acquired]
           probe = Lock.probe(result[:contended_dir], stale_after_seconds: DEFAULT_STALE_AFTER_SECONDS)
           env.data[:contended] = { kind: result[:contended_kind], dir: result[:contended_dir], probe: probe }
@@ -167,7 +176,13 @@ module GateRun
         locks_acquired = result[:locks]
       end
 
-      FileUtils.mkdir_p(run_dir)
+begin
+  FileUtils.mkdir_p(run_dir)
+rescue SystemCallError => e
+  env.block!(code: "run_dir_unusable",
+             message: "cannot create the run directory #{run_dir}: #{e.message}")
+  return env.emit(io)
+end
 
       supervisor_pid = Sh.spawn_detached(
         [RbConfig.ruby, SELF_PATH, "supervise", "--run-dir", run_dir],

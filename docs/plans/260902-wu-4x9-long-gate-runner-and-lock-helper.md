@@ -845,12 +845,20 @@ before considering the plan fully landed.
 
 - [ ] Two shells contending on one lock dir behave as specified: the second
       waits, then reports the first as the live holder
+
+  **Machine-checked (unattended, 2026-09-02):** second acquire on a held dir waited its full bounded 3.06s, then blocked `lock_contended` with the probe naming the live holder (campaign=camp1 bead=wu-4x9 pid=80700, `holder_alive: true`, `stale: false`).
 - [ ] `kill -9` the first holder, then `lock.rb status` reports
       `stale: true`, and `lock.rb clear` removes it
+
+  **Machine-checked (unattended, 2026-09-02):** after `kill -9` on the holder pid, `status` returned `holder_alive: false`, `stale: true`, `staleness_reason: "dead_holder_pid"`; `clear` then exited 0 and the lock dir was gone.
 - [ ] `lock.rb clear` on a live holder refuses and says why
+
+  **Machine-checked (unattended, 2026-09-02):** `clear` against a live holder exited 1 with `blocked: [{code: "lock_not_provably_stale", needs: "human"}]` and a message naming the dir.
 - [ ] Take a lock, then `Ctrl-C` the acquiring shell before releasing:
       confirm the lock dir survives with its owner file intact and that
       `status` still reads it (the crash case the whole probe exists for)
+
+  **Machine-checked (unattended, 2026-09-02):** SIGINT to the acquiring shell left the lock dir and its `owner` file intact and `status` read it (`held: true`). NOTE: an acquire with no `--pid` records no `pid=` line, so such a lock can never be proven stale by liveness - deliberate (see lib/lock.rb:34, and gate_run.rb rewrites the owner pid to the supervisor's), but it means a caller that omits `--pid` gets a lock only a human can clear.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
@@ -866,10 +874,16 @@ of blocking here.
 
 - [ ] A detached spawn genuinely outlives its launcher shell (`ps` after the
       launcher exits)
+
+  **Machine-checked (unattended, 2026-09-02):** the launcher process exited immediately; the detached child stayed alive and wrote its marker file 3s later.
 - [ ] The streamed log is readable with `tail -f` while the command runs
+
+  **Machine-checked (unattended, 2026-09-02):** the log held 3 of 5 lines mid-run, and grew across successive reads while the command was still running.
 - [ ] Run an existing `Sh.run` caller by hand (`repo_state.rb`) before and
       after this phase and confirm identical output and comparable timing -
       the blocking path must be untouched
+
+  **Machine-checked (unattended, 2026-09-02):** `repo_state.rb` at 06bd10d (pre-phase) and at HEAD produced byte-identical envelopes over 3 paired runs, at 0.086-0.104s each. `gate.rb` was not modified by the branch at all; `lib/sh.rb` is +119 lines with no deletions.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
@@ -886,9 +900,13 @@ of blocking here.
 - [ ] Set `gate.long_timeout_seconds` below `gate.timeout_seconds` in a
       scratch manifest and confirm the warning fires with wording that names
       which field bounds which kind of run
+
+  **Machine-checked (unattended, 2026-09-02):** with `long_timeout_seconds: 60` against `timeout_seconds: 600` the load produced no error and one warning, which names both fields and states that one bounds a blocked foreground caller and the other the detached run that exists to outlive it. `0` is rejected as an error.
 - [ ] Run `manifest.rb`-consuming scripts (`gate.rb`, `worktree_create.rb
       --dry-run`) against a manifest that omits the new field and confirm no
       new warning or unknown-key message appears
+
+  **Machine-checked (unattended, 2026-09-02):** a manifest with the key deleted loaded with `errors: []`, `warnings: []` and defaulted to 3600. This repo's own manifest omits the key: `gate.rb` and `worktree_create.rb --dry-run` both emitted `warnings: []`.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
@@ -905,15 +923,25 @@ of blocking here.
 - [ ] Against this repo's own manifest, `gate_run.rb start` returns
       immediately and repeated `poll` calls report progress, then the real
       exit status
+
+  **Machine-checked (unattended, 2026-09-02):** `start` returned in 0.06s with a literal `poll_command`; `poll` reported `state: "finished"`, `exit_status: 0`, and the log carried the real gate output (930 runs, 0 failures).
 - [ ] A gate deliberately made slow (a sleep in a scratch manifest) survives
       several poll cycles and finishes correctly
+
+  **Machine-checked (unattended, 2026-09-02):** against a scratch manifest whose gate is a 10s tick loop, three consecutive polls reported `running` with the log growing (tick3 -> tick7 -> tick10) and the fourth reported `finished`/`exit 0` with the terminal marker present. The gate lock was released on completion.
 - [ ] `kill -9` the supervisor mid-run: the next `poll` reports `abandoned`
       rather than hanging, and the gate lock is reported stale by
       `lock.rb status`
+
+  **Machine-checked (unattended, 2026-09-02):** `kill -9` on the supervisor mid-run made the next `poll` return in 0.06s (not hang) with `state: "abandoned"`, `reason: "supervisor_pid_dead"`; `lock.rb status` on its lock reported `stale: true`/`dead_holder_pid` and `clear` removed it. The gate command itself also stopped rather than being orphaned.
 - [ ] `tail -f <run-dir>/gate.log` shows live output during a run
+
+  **Machine-checked (unattended, 2026-09-02):** covered by the slow-gate run above: the log grew from 3 to 7 to 10 lines across polls while the run was in flight.
 - [ ] Run `gate.rb` normally in this repo afterward and confirm the
       foreground path is untouched: same envelope keys, same tier, same
       timeout behavior as before this phase
+
+  **Machine-checked (unattended, 2026-09-02):** `gate.rb` run before and after produced byte-identical envelopes (same 15 data keys, `tier: 0`, `ok: true`, same `commands`). `gate.rb` carries no diff on this branch.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
@@ -931,6 +959,14 @@ of blocking here.
       using only what it says: `start`, then repeated `poll`, then read the
       finished envelope. Confirm no step required knowledge from this plan
       or from the script source.
+
+  **Partially machine-checked (unattended, 2026-09-02):** the mechanical half
+  holds - a full `start` -> repeated `poll` -> finished-envelope cycle was driven
+  in a scratch repo using only flags the REFERENCE section names, against a
+  deliberately slow gate, and every state the section documents was observed.
+  What is NOT machine-checkable is the item's actual question - whether a cold
+  reader needs the plan or the source - since this pass had already read both.
+  Left deferred for a human.
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
