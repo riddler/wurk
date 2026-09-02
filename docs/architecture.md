@@ -49,7 +49,9 @@ Ported from statifier-ex's `.claude/scripts/` with its contract intact:
   1 = crashed, 2 = usage error.
 - `--dry-run` on every mutating script.
 - All shelling out through `lib/sh.rb` (argv arrays, no shell
-  interpolation, timeout support, FakeSh-swappable for tests).
+  interpolation, timeout support, FakeSh-swappable for tests) - blocking,
+  streaming, and detached process creation alike, so ADR-0006's rule has
+  one unambiguous home, enforced by the contract test.
 - Banned operations, enforced by the contract test: scripts never
   `git push`, `gh pr create` / `glab mr create`, `bd close`, or `bd edit`.
   Those stay literal skill instructions so a human-meaningful gate sits in
