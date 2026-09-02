@@ -59,13 +59,26 @@ module Lock
     end
 
     def write_owner(dir, owner)
-      lines = OWNER_KEYS.filter_map do |key|
-        value = owner[key] || owner[key.to_sym]
-        next if value.nil?
+      File.write(File.join(dir, OWNER_FILE), owner_content(owner))
+    end
 
-        "#{key}=#{value}"
-      end
-      File.write(File.join(dir, OWNER_FILE), "#{lines.join("\n")}\n")
+    # Atomically corrects the pid= field of an already-published owner file,
+    # leaving every other field untouched. gate_run.rb's `start` needs this:
+    # the lock is acquired under the CLI process's own pid because the real
+    # supervisor pid does not exist until after Sh.spawn_detached returns, so
+    # the owner file is patched once the supervisor is running. Unlike
+    # write_owner's first write (nothing has discovered the lock dir yet),
+    # this owner file may already have readers polling it (lock.rb status, a
+    # contending acquire), so the correction goes to a sibling temp file and
+    # is File.renamed into place - a reader sees the old contents or the new
+    # ones, never a half-written file.
+    def rewrite_owner_pid(dir, pid)
+      current = read_owner(dir) || {}
+      current["pid"] = pid.to_s
+      owner_path = File.join(dir, OWNER_FILE)
+      tmp_path = File.join(dir, "#{OWNER_FILE}.tmp-#{Process.pid}")
+      File.write(tmp_path, owner_content(current))
+      File.rename(tmp_path, owner_path)
     end
 
     # key=value lines -> hash (string keys, string values). Absent or
@@ -241,6 +254,16 @@ module Lock
     end
 
     private
+
+    def owner_content(owner)
+      lines = OWNER_KEYS.filter_map do |key|
+        value = owner[key] || owner[key.to_sym]
+        next if value.nil?
+
+        "#{key}=#{value}"
+      end
+      "#{lines.join("\n")}\n"
+    end
 
     def acquire_one(spec, owner, wait_seconds:, poll_seconds:, clock:, sleeper:)
       if spec[:kind] == "slot"

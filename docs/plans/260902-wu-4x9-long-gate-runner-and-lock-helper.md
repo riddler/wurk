@@ -642,17 +642,17 @@ creates no run dir, acquires no lock, and spawns nothing.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] `skills/wurk:kit/scripts/gate_run.rb` exists with shebang and
+- [x] Full quality gate passes: `ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] `skills/wurk:kit/scripts/gate_run.rb` exists with shebang and
       executable bit (`contract_test.rb:544-552`)
-- [ ] `gate_run_test.rb` asserts `poll` exits 0 while the run is still
+- [x] `gate_run_test.rb` asserts `poll` exits 0 while the run is still
       running
-- [ ] `gate_run_test.rb` asserts a dead supervisor with no sentinel yields
+- [x] `gate_run_test.rb` asserts a dead supervisor with no sentinel yields
       `state: "abandoned"`
-- [ ] `gate_run_test.rb` asserts the deadline uses
+- [x] `gate_run_test.rb` asserts the deadline uses
       `gate.long_timeout_seconds`
-- [ ] `gate_run_test.rb` asserts `start --dry-run` spawns nothing
-- [ ] `contract_test.rb`'s consumer-vocabulary scan passes over the new
+- [x] `gate_run_test.rb` asserts `start --dry-run` spawns nothing
+- [x] `contract_test.rb`'s consumer-vocabulary scan passes over the new
       script (no gate tool named in code)
 
 #### Manual Verification:
@@ -889,6 +889,31 @@ of blocking here.
 - [ ] Run `manifest.rb`-consuming scripts (`gate.rb`, `worktree_create.rb
       --dry-run`) against a manifest that omits the new field and confirm no
       new warning or unknown-key message appears
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 4
+
+- [ ] Against this repo's own manifest, `gate_run.rb start` returns
+      immediately and repeated `poll` calls report progress, then the real
+      exit status
+- [ ] A gate deliberately made slow (a sleep in a scratch manifest) survives
+      several poll cycles and finishes correctly
+- [ ] `kill -9` the supervisor mid-run: the next `poll` reports `abandoned`
+      rather than hanging, and the gate lock is reported stale by
+      `lock.rb status`
+- [ ] `tail -f <run-dir>/gate.log` shows live output during a run
+- [ ] Run `gate.rb` normally in this repo afterward and confirm the
+      foreground path is untouched: same envelope keys, same tier, same
+      timeout behavior as before this phase
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,
