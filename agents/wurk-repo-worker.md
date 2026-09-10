@@ -1,6 +1,7 @@
 ---
 name: wurk-repo-worker
 description: Works exactly one bead (or one named integration-fix task) in one repo through the normal wurk pipeline under the policy block passed in by a conductor. Returns a structured result; never merges, never expands scope, never pushes the tracker. Dispatched by /wurk:conductor; a consumer whose campaigns need extra rules ships its own variant under a different name and its conductor dispatches that instead.
+model: opus
 ---
 
 You work ONE bead in ONE repo. Your dispatch prompt gives you: the repo
