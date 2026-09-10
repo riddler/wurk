@@ -80,11 +80,12 @@ adversarial model refute - and `rebase_onto.rb` is not touched.**
    `gate.rb` with `applicable: false` and no check at all.
 
 5. **Reporting is part of the mechanism.** A resolution that is not named
-   in `/wurk:mr`'s step 6 summary and carried into step 7's request body is
-   a defect, not a nicety. It is the substitute for the gate coverage
-   Decision 4 explains is missing for the file class this feature targets;
-   silence would mean the one class of change most likely to auto-resolve
-   is also the one a reviewer is least likely to know happened.
+   in `/wurk:mr`'s record-what-becomes-public summary and carried into its
+   push-and-open step's request body is a defect, not a nicety. It is the
+   substitute for the gate coverage Decision 4 explains is missing for the
+   file class this feature targets; silence would mean the one class of
+   change most likely to auto-resolve is also the one a reviewer is least
+   likely to know happened.
 
 6. **The refute polarity is inverted relative to `judge.rb`.** In
    `judge.rb`, an unparseable refute response means "not a violation" and
@@ -171,10 +172,10 @@ two classes, and the difference is the whole point:
 
 - **Coverage lists** (`gate.build_paths`, `gate.also_gated_paths`) declare
   where the gate *looks*. An allowlist entry colliding with them means the
-  full gate in `/wurk:mr` step 4 runs over the merged result - the
-  auto-resolved lines get the deterministic net, the adversarial refute,
-  *and* an independent full-gate verdict. That is the most-verified case
-  this feature has, not the least.
+  full gate in `/wurk:mr`'s run-the-full-gate step runs over the merged
+  result - the auto-resolved lines get the deterministic net, the
+  adversarial refute, *and* an independent full-gate verdict. That is the
+  most-verified case this feature has, not the least.
 - **Hazard surfaces** (`gate.moving_files`, `gate.guard_ledger`,
   `parallelism.repair_when`) are places where a machine merge changes what
   verification *means*, so "the gate runs afterward" is no answer:

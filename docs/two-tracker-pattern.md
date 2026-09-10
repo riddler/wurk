@@ -145,8 +145,8 @@ layer 4):
 | Event | Skill that observes it | Extension file |
 |---|---|---|
 | Bead claimed | `/wurk:next` - claims the bead before `/wurk:branch` stands up its workspace (the claim is the lock, per `wurk:branch/SKILL.md`) | `.claude/wurk/next.md` |
-| Request opened | `/wurk:mr`, step 7 (push and open the request) | `.claude/wurk/mr.md` |
-| All beads for the ticket closed | `/wurk:cleanup`, step 4 (closes beads whose requests merged) | `.claude/wurk/cleanup.md` |
+| Request opened | `/wurk:mr`, its push-and-open step | `.claude/wurk/mr.md` |
+| All beads for the ticket closed | `/wurk:cleanup`, its close-the-beads-that-landed step | `.claude/wurk/cleanup.md` |
 
 All three skills already document this seam and read their extension file
 before their first step, treating its content as additional required steps
