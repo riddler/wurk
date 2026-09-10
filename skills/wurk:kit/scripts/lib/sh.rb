@@ -12,7 +12,7 @@ require "open3"
 #   result.out    # => stdout
 #   result.err    # => stderr
 #   result.status # => Process::Status-like, responds to #success? and #exitstatus
-#   result.timed_out? # => true if the timeout wrapper killed the child
+#   result.timed_out? # => true if the call ran out of its timeout budget
 #
 # Sh.runner= swaps in a fake (see test/support/fake_sh.rb) so tests never
 # shell out for real.
@@ -31,6 +31,13 @@ class Sh
       !@timed_out && !!status && status.success?
     end
 
+    # True when the call did not complete inside its timeout - either the
+    # child was still running and was killed, or its output was still
+    # arriving past the deadline and the readers were abandoned. In both
+    # cases #out and #err carry whatever had been buffered when the deadline
+    # passed and may be truncated mid-stream; nothing is appended to say so,
+    # because this flag is the signal and a marker in the stream would be
+    # bytes the command never wrote. See ADR-0015.
     def timed_out?
       @timed_out
     end
@@ -139,20 +146,65 @@ class Sh
   # blocking path keeps single-pid semantics rather than adopting
   # `pgroup: true`, and points a caller that needs the whole tree reaped at
   # #run_streaming.
+  #
+  # The timeout bounds the whole call, not just when the child is signalled.
+  # An orphaned descendant that inherited the child's stdout keeps that pipe
+  # open after the child dies, so a reader thread waiting for EOF waits for
+  # the descendant - which is how a 0.3s timeout used to return after 5s.
+  # The readers are therefore joined against the same deadline and abandoned
+  # when it passes; ADR-0015 records the rule that follows from abandoning
+  # them, which is that a call the timeout could not complete reports
+  # #timed_out? even when the direct child exited cleanly.
   class RealRunner
+    # Grace the reader threads get to drain what is already sitting in the
+    # pipes once the timeout budget is spent. A killed child has no budget
+    # left by definition, and the bytes it wrote just before dying are worth
+    # this much wall clock; a descendant still holding the pipe costs exactly
+    # this and no more.
+    READER_DRAIN_GRACE_SECONDS = 0.25
+
+    # Bytes a reader thread asks for per read. Only a buffering choice - the
+    # readers loop until EOF or until they are abandoned.
+    READ_CHUNK_BYTES = 16_384
+
+    # A byte buffer a reader thread appends to as output arrives, safe to
+    # read from another thread at any moment. #run needs this rather than
+    # `out = stdout.read`: a thread that only assigns its result at EOF
+    # yields nothing at all when it is abandoned mid-stream, so the buffer
+    # has to be filled incrementally for a timed-out call to have anything
+    # to return.
+    class Buffer
+      def initialize
+        @mutex = Mutex.new
+        @bytes = +"".b
+      end
+
+      def <<(chunk)
+        @mutex.synchronize { @bytes << chunk }
+        self
+      end
+
+      # A snapshot, tagged with the same encoding IO#read would have given
+      # the whole stream. Chunk boundaries can split a multibyte character,
+      # so the tagging happens once, on the joined bytes, never per chunk.
+      def value
+        @mutex.synchronize { @bytes.dup.force_encoding(Encoding.default_external) }
+      end
+    end
+
     def run(argv, chdir: nil, timeout: 60)
       opts = {}
       opts[:chdir] = chdir if chdir
 
-      out = +""
-      err = +""
+      out_buf = Buffer.new
+      err_buf = Buffer.new
       status = nil
       timed_out = false
 
       Open3.popen3(*argv, opts) do |stdin, stdout, stderr, wait_thr|
         stdin.close
-        out_thr = Thread.new { out = stdout.read }
-        err_thr = Thread.new { err = stderr.read }
+        deadline = Time.now + timeout
+        readers = [Thread.new { drain(stdout, out_buf) }, Thread.new { drain(stderr, err_buf) }]
 
         unless wait_thr.join(timeout)
           timed_out = true
@@ -160,12 +212,15 @@ class Sh
           wait_thr.join(2)
         end
 
-        out_thr.join
-        err_thr.join
+        # Fails closed: output still arriving after the deadline is a call
+        # that did not finish inside its timeout, whatever the child's own
+        # exit status says, so it is reported as a timeout rather than as a
+        # success with quietly truncated output.
+        timed_out = true unless drain_readers(readers, deadline)
         status = timed_out ? TimeoutStatus.new : wait_thr.value
       end
 
-      Result.new(out: out, err: err, status: status, timed_out: timed_out)
+      Result.new(out: out_buf.value, err: err_buf.value, status: status, timed_out: timed_out)
     rescue SystemCallError => e
       # Open3.popen3 raises before a child ever exists when the executable is
       # missing from PATH (Errno::ENOENT) or chdir names a directory that does
@@ -252,6 +307,31 @@ class Sh
     end
 
     private
+
+    # Reads io into buffer until EOF, or until the stream is closed out from
+    # under the thread - which is what an abandoned reader gets. Whatever
+    # arrived before that point stays in buffer.
+    def drain(io, buffer)
+      loop { buffer << io.readpartial(READ_CHUNK_BYTES) }
+    rescue EOFError, IOError, SystemCallError
+      nil
+    end
+
+    # Joins the reader threads against the call's own deadline and returns
+    # true if both reached EOF. When the deadline is gone - always the case
+    # on the timeout path, where the budget was spent waiting on the child -
+    # they still get READER_DRAIN_GRACE_SECONDS to pick up what is already in
+    # the pipes. Readers that are still blocked after that are killed and
+    # joined before the caller returns, so no thread is left reading a stream
+    # that Open3 is about to close.
+    def drain_readers(readers, deadline)
+      finish = Time.now + [deadline - Time.now, READER_DRAIN_GRACE_SECONDS].max
+      return true if readers.all? { |thr| thr.join([finish - Time.now, 0].max) }
+
+      readers.each(&:kill)
+      readers.each { |thr| thr.join(READER_DRAIN_GRACE_SECONDS) }
+      false
+    end
 
     # Names the concrete cause in the same message a reader sees in
     # Result#err: which executable could not be run, and (when chdir was

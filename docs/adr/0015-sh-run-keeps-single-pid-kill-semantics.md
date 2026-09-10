@@ -1,6 +1,7 @@
 # ADR-0015: Sh.run keeps single-pid kill semantics; process groups stay on the streaming path
 
-Status: accepted (2026-09-10)
+Status: accepted (2026-09-10); amended 2026-09-10 (wu-p39) to add "Amendment:
+the reader join is bounded by the same timeout", below
 
 ## Context
 
@@ -108,9 +109,10 @@ and this ADR does not authorize one in advance.
   on timeout. This is a known, accepted gap, not an unnoticed bug; the escape
   hatch is to run that gate through `gate_run.rb`'s streaming path.
 - The related stall - a timed-out `#run` waiting on reader threads until a
-  pipe-holding descendant exits - stands unfixed under this ADR and is filed
-  separately. A caller that cannot tolerate an unbounded wait on the timeout
-  path uses `run_streaming`, whose group kill closes those pipes.
+  pipe-holding descendant exits - stood unfixed when this ADR was accepted and
+  was filed separately as wu-p39. The amendment below records how it was
+  fixed; the fix changed no signal delivery, so the decision above stands
+  as written.
 - Every `Sh.run` child stays in the caller's process group, so an operator
   interrupt, an aborted Bash tool call, or a killed conductor continues to take
   the child down with the script - which is what keeps git and Dolt locks from
@@ -121,3 +123,85 @@ and this ADR does not authorize one in advance.
   process group, and that its timeout leaves a grandchild running. The second
   test asserts the accepted gap on purpose - if someone later adds `pgroup:
   true` to `#run`, that test fails and sends them here.
+
+## Amendment: the reader join is bounded by the same timeout (wu-p39)
+
+The stall named in the context and the consequences above is fixed. It is
+recorded here rather than in a new ADR because it is the same decision area -
+what `Sh.run`'s timeout does and does not promise - and because the fix's own
+decision is a direct consequence of the constraint this ADR settled: signal
+delivery could not change, so the wall clock had to be bounded on the reading
+side instead.
+
+### What changed
+
+`#run` now runs its reader threads against the same deadline as the child.
+The readers accumulate into a shared buffer as bytes arrive instead of
+assigning `stdout.read` at EOF, and once the deadline has passed they are
+given a fixed 0.25s grace to pick up what is already in the pipes and are then
+killed and joined. Nothing about the kill changed: still TERM, sleep, KILL, to
+the direct child pid only, still no `pgroup: true`.
+
+This bounds both shapes of the stall, not only the one the bead described. The
+second shape has no timeout in it at all under the old code: a child that
+exits 0 immediately while a descendant keeps the pipe open left `#run` blocked
+in `out_thr.join` with no deadline of any kind, forever.
+
+### The output disposition, and why
+
+Abandoning a reader mid-stream forces a call on the timed-out command's
+buffered output. The choice is **return whatever was buffered when the
+deadline passed, byte for byte, with no truncation marker** - and report
+`timed_out?` even when the direct child exited cleanly, so a caller is never
+handed a `success?` result whose output was quietly cut short.
+
+- **Not empty.** The partial output is the most useful thing a timed-out call
+  has. `gate.rb` puts it straight in front of a human: `gate_failure_output`
+  carries an `output_tail`, and `tier0_failure_message` exists precisely
+  because an empty payload reads as "nothing was checked" exactly as easily as
+  "the run was killed". Dropping the buffer would make the timeout case the
+  least legible failure the gate can report, which is the wu-4x9 family of
+  defects again.
+- **No truncation marker.** A marker would be bytes the command never wrote,
+  synthesized into a stream that call sites parse. `gate.rb:368` runs
+  `JSON.parse(res.out)` on the gate report without first checking
+  `success?` - a timed-out result reaches that parser today. Truncated JSON
+  already fails to parse and is rescued; appending a marker adds nothing there
+  and adds a new way for text to be mistaken for command output everywhere
+  else.
+- **The marker is unnecessary anyway.** `Result#timed_out?` already answers
+  the question a marker would answer, as a machine-checkable flag rather than
+  a magic string, and a caller can already tell "timed out with no output"
+  from "succeeded with no output" through it - `success?` is false whenever
+  `timed_out?` is true. The flag's meaning is widened here from "the child was
+  killed" to "the call did not complete inside its timeout", which is the
+  meaning callers were already relying on.
+
+### Fails closed
+
+Output still arriving after the deadline reports `timed_out?` and a
+`TimeoutStatus`, discarding the child's own exit status even when that status
+was success. This is deliberate. The alternative - a `success?` result with
+silently truncated output - is the one outcome no caller can detect, and the
+scenario is one that used to hang forever, so no call site depends on the
+current behavior. Fail closed and a caller re-runs; fail open and a gate
+passes on half its output.
+
+### Residual
+
+One unbounded wait remains that this fix does not reach: `Open3.popen3`'s own
+block-form ensure calls `wait_thr.join` with no limit, so a child that
+survives KILL (an uninterruptible sleep) still stalls the call. It is not
+reachable by any change inside `#run` short of not using `popen3`'s block
+form, and no such child has been observed here.
+
+### Test coverage
+
+`test/sh_test.rb` pins both shapes with a durable grandchild that inherits the
+child's stdout: `test_run_timeout_returns_when_a_grandchild_holds_the_pipe`
+(child killed on timeout) and
+`test_run_reports_a_timeout_when_output_outlives_the_deadline` (child exits 0,
+grandchild holds the pipe), the second also asserting that the partial output
+survives. The pre-existing `test_run_on_timeout_kills_the_direct_child_only`
+keeps its redirect away from the pipe, so it still isolates signal delivery
+and still fails first if anyone adds `pgroup: true`.
