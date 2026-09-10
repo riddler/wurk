@@ -1,6 +1,6 @@
 {
   "wurk": 1,
-  "beads": { "prefix": "zz" },
+  "beads": { "prefix": "zz", "sync": "git" },
   "forge": { "kind": "github" },
   "gate": {
     "full": ["make", "check"],

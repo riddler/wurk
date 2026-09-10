@@ -294,7 +294,11 @@ conductor double-dispatched the same problem).
 MR mode: verify merge via the forge, pull, close bead (queue the close
 if the tracker links it to work elsewhere), remove worktree,
 force-delete branch, run the manifest's outbound scan, push tracker with
-confirmed output.
+confirmed output - but only where the repo's `beads.sync` is `git` or
+`dolthub`. Under `local` (including an unset key, which defaults to
+`local`) there is no tracker push at all: journal "tracker is local-only,
+nothing pushed" and land the rest. The conductor owning tracker pushes
+never means it may make one the repo's manifest forbids.
 
 LOCAL-ONLY mode, per green bead: merge the bead branch into the
 integration branch (ff when possible; compose textual conflicts

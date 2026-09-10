@@ -293,30 +293,56 @@ change:
 
 8. **Sync beads, then record the request.** Also hand-run - `bd close` is on
    the banned-operation list, and this step never closes anything, but `bd
-   dolt push` and `bd note` are ordinary bead commands no script wraps:
+   dolt push` and `bd note` are ordinary bead commands no script wraps.
+
+   **The note always runs. The push is gated on `beads.sync`.** Read the
+   mode - never assume it:
 
    ```bash
-   bd dolt push
-   bd note <id> "Request: <url>"
+   ruby ~/.claude/skills/wurk:kit/scripts/lib/manifest.rb check
    ```
 
-   Run the note once per bead step 2 resolved. A bead whose request URL was
-   never recorded is one nobody can follow from the issue to the review.
+   `data.beads_sync` is `local`, `git`, or `dolthub`, and
+   `data.beads_sync_declared` says whether the repo wrote it down or the
+   safe default was applied. Then:
 
-   `bd dolt push` is not optional **unless an orchestrator owns tracker
-   pushes**. Issue state travels over the same remote as the code, so a
-   request whose bead was never pushed is invisible to every other machine:
-   a reviewer pulling the branch sees work with no issue behind it. The git
-   side has just reached the remote, which is exactly the trigger the
-   authority table names for this.
+   ```bash
+   bd note <id> "Request: <url>"     # every mode, once per bead step 2 resolved
+   bd dolt push                      # git and dolthub ONLY
+   ```
 
-   The exception is explicit, never inferred: when this skill runs inside
-   an orchestrated campaign whose dispatch names an override of this step
-   (a conductor batching tracker pushes for atomicity across paired
-   trackers), **skip the `bd dolt push`, keep the `bd note`, and say in the
-   result that the tracker push was deferred to the orchestrator**. A
-   worker that pushes anyway breaks the atomicity the orchestrator is
-   guaranteeing. Absent such a named override, push as above.
+   A bead whose request URL was never recorded is one nobody can follow
+   from the issue to the review, so the note is unconditional.
+
+   - **`local`** - **do not push, and do not look for a way to.** The
+     repo's beads never leave the machine. Report `Bead: <id> in progress,
+     URL recorded, not pushed (tracker is local-only)`. When the mode was
+     defaulted rather than declared (`beads_sync_declared` false), say that
+     too: the repo has not stated a mode, and if it does push, its manifest
+     needs `beads.sync` before the next run. Skipping the push is the
+     correct outcome here, not a degraded one - do not report it as a
+     failure and do not offer to push anyway.
+   - **`git`** - push. Issue state travels over the same remote as the
+     code, so a request whose bead was never pushed is invisible to every
+     other machine: a reviewer pulling the branch sees work with no issue
+     behind it. The git side has just reached the remote, which is exactly
+     the trigger the authority table names for this.
+   - **`dolthub`** - push, same reasoning and same ordering. The remote is
+     a DoltHub database, so the credentials are DoltHub's (a `dolt login`
+     token, not the ssh key the code push used) and the remote may not be
+     named `origin`. An auth failure here is a report, not a retry against
+     a different remote. If the repo's remote is not the configured
+     default, its `.claude/wurk/mr.md` names it.
+
+   There is one further exception, explicit and never inferred: when this
+   skill runs inside an orchestrated campaign whose dispatch names an
+   override of this step (a conductor batching tracker pushes for atomicity
+   across paired trackers), **skip the `bd dolt push` even under `git` or
+   `dolthub`, keep the `bd note`, and say in the result that the tracker
+   push was deferred to the orchestrator**. A worker that pushes anyway
+   breaks the atomicity the orchestrator is guaranteeing. The override can
+   only ever subtract a push; nothing in a dispatch can add one under
+   `local`.
 
    Leave the bead in progress. Do not close it.
 
@@ -326,7 +352,8 @@ change:
    Request opened: <url>
    Branch:  <branch> -> <default branch> (N commits)
    Gate:    full gate green
-   Bead:    <id> in progress, URL recorded, beads pushed
+   Bead:    <id> in progress, URL recorded, <beads pushed | not pushed,
+            tracker is local-only | tracker push deferred to the orchestrator>
    Next:    merging is a human decision; the bead closes on merge, not here
    ```
 

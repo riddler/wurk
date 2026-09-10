@@ -2,6 +2,7 @@
   "wurk": 1,
   "beads": {
     "prefix": "zz",
+    "sync": "git",
     "froth": true
   },
   "forge": {

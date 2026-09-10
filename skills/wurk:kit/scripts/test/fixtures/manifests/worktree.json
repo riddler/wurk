@@ -1,7 +1,8 @@
 {
   "wurk": 1,
   "beads": {
-    "prefix": "zz"
+    "prefix": "zz",
+    "sync": "git"
   },
   "forge": {
     "kind": "github"

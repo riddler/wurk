@@ -4,6 +4,7 @@
   "beads": {
     "prefix": "wu",
     "topology": "beads",
+    "sync": "git",
     "areas": {
       "labels": [
         "area:kit",

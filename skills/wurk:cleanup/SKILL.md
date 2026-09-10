@@ -161,14 +161,29 @@ Omitted, sweep every worktree.
    Already-closed is a no-op, not an error - say so and move on. An id that
    does not resolve is worth reporting rather than swallowing.
 
-5. **Publish the closes**, only if step 4 closed at least one bead:
+5. **Publish the closes**, only if step 4 closed at least one bead *and* the
+   repo's beads sync off the machine at all. Read the mode - never assume
+   it:
 
    ```bash
-   bd dolt push
+   ruby ~/.claude/skills/wurk:kit/scripts/lib/manifest.rb check
    ```
 
-   Non-fatal if offline; report that the closes are local and will publish on
-   the next push.
+   Then, on `data.beads_sync`:
+
+   - **`local`** - **do not push.** The closes stay on this machine, which
+     is where this repo's beads live by design. Report `closes recorded,
+     not pushed (tracker is local-only)`. That is the finished state, not a
+     deferral; there is no "next push" to mention.
+   - **`git` or `dolthub`** - push:
+
+     ```bash
+     bd dolt push
+     ```
+
+     Non-fatal if offline; report that the closes are local and will publish
+     on the next push. Under `dolthub` the credentials are DoltHub's rather
+     than the forge's, so an auth failure is the same non-fatal report.
 
 ## How to read the result
 

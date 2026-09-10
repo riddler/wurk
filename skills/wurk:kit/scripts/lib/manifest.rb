@@ -55,6 +55,7 @@ class Manifest
   # Every enum in the schema. An unrecognized value blocks.
   ENUMS = {
     "beads.topology" => %w[beads beads-with-forge-projection],
+    "beads.sync" => %w[local git dolthub],
     "forge.kind" => %w[github gitlab],
     "parallelism.model" => %w[worktree-per-issue branch-in-place],
     "commits.style" => %w[s-form conventional],
@@ -76,7 +77,7 @@ class Manifest
   KNOWN = {
     nil => %w[wurk repo beads forge gate parallelism tmux models artifacts commits changelog release judge rebase],
     "repo" => %w[default_branch],
-    "beads" => %w[prefix topology areas],
+    "beads" => %w[prefix topology sync areas],
     "beads.areas" => %w[labels lands_alone always_batchable],
     "forge" => %w[kind labels],
     "gate" => %w[cwd full loop report report_loop attest guard_ledger build_paths also_gated_paths moving_files
@@ -97,6 +98,9 @@ class Manifest
   DEFAULTS = {
     "repo.default_branch" => "main",
     "beads.topology" => "beads",
+    # Deliberately NOT the most common value. See validate_beads_sync and
+    # docs/manifest.md: an absent key must never be able to cause a push.
+    "beads.sync" => "local",
     "commits.style" => "s-form",
     "commits.subject_under" => 50,
     "commits.body_line_max" => 72,
@@ -242,6 +246,60 @@ class Manifest
 
   def topology
     fetch("beads.topology")
+  end
+
+  # How this repo's beads database syncs, and therefore whether any skill is
+  # ever allowed to run `bd dolt push` here:
+  #
+  #   local   - the beads never leave the machine. Pushing is FORBIDDEN.
+  #   git     - the dolt remote is a git+ssh URL on the code forge; the
+  #             tracker is pushed after the code push.
+  #   dolthub - the remote is a DoltHub database; same ordering, different
+  #             remote and auth.
+  #
+  # Absent means `local`, which is the unsafe-by-omission direction turned
+  # around on purpose: see validate_beads_sync.
+  def beads_sync
+    fetch("beads.sync")
+  end
+
+  # The single predicate every tracker-pushing step asks. Written as an
+  # allow-list rather than `!= "local"` so that a mode this kit does not yet
+  # know about (a consumer pinned to a newer schema, whose value survives
+  # the enum check only in that consumer's newer kit) cannot fall through
+  # into a push here.
+  def beads_push_allowed?
+    %w[git dolthub].include?(beads_sync)
+  end
+
+  # True when the consumer actually wrote the key down, false when the
+  # `local` default is only being inferred. The distinction is what the
+  # unset warning reports, and what a skill needs to say "not pushed,
+  # tracker is local" versus "not pushed, and nobody has declared a mode".
+  def beads_sync_declared?
+    !dig_raw("beads.sync").nil?
+  end
+
+  # Every dolt remote configured for this checkout's beads database, as
+  # "<source>: <name> -> <url>" strings, newest-footgun-first. Two sources,
+  # because the incident behind beads.sync had a remote in the second one
+  # after a guard script had removed it from the first:
+  #
+  #   1. .beads/config.yaml - the `sync.remote` key bd itself reads.
+  #   2. .beads/embeddeddolt/*/.dolt/repo_state.json - dolt's own state,
+  #      which keeps a remote that was added once even after the yaml no
+  #      longer mentions it.
+  #
+  # Pure file reads, no shell-out and no `bd`: this runs inside the lint,
+  # which must work in a checkout where bd is not installed. An unreadable
+  # or unparseable file contributes nothing rather than raising - the
+  # caller's job is a warning, not a verdict.
+  def beads_dolt_remotes(root: checkout_root)
+    beads = File.join(root, ".beads")
+    return [] unless File.directory?(beads)
+
+    remotes_from_config(File.join(beads, "config.yaml")) +
+      remotes_from_dolt_state(beads)
   end
 
   def area_labels
@@ -546,12 +604,54 @@ class Manifest
   # Dotted lookup with defaults applied. Returns nil for an absent optional
   # key that has no default.
   def fetch(dotted)
-    parts = dotted.split(".")
-    value = parts.inject(raw) { |node, key| node.is_a?(Hash) ? node[key] : nil }
+    value = dig_raw(dotted)
     value.nil? ? DEFAULTS[dotted] : value
   end
 
+  # `fetch` without the default applied: what the consumer literally wrote,
+  # so a caller can tell "declared, and equal to the default" from "absent".
+  def dig_raw(dotted)
+    dotted.split(".").inject(raw) { |node, key| node.is_a?(Hash) ? node[key] : nil }
+  end
+
   private
+
+  # `sync.remote: "..."` is bd's own flat key; the nested `sync:` / `remote:`
+  # form is accepted too. Comments are stripped first - the shipped
+  # config.yaml documents the key in a comment block, and matching that
+  # would make the warning fire in every repo.
+  def remotes_from_config(file)
+    return [] unless File.file?(file)
+
+    File.readlines(file).filter_map do |line|
+      body = line.sub(/#.*\z/, "").rstrip
+      next unless (m = body.match(/^\s*(?:sync\.)?remote:\s*(.+)\z/))
+
+      url = m[1].strip.delete_prefix('"').delete_suffix('"').delete_prefix("'").delete_suffix("'")
+      next if url.empty?
+
+      "config.yaml: sync.remote -> #{url}"
+    end
+  rescue SystemCallError
+    []
+  end
+
+  # dolt's repo_state.json is the copy that outlives a config edit, which is
+  # exactly why it is checked separately.
+  def remotes_from_dolt_state(beads_dir)
+    Dir.glob(File.join(beads_dir, "embeddeddolt", "*", ".dolt", "repo_state.json")).sort.flat_map do |state|
+      parsed = JSON.parse(File.read(state))
+      next [] unless parsed.is_a?(Hash)
+
+      db = File.basename(File.dirname(File.dirname(state)))
+      (parsed["remotes"] || {}).map do |name, spec|
+        url = spec.is_a?(Hash) ? spec["url"] : spec
+        "embeddeddolt/#{db}: #{name} -> #{url}"
+      end
+    rescue JSON::ParserError, SystemCallError
+      []
+    end
+  end
 
   # Shared by project_level_skip_re and not_applicable_skip_re: compiles a
   # regex-list field into one Regexp, or nil when the project declares none.
@@ -590,6 +690,7 @@ class Manifest
     validate_commands
     validate_regex_lists
     validate_default_branch
+    validate_beads_sync
     validate_sabotage
     validate_judge
     validate_rebase
@@ -617,6 +718,33 @@ class Manifest
 
     errors << "#{path}: repo.default_branch must be a git branch name " \
               "(letters, digits, '.', '_', '/', '-'; no leading '-'), got #{value.inspect}"
+  end
+
+  # An unset beads.sync warns rather than blocking, and defaults to `local`.
+  #
+  # Both halves are deliberate, and the default runs against the usual rule
+  # for picking one. Most defaults in this schema are the most common value
+  # (`repo.default_branch` = main, `beads.topology` = beads); this one is the
+  # value that does the least, because the two directions are not
+  # symmetrical. Guessing `git` for a repo whose beads are local publishes an
+  # issue database that was never meant to leave the machine, and nothing
+  # un-publishes it; guessing `local` for a repo that does push costs one
+  # skipped push and a warning saying so. That is the same reasoning the rest
+  # of this class's asymmetry rests on (see the class comment and
+  # docs/manifest.md "Validation"): an unrecognized value blocks because
+  # guessing a structural behavior is worse than stopping, and here the
+  # absent value is guessed only in the direction that is recoverable.
+  #
+  # The warning exists so the guess is never silent - a consumer that does
+  # push is told to declare the key rather than quietly losing its tracker
+  # pushes. It is a warning and not a block because a missing key with a safe
+  # default is not a reason to refuse to run.
+  def validate_beads_sync
+    return if beads_sync_declared?
+
+    warnings << "#{path}: beads.sync is unset - defaulting to local, which means no skill will run " \
+                "bd dolt push in this repo. Declare beads.sync (local, git, or dolthub) to say so " \
+                "on purpose; see wurk docs/manifest.md"
   end
 
   # Present-or-absent, never half-present: a section that declares roots but
@@ -1004,6 +1132,13 @@ module ManifestCli
       env.data[:wurk] = manifest.fetch("wurk")
       env.data[:valid] = manifest.valid?
       env.data[:errors] = manifest.errors
+      # The tracker-push gate, read by /wurk:mr and /wurk:cleanup. Both
+      # fields, because "local because declared" and "local because nobody
+      # said" are different sentences in those skills' reports.
+      env.data[:beads_sync] = manifest.beads_sync
+      env.data[:beads_sync_declared] = manifest.beads_sync_declared?
+
+      warn_local_mode_with_dolt_remote(env, manifest)
 
       manifest.warnings.each { |w| env.warn(code: "unknown_key", message: w) }
       manifest.errors.each { |e| env.block!(code: "invalid", message: e) }
@@ -1016,6 +1151,40 @@ module ManifestCli
     end
 
     private
+
+    # The footgun that produced beads.sync, checked directly: a repo whose
+    # mode resolves to `local` but whose beads database still has a dolt
+    # remote configured is one `bd dolt push` away from publishing a tracker
+    # that was never meant to leave the machine - and in the incident behind
+    # this key the remote was not in config.yaml at all, it was inside the
+    # embedded dolt db, where a guard script deleting it from the yaml never
+    # reached it.
+    #
+    # This lives in the lint and not in Manifest#validate! on purpose:
+    # validate! is pure shape over the parsed JSON and touches no
+    # filesystem (see validate_gate_cwd), and it runs on every script's
+    # manifest load. This check reads two files outside the manifest and
+    # answers a question about the environment, which is what a lint is for.
+    #
+    # A warning, never a block: the remote may be there for a legitimate
+    # read-only reason (a periodic backup remote, a clone's leftovers), and
+    # the actual guarantee is upstream of it - under `local` no skill issues
+    # the push at all. This tells a human to go remove the loaded gun.
+    def warn_local_mode_with_dolt_remote(env, manifest)
+      return if manifest.beads_push_allowed?
+
+      remotes = manifest.beads_dolt_remotes
+      return if remotes.empty?
+
+      env.warn(
+        code: "beads_sync_local_with_dolt_remote",
+        message: "#{manifest.path}: beads.sync resolves to local " \
+                 "(#{manifest.beads_sync_declared? ? 'declared' : 'unset, defaulted'}) but this " \
+                 "checkout's .beads has a dolt remote configured: #{remotes.join('; ')}. " \
+                 "No wurk skill will push it, but any hand-run bd dolt push would. Remove the " \
+                 "remote, or declare the mode that matches it."
+      )
+    end
 
     def build(file)
       return Manifest.load if file.nil?
