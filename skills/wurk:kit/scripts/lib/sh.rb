@@ -133,6 +133,12 @@ class Sh
   # this uses Open3.popen3 to get a real pid, races a wait thread against a
   # timeout thread, and on timeout sends TERM then KILL to the child so a
   # hung `gh` or `tmux` poll cannot stall a session indefinitely.
+  #
+  # That kill reaches the direct child only, so a command that spawns durable
+  # children can still orphan them on timeout. ADR-0015 records why the
+  # blocking path keeps single-pid semantics rather than adopting
+  # `pgroup: true`, and points a caller that needs the whole tree reaped at
+  # #run_streaming.
   class RealRunner
     def run(argv, chdir: nil, timeout: 60)
       opts = {}
@@ -150,7 +156,7 @@ class Sh
 
         unless wait_thr.join(timeout)
           timed_out = true
-          kill_process_group(wait_thr.pid)
+          kill_child_pid(wait_thr.pid)
           wait_thr.join(2)
         end
 
@@ -180,7 +186,7 @@ class Sh
     # process's lifetime, with stdout/stderr redirected to out_path. Returns
     # the pid. Its own process group (pgroup: true) is what lets a later
     # signal reach the whole tree; #run above deliberately keeps its
-    # existing single-pid kill semantics (kill_process_group, below) so this
+    # existing single-pid kill semantics (kill_child_pid, below) so this
     # method changes no existing call site.
     def spawn_detached(argv, chdir: nil, out_path:)
       opts = { pgroup: true, out: out_path, err: [:child, :out] }
@@ -277,7 +283,11 @@ class Sh
       # left to read.
     end
 
-    def kill_process_group(pid)
+    # Signals the direct child pid only, never a process group - #run's
+    # child shares this process's group (no pgroup: true), so its pid is not
+    # a process-group id and a negative-pid signal would be a silent no-op.
+    # That single-pid delivery is deliberate, not an oversight: see ADR-0015.
+    def kill_child_pid(pid)
       Process.kill("TERM", pid)
       sleep 0.2
       Process.kill("KILL", pid)
@@ -285,11 +295,10 @@ class Sh
       # already exited
     end
 
-    # Like kill_process_group, but signals the negative pid - the whole
-    # process group - instead of the single pid. Only used by
-    # #run_streaming's timeout path: #run keeps kill_process_group's
-    # single-pid semantics untouched (see the "Process groups, only on the
-    # new path" design note in the long-gate-runner plan).
+    # Like kill_child_pid, but signals the negative pid - the whole process
+    # group - instead of the single pid. Only used by #run_streaming's
+    # timeout path, whose child really is its own group leader (pgroup:
+    # true). #run keeps single-pid semantics; ADR-0015 records why.
     def kill_pgid(pid)
       Process.kill("TERM", -pid)
       sleep 0.2
