@@ -64,6 +64,55 @@ class ShTest < Minitest::Test
     refute result.success?
   end
 
+  # ADR-0015: #run does not pass pgroup: true, so its child stays in this
+  # process's group and a signal aimed at the group - an operator's Ctrl-C,
+  # an aborted Bash tool call - still reaches it. If someone adds
+  # pgroup: true to #run, this test is the first thing that fails.
+  def test_run_leaves_the_child_in_the_callers_process_group
+    result = Sh.run(["/bin/sh", "-c", "ps -o pgid= -p $$"])
+
+    assert result.success?
+    assert_equal Process.getpgid(0), result.out.strip.to_i
+  end
+
+  # The deliberate counterpart to
+  # test_run_streaming_on_timeout_kills_the_whole_process_group below: same
+  # child-plus-grandchild shape, opposite assertion. #run signals the direct
+  # child only, so the grandchild survives. ADR-0015 accepts that gap and
+  # names run_streaming as the path for callers that cannot live with it.
+  def test_run_on_timeout_kills_the_direct_child_only
+    Dir.mktmpdir do |dir|
+      pid_file = File.join(dir, "grandchild.pid")
+      # The grandchild's stdio is redirected away from the inherited pipe on
+      # purpose. A grandchild that keeps holding that pipe also stalls #run
+      # past its own timeout, because the reader threads block until the
+      # pipe closes - a separate defect this test is not about (ADR-0015's
+      # consequences record it).
+      script = "sleep 30 >/dev/null 2>&1 & echo $! > #{pid_file}; wait"
+      grandchild_pid = nil
+
+      begin
+        result = Sh.run(["/bin/bash", "-c", script], timeout: 0.3)
+
+        assert result.timed_out?
+        refute result.success?
+
+        grandchild_pid = wait_for_pid_file(pid_file)
+        refute_nil grandchild_pid, "grandchild never recorded its pid - test setup broke"
+
+        sleep 0.3
+        assert alive?(grandchild_pid),
+               "grandchild was reaped - #run appears to have gained process-group semantics (see ADR-0015)"
+      ensure
+        begin
+          Process.kill("KILL", grandchild_pid) if grandchild_pid
+        rescue Errno::ESRCH
+          nil
+        end
+      end
+    end
+  end
+
   def test_run_records_rendered_command_into_envelope
     env = Envelope.new(script: "example")
 
@@ -192,12 +241,7 @@ class ShTest < Minitest::Test
 
       # Give the pid file a moment to land, then confirm the grandchild is
       # actually gone rather than orphaned.
-      deadline = Time.now + 2
-      grandchild_pid = nil
-      until grandchild_pid || Time.now > deadline
-        grandchild_pid = File.read(pid_file).strip.to_i if File.exist?(pid_file) && !File.zero?(pid_file)
-        sleep 0.05
-      end
+      grandchild_pid = wait_for_pid_file(pid_file)
       refute_nil grandchild_pid, "grandchild never recorded its pid - test setup broke"
 
       sleep 0.3
@@ -241,5 +285,26 @@ class ShTest < Minitest::Test
     assert_raises(FakeSh::UnexpectedCommand) do
       Sh.run_streaming(["make", "quality"], log_path: "/tmp/whatever.log")
     end
+  end
+
+  private
+
+  # Polls for the pid a backgrounded grandchild writes to pid_file. Returns
+  # the pid, or nil if the file never lands within the deadline.
+  def wait_for_pid_file(pid_file, deadline_seconds: 2)
+    deadline = Time.now + deadline_seconds
+    while Time.now < deadline
+      return File.read(pid_file).strip.to_i if File.exist?(pid_file) && !File.zero?(pid_file)
+
+      sleep 0.05
+    end
+    nil
+  end
+
+  def alive?(pid)
+    Process.kill(0, pid)
+    true
+  rescue Errno::ESRCH
+    false
   end
 end
