@@ -51,8 +51,10 @@ this skill's REFERENCE.md. Then:
   locks live in one project-level locks dir keyed by RESOURCE (repo),
   not by campaign, so contending campaigns wait on the same mutex.
   Owner files carry campaign + bead + pid. Machine-wide gate slots cap
-  concurrent full gates/warms across ALL campaigns (heavy runs take
-  the repo lock first, then a slot; release in reverse). Clearing a
+  concurrent full gates/warms across ALL campaigns, while a campaign
+  mutex caps one campaign's own concurrent gates - two caps, two locks
+  (Phase 3's gate semaphore). Heavy runs take the campaign mutex
+  first, then the repo lock, then a slot; release in reverse. Clearing a
   stale lock owned by another campaign needs the owner re-read plus a
   liveness probe, journaled in both campaigns' journals.
 - **State stays campaign-scoped.** Journal and morning-report filenames
@@ -119,14 +121,45 @@ worktree isolation when parallel workers share directories.
   local-only work) - not raw git; the kit seeds and warms. Do not run
   many warms concurrently with a live gate - warms include a full test
   run and will contend (DB sandbox failures at 4x on one machine).
-- **Gate semaphore**: when multiple workers share one machine, name a
-  lock dir in every dispatch (mkdir-mutex, bounded wait as an explicit
-  named override of the worker no-sleep rule, always-release) - the
-  project's shared resource-keyed lock when it runs concurrent
-  campaigns, a campaign lock dir otherwise.
-  Before trusting a held lock, probe liveness yourself: lock mtime vs
-  `ps` for any live gate process, machine-wide. Clear a verified-stale
-  lock and journal it; never let workers break locks.
+- **Gate semaphore - two caps, two locks.** When multiple workers share
+  one machine, every dispatch names the lock dirs a gate run must hold
+  (mkdir-mutex, bounded wait as an explicit named override of the
+  worker no-sleep rule, always-release). Two different caps are in
+  play, and one lock dir cannot enforce both:
+  - the **per-campaign concurrency cap** - how many gates YOUR campaign
+    runs at once - enforced by a **campaign mutex** keyed to the
+    campaign id;
+  - the **machine-wide cap** - how many gates run at once across ALL
+    campaigns, yours and anyone else's - enforced by the shared
+    **machine gate slots** (`--slots-dir` + `--slots N`).
+  Distinct from both is the **repo lock**: the project's shared
+  resource-keyed gate lock, keyed to a repo, which serializes heavy
+  runs against the same checkout no matter whose campaign they belong
+  to (Concurrent campaigns, above).
+  Acquire in the fixed order **campaign mutex, then repo lock, then
+  machine slot**; release in the reverse. The order is fixed because
+  the alternative starves the machine: take the globally scarce slot
+  first and you then sit on it while blocking on your own campaign's
+  mutex - holding a machine-wide resource while waiting on yourself,
+  for as long as your own queue takes, with every other campaign on
+  the box locked out. Campaign-private and cheapest-to-contend first,
+  globally scarce last.
+  Do not re-describe the mechanics in a dispatch or hand-roll them in a
+  wrapper: hand `ruby <kit>/scripts/lock.rb acquire` every lock the run
+  needs (`--campaign-mutex`, `--gate-lock`, `--slots-dir/--slots`) and
+  it sorts them into that order whatever order the flags arrived in,
+  taking them all-or-nothing; `lock.rb release` gives them back in
+  reverse. A campaign that names only ONE lock dir per dispatch has
+  silently merged the two caps into one, and will exceed whichever cap
+  it stopped enforcing.
+  The judgement stays yours even though the script performs the
+  locking. You decide both caps and their numbers before you dispatch,
+  and you verify staleness rather than assuming it: before trusting a
+  held lock, probe liveness yourself - lock mtime vs `ps` for any live
+  gate process, machine-wide, alongside `lock.rb status`. Clear a
+  verified-stale lock (`lock.rb clear` refuses anything not provably
+  stale, and hands the ambiguous cases back to a human) and journal it;
+  never let workers break locks.
 - **Short gate or long gate - you decide, before you dispatch.**
   Measure the repo's gate budget against the host's Bash timeout cap
   (600000ms). Under the cap it is a short gate and the foreground rule
@@ -312,8 +345,11 @@ you state anything about the gate - your own last message is not
 evidence. "finished" carries the gate's ok; "abandoned" and
 "not_found" mean the gate produced no result - report gate not-run,
 never green.>
-<Gate-semaphore slot: lock dir, bounded-wait shape, always-release,
-staleness = report not break.>
+<Gate-semaphore slot: the campaign mutex dir, the repo gate-lock dir
+and the slots dir + slot count, acquired in that fixed order (campaign
+mutex, then repo lock, then machine slot) via `lock.rb acquire` and
+released in reverse; bounded-wait shape, always-release, staleness =
+report not break.>
 <Known-flake slot.> Never truncate a failing gate.
 
 MECHANICS: Append-only bead notes (bd note). Absolute paths. Branch
