@@ -36,7 +36,13 @@ Process:
    authorized it; in local-only campaigns wurk:mr is skipped entirely
    and the conductor merges your branch.
 4. Write bead notes locally (dated, factual). Never push the tracker -
-   the conductor owns tracker pushes.
+   the conductor owns tracker pushes. Report the reason in the vocabulary
+   that distinguishes the two cases, because they land differently: under
+   a repo whose manifest sets `beads.sync` to `git` or `dolthub` it is
+   `tracker push deferred to the conductor` (someone pushes it later);
+   under `local` - which is also what an unset key resolves to - it is
+   `tracker is local-only, nothing pushed` (nobody ever does, and no
+   conductor override can change that).
 
 Gate discipline (learned the expensive way, campaigns 004 and 007):
 

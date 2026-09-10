@@ -530,6 +530,73 @@ breaking schema change happens for other reasons, the rename rides along.
 A bead carrying one of these labels takes no `area:` label; the two are
 alternatives.
 
+## `beads.sync`
+
+How this repo's beads database syncs, and therefore whether any skill is
+ever allowed to run `bd dolt push` here. Three modes:
+
+- **local** - the beads never leave the machine. `bd dolt push` is
+  forbidden. A step that would have pushed reports `not pushed, tracker is
+  local` instead and carries on; nothing else about the step changes,
+  including the `bd note` that records a request URL on the bead.
+- **git** - the dolt remote is a git+ssh URL on the same forge as the code
+  (`git+ssh://git@<host>/./<owner>/<repo>.git`). The tracker is pushed
+  **after** the code push, because that is the point at which a reviewer
+  can see a branch whose bead they cannot.
+- **dolthub** - the remote is a DoltHub database rather than a forge URL.
+  Same ordering as `git`. The remote name and the credentials differ: a
+  DoltHub remote authenticates with `dolt login` / a DoltHub API token
+  rather than the ssh key the code push uses, and the remote is often not
+  called `origin`. `bd dolt push` with no argument pushes the configured
+  default; if a repo's DoltHub remote is named something else, that name is
+  the argument, and the repo says so in its `.claude/wurk/mr.md` extension
+  rather than in this schema.
+
+**Absent means `local`**, and that default is chosen against the usual
+rule. Every other default in this schema is the most common value
+(`repo.default_branch` = `main`); this one is the value that does the
+least, because the two failure directions are not symmetrical:
+
+- Guessing `git` for a repo whose beads are local publishes an issue
+  database that was never meant to leave the machine. Nothing un-publishes
+  it - a deleted ref is still in someone's clone and in the forge's logs.
+- Guessing `local` for a repo that does push costs one skipped push and a
+  warning saying exactly that.
+
+So an absent key can never cause a push. This is the same asymmetry the
+rest of "Validation" below rests on: guessing a structural behavior is
+worse than stopping, and where a guess must be made it is made only in the
+recoverable direction.
+
+An unset key **warns** (never blocks) on every manifest load, naming the
+three modes - so a repo that does push is told to declare the key rather
+than quietly losing its tracker pushes.
+
+The lint adds a second, environmental warning: **mode `local` (declared or
+defaulted) while this checkout's `.beads` still has a dolt remote
+configured.** That combination is the footgun the key exists for. It reads
+two places, because a remote can be in either:
+
+- `.beads/config.yaml`, the `sync.remote` key `bd` itself reads (commented
+  lines do not count - the shipped config documents the key in a comment).
+- `.beads/embeddeddolt/*/.dolt/repo_state.json`, dolt's own state, which
+  keeps a remote added once even after the yaml no longer mentions it. In
+  the incident behind this key the remote was only here, and a guard script
+  that kept deleting it from the yaml never reached it.
+
+It is a warning and not a block: the remote may be there for a legitimate
+read-only reason, and the real guarantee is upstream of it - under `local`
+no skill issues the push at all. The warning exists to get the loaded gun
+out of the room. Unlike everything in `validate!`, this check touches the
+filesystem, which is why it lives in `manifest.rb check` rather than in
+load-time validation.
+
+`manifest.rb check` also reports `data.beads_sync` and
+`data.beads_sync_declared`, which is how `/wurk:mr` and `/wurk:cleanup`
+gate their tracker push without parsing the manifest themselves. The two
+fields are separate because "local because the repo said so" and "local
+because nobody said anything" are different sentences in a report.
+
 ## `{path}` substitution
 
 `parallelism.trust` is the one command run *about* a new worktree rather
@@ -549,6 +616,7 @@ is already handled there.
 | repo.default_branch | `main` | `main` | `main` |
 | beads.prefix | `st` | `px` | (uses GL-NN branch tags; bead prefix TBD) |
 | beads.topology | beads | beads | beads-with-forge-projection |
+| beads.sync | git | git | (TBD - declare before the first `/wurk:mr`) |
 | forge.kind | github | github | gitlab |
 | gate.full | mix quality | mix quality | mise run quality |
 | gate.loop | mix quality --profile loop | mix quality --profile loop | mise run quality:quick |
@@ -616,7 +684,9 @@ Required: `wurk`, `beads.prefix`, `forge.kind`, `gate.full`, `gate.loop`,
 `changelog.mode`.
 
 Defaults applied when a key is absent: `repo.default_branch` = `main`,
-`beads.topology` = `beads`,
+`beads.topology` = `beads`, `beads.sync` = `local` (and warns - see
+"`beads.sync`" above for why the default is the safe value rather than the
+common one),
 `commits.style` = `s-form`, `commits.subject_under` = 50,
 `commits.body_line_max` = 72, `commits.total_lines_max` = 40,
 `commits.trailer.key` = `Refs`, `models.direction` = `opus`,
@@ -652,6 +722,9 @@ gate commands run at the root of the checkout being gated.
   stopping.
 - **Command fields must be argv arrays** of strings. A shell string is a
   schema error, never something to split on whitespace.
+- **An unset `beads.sync` warns** and resolves to `local`, so the absent
+  key can never cause a tracker push. A *bad* value still blocks, like
+  every other enum. See "`beads.sync`" above.
 - **`rebase.auto_resolve_paths` entries are validated disjoint** from
   `gate.moving_files`, `gate.guard_ledger`, `parallelism.repair_when`, and
   the manifest's own directory (`.claude/`) - in both match directions -

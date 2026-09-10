@@ -1097,3 +1097,167 @@ class ManifestCliTest < Minitest::Test
     end
   end
 end
+
+# beads.sync - the tracker-push gate. The safety property under test
+# throughout: an absent key can never resolve to a mode that pushes.
+class ManifestBeadsSyncTest < Minitest::Test
+  def without_sync
+    raw = JSON.parse(File.read(ManifestFixtures.path("valid")))
+    raw["beads"].delete("sync")
+    Manifest.new(path: ManifestFixtures.path("valid"), raw: raw)
+  end
+
+  def with_sync(value)
+    ManifestFixtures.load_with("valid", { "beads" => { "sync" => value } })
+  end
+
+  # sabotage: change the beads.sync default to "git" -> red. This is the one
+  # the bead calls P1: an unset key must not be able to cause a push.
+  def test_absent_beads_sync_defaults_to_local_and_forbids_pushing
+    m = without_sync
+    assert_equal "local", m.beads_sync
+    refute m.beads_push_allowed?
+    refute m.beads_sync_declared?
+  end
+
+  # sabotage: turn the unset warning into an error -> red (a missing key with
+  # a safe default is not a reason to refuse to run).
+  def test_absent_beads_sync_warns_without_blocking
+    m = without_sync
+    assert m.valid?, "an unset beads.sync must not invalidate the manifest: #{m.errors.inspect}"
+    assert_match(/beads\.sync is unset/, m.warnings.join("\n"))
+    assert_match(/defaulting to local/, m.warnings.join("\n"))
+  end
+
+  # sabotage: drop the unset warning -> red.
+  def test_declared_local_is_silent_but_still_forbids_pushing
+    m = with_sync("local")
+    assert m.valid?
+    assert_empty m.warnings
+    assert_equal "local", m.beads_sync
+    refute m.beads_push_allowed?
+    assert m.beads_sync_declared?
+  end
+
+  def test_git_and_dolthub_allow_pushing
+    assert with_sync("git").beads_push_allowed?
+    assert with_sync("dolthub").beads_push_allowed?
+    assert_equal "dolthub", with_sync("dolthub").beads_sync
+  end
+
+  # sabotage: make beads_push_allowed? read `!= "local"` -> red. An
+  # unrecognized mode must not fall through into a push.
+  def test_an_unrecognized_mode_blocks_and_does_not_allow_pushing
+    m = with_sync("gitlab")
+    refute m.valid?
+    assert_match(/beads\.sync is "gitlab"; expected one of local, git, dolthub/, m.errors.join("\n"))
+    refute m.beads_push_allowed?
+  end
+end
+
+# The lint's environmental check: mode local, dolt remote present anyway.
+class ManifestBeadsSyncLintTest < Minitest::Test
+  DOLT_REMOTE_STATE = {
+    "remotes" => {
+      "origin" => { "name" => "origin", "url" => "git+ssh://git@example.invalid/./acme/thing.git" }
+    }
+  }.freeze
+
+  # A throwaway checkout: <root>/.claude/wurk.json, so checkout_root - and
+  # therefore the .beads lookup - lands where the fixture writes .beads.
+  def in_checkout(sync:, config: nil, dolt_state: nil)
+    Dir.mktmpdir do |root|
+      raw = JSON.parse(File.read(ManifestFixtures.path("valid")))
+      sync.nil? ? raw["beads"].delete("sync") : raw["beads"]["sync"] = sync
+      FileUtils.mkdir_p(File.join(root, ".claude"))
+      manifest = File.join(root, ".claude", "wurk.json")
+      File.write(manifest, JSON.pretty_generate(raw))
+
+      if config
+        FileUtils.mkdir_p(File.join(root, ".beads"))
+        File.write(File.join(root, ".beads", "config.yaml"), config)
+      end
+      if dolt_state
+        dir = File.join(root, ".beads", "embeddeddolt", "zz", ".dolt")
+        FileUtils.mkdir_p(dir)
+        File.write(File.join(dir, "repo_state.json"), JSON.generate(dolt_state))
+      end
+
+      io = StringIO.new
+      code = ManifestCli.run(["check", "--file", manifest], io: io)
+      yield code, JSON.parse(io.string)
+    end
+  end
+
+  def codes(env)
+    env["warnings"].map { |w| w["code"] }
+  end
+
+  # sabotage: delete warn_local_mode_with_dolt_remote's call site -> red.
+  def test_local_mode_with_a_configured_remote_warns
+    in_checkout(sync: "local", config: %(sync.remote: "git@example.invalid:acme/thing.git"\n)) do |code, env|
+      assert_equal 0, code, "the warning must not fail the lint"
+      assert_equal true, env["ok"]
+      assert_includes codes(env), "beads_sync_local_with_dolt_remote"
+      assert_match(/sync\.remote -> git@example\.invalid:acme\/thing\.git/, env["warnings"].map { |w| w["message"] }.join)
+    end
+  end
+
+  # The incident's actual shape: nothing in config.yaml, a remote still live
+  # inside the embedded dolt db.
+  # sabotage: check config.yaml only -> red.
+  def test_a_remote_only_inside_the_embedded_dolt_db_warns
+    in_checkout(sync: "local", config: "# no remote here\n", dolt_state: DOLT_REMOTE_STATE) do |_code, env|
+      assert_includes codes(env), "beads_sync_local_with_dolt_remote"
+      assert_match(%r{embeddeddolt/zz: origin ->}, env["warnings"].map { |w| w["message"] }.join)
+    end
+  end
+
+  # sabotage: match commented lines too -> red, and every repo shipping bd's
+  # documented config.yaml would warn.
+  def test_a_commented_out_remote_does_not_warn
+    config = <<~YAML
+      # Cross-machine sync uses Dolt remotes.
+      # sync.remote: "git@example.invalid:acme/thing.git"
+    YAML
+    in_checkout(sync: "local", config: config) do |_code, env|
+      refute_includes codes(env), "beads_sync_local_with_dolt_remote"
+    end
+  end
+
+  def test_an_unset_mode_with_a_remote_warns_about_both
+    in_checkout(sync: nil, dolt_state: DOLT_REMOTE_STATE) do |_code, env|
+      assert_includes codes(env), "beads_sync_local_with_dolt_remote"
+      assert_match(/unset, defaulted/, env["warnings"].map { |w| w["message"] }.join)
+      assert_match(/beads\.sync is unset/, env["warnings"].map { |w| w["message"] }.join)
+    end
+  end
+
+  # sabotage: warn regardless of mode -> red. A repo that declares git is
+  # supposed to have a remote.
+  def test_a_pushing_mode_with_a_remote_does_not_warn
+    in_checkout(sync: "git", dolt_state: DOLT_REMOTE_STATE) do |_code, env|
+      refute_includes codes(env), "beads_sync_local_with_dolt_remote"
+    end
+  end
+
+  def test_local_mode_with_no_beads_directory_does_not_warn
+    in_checkout(sync: "local") do |_code, env|
+      refute_includes codes(env), "beads_sync_local_with_dolt_remote"
+    end
+  end
+
+  # The skills read the mode off this envelope rather than parsing the
+  # manifest themselves.
+  # sabotage: drop either data field -> red.
+  def test_the_lint_reports_the_mode_for_the_skills_to_gate_on
+    in_checkout(sync: "dolthub") do |_code, env|
+      assert_equal "dolthub", env["data"]["beads_sync"]
+      assert_equal true, env["data"]["beads_sync_declared"]
+    end
+    in_checkout(sync: nil) do |_code, env|
+      assert_equal "local", env["data"]["beads_sync"]
+      assert_equal false, env["data"]["beads_sync_declared"]
+    end
+  end
+end
