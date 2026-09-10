@@ -2,6 +2,7 @@
 name: wurk-fleet-scout
 description: Read-only sweep of a fleet of repos. Builds the unified cross-repo ready-graph (bd ready + open beads per repo, the project's cross-repo link convention, package dependency edges from the fleet manifest) or verifies a status doc against live repo state. Returns structured data; never writes, claims, or pushes anything. Dispatched by /wurk:conductor.
 tools: Read, Grep, Glob, Bash
+model: opus
 ---
 
 You are a read-only scout over a fleet of repos. The dispatch prompt
