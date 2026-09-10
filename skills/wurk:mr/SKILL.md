@@ -18,10 +18,10 @@ enter review queues, and send notifications. The repo's authority table puts
 the human gate on the push and the request itself - and **invoking this skill
 is that gate firing**: typing `/wurk:mr` is the user asking for the push in
 their own words, so this skill does not stop again to ask. That makes the
-checks in steps 1-5 load-bearing in a way they would not be if a human still
+checks in steps 1-6 load-bearing in a way they would not be if a human still
 read a summary before answering: a red gate, an unresolved rebase conflict,
-or a missing changelog entry has to catch a problem before step 6, because
-nothing catches it after.
+an unaddressed must-fix review finding, or a missing changelog entry has to
+catch a problem before step 7, because nothing catches it after.
 
 **The bead is not closed here.** It stays in progress until the branch merges
 into the default branch. A request is a request, not an outcome.
@@ -53,7 +53,7 @@ change:
   `git merge-base --is-ancestor <parent-branch> HEAD`. If the parent moved
   (it was rebased or gained commits), rebase onto the **parent**, not the
   default branch, and re-run the gate as usual.
-- **Step 7 bases the request on the parent branch** (`--base
+- **Step 8 bases the request on the parent branch** (`--base
   <parent-branch>` on the create command) and opens it as **DRAFT** while
   any upstream request in the stack is unmerged. The body names the stack
   order explicitly ("stack: #12 <- this <- #14") and says "blocked by
@@ -104,12 +104,12 @@ change:
 
    Validate each with `bd show <id>`. STOP if none resolves. A request that
    cannot be traced to a bead is work nobody can find later, and the `bd
-   note` in step 8 has nowhere to go.
+   note` in step 9 has nowhere to go.
 
 3. **Fetch and rebase onto the default branch.** The gate in step 4 only
    means something if it attests to the tree that will actually merge, not to
    branch + stale main. Rebasing has to happen here, before the gate:
-   rebasing between the summary in step 6 and the push in step 7 would
+   rebasing between the summary in step 7 and the push in step 8 would
    invalidate the very attestation the gate exists to produce.
 
    ```bash
@@ -127,7 +127,7 @@ change:
    Read `data.status`:
 
    - **`"rebased"`** - `data.target` (the sha rebased onto),
-     `data.lock_changed`, and `data.repaired` feed step 6's summary.
+     `data.lock_changed`, and `data.repaired` feed step 7's summary.
    - **`"conflict"`** (`blocked` code `rebase_conflict`, `needs: "human"`) -
      `data.files` names the conflicting files. **The script has already
      captured them and aborted the rebase** - capture-then-abort is baked in,
@@ -149,7 +149,7 @@ change:
 
      Read the result: **`status: "rebased"`** with `data.resolved`
      non-empty means a resolution happened, and it **must** be carried into
-     step 6's summary and step 7's request body. Any `blocked` response
+     step 7's summary and step 8's request body. Any `blocked` response
      means stop and report `data.stop_reason` verbatim - the worktree is
      never left mid-rebase either way. **`status:
      "conflict_not_reproduced"`** means the worktree moved since
@@ -166,7 +166,7 @@ change:
      likely to qualify, `data.applicable` comes back `false` in step 4 and
      no gate runs, so the summary and the request body are the only place a
      human ever sees that a merge was made on their behalf. A resolution
-     that reaches step 7 unnamed is a defect.
+     that reaches step 8 unnamed is a defect.
 
      If `rebase_resolve.rb` is interrupted mid-run, `git rebase --abort` in
      the worktree restores the pre-rebase state.
@@ -212,7 +212,75 @@ change:
    body and the final report, so a skipped gate is never mistaken for a green
    one.
 
-5. **Check the changelog.** Only when `data.touches_build` (from step 1) is
+5. **Run the declared pre-request review round.** Only when the manifest
+   declares one. Read the section rather than assuming it:
+
+   ```bash
+   ruby ~/.claude/skills/wurk:kit/scripts/lib/manifest.rb check
+   ```
+
+   `data.mr_review_agents` is the list of agent names the repo ships in
+   `.claude/agents/`. **Empty means skip this step in silence** - no
+   warning, no line in the summary, no line in the report. A repo that
+   declares no review agents is not a repo with a gap in its process, and
+   saying so every run would train a reader to skim exactly the place a
+   real finding appears.
+
+   When the list is non-empty, spawn **one fresh instance of each named
+   agent** with the Agent tool, in a single batch, pointed at this
+   worktree.
+
+   - **Fresh, every run.** A new instance each time, never a continued one.
+     An instance that has already argued a position about this branch -
+     because it wrote the code, planned it, or reviewed an earlier round of
+     it - is reviewing its own conclusions, which is the failure this whole
+     step exists to catch.
+   - **One round, whatever it finds.** Address the findings, then move on to
+     step 6; do not re-spawn to check the fixes. Two reasons, and both cost
+     more than they look. An unbounded review-fix-review loop has no natural
+     stopping point, so a ten-minute step becomes an all-night session with
+     no one awake to call it. And a second round is a review of the *fixes*,
+     not of the branch - it re-litigates the first round's judgment instead
+     of testing the work. If a round's findings are large enough that a
+     second pass feels necessary, that is a signal to stop and report, not
+     to iterate: the branch is not ready for a request.
+   - **The agents review; they do not edit.** The named agents are read-only
+     by construction. The fixes are yours to make and yours to commit.
+
+   **What counts as must-fix is the reporting agent's call, not this
+   skill's.** A finding is must-fix when the agent that reported it says so,
+   in whatever severity vocabulary that consumer's agents ship. Do not
+   re-rank a finding, and do not promote an unranked one: an agent that
+   states no severity has not declared a blocker.
+
+   **Everything not must-fix is carried, never dropped.** A finding this
+   step discards silently is worse than one never made, because the round
+   reported clean. Every non-must-fix finding goes into step 7's summary and
+   the request body's Notes in step 8, and anything that deserves its own
+   work gets a bead filed for it. The request body naming a deferred finding
+   is what lets a reviewer disagree with the deferral.
+
+   **Re-gate on a mechanical test, not a judgment.** Capture the tree's
+   identity before spawning:
+
+   ```bash
+   git rev-parse HEAD
+   git status --porcelain
+   ```
+
+   and run both again once the must-fix findings are addressed. If either
+   output differs, the tree changed and step 4's attestation no longer
+   describes what will merge: commit the fixes with `/wurk:commit`, whose
+   own gate run is the re-gate, and refuse on red exactly as step 4 does. If
+   both are byte-identical, nothing changed and no re-gate is owed - do not
+   run the gate again to feel sure. Never push with the fixes uncommitted:
+   an addressed finding that is not in a commit is not in the request.
+
+   Record for step 7 and step 10: the agents that ran, how many findings
+   each returned, how many were must-fix, how many were addressed, and what
+   was deferred and why.
+
+6. **Check the changelog.** Only when `data.touches_build` (from step 1) is
    true and the diff touches the project's public surface. Follow the branch
    of `/wurk:commit` Step 1.6 that the manifest's `changelog.mode` selects,
    and check that the entry it calls for exists.
@@ -222,8 +290,8 @@ change:
    behavior, and guessing produces a release note describing something the
    code may not do.
 
-6. **Record what is about to become public.** Print the summary, then proceed
-   straight to step 7 - invoking `/wurk:mr` was the request to publish, so
+7. **Record what is about to become public.** Print the summary, then proceed
+   straight to step 8 - invoking `/wurk:mr` was the request to publish, so
    there is nothing left to ask:
 
    ```
@@ -236,12 +304,15 @@ change:
               (or: auto-resolved in <files> - <rationale>)
    Commits:   N
    Gate:      full gate green   (or: docs only, no gate applicable)
+   Review:    <agent>, <agent> - N findings, M must-fix, M addressed
+              (or: re-gated after fixes / omit the line entirely when the
+              manifest declares no review agents)
    Changelog: <path>   (or: not needed - internal tooling)
 
    <proposed title>
    ```
 
-7. **Push, then open the request.** No kit script touches either - the
+8. **Push, then open the request.** No kit script touches either - the
    contract bans a `git push` or a request-creating code path anywhere under
    `scripts/` - so these stay hand-run:
 
@@ -283,7 +354,9 @@ change:
    - **What** - the shape of the change, not a file list; the diff has that
    - **Notes** - anything surprising, deliberately deferred, or worth a
      second opinion, plus which gate ran, and - when step 3 auto-resolved a
-     conflict - which file it resolved and what the merge did
+     conflict - which file it resolved and what the merge did. When step 5
+     ran a review round, every finding it did not address, so the deferral
+     is reviewable rather than invisible
    - **The close lines** - one per bead the branch's trailers name (plus the
      epic, if they share one). Under the default `beads` topology these name
      the bead ids. Under `beads-with-forge-projection` they name the forge
@@ -291,7 +364,7 @@ change:
 
    No AI attribution in the title or the body, same rule as commit messages.
 
-8. **Sync beads, then record the request.** Also hand-run - `bd close` is on
+9. **Sync beads, then record the request.** Also hand-run - `bd close` is on
    the banned-operation list, and this step never closes anything, but `bd
    dolt push` and `bd note` are ordinary bead commands no script wraps.
 
@@ -346,12 +419,14 @@ change:
 
    Leave the bead in progress. Do not close it.
 
-9. **Report.**
+10. **Report.**
 
    ```
    Request opened: <url>
    Branch:  <branch> -> <default branch> (N commits)
    Gate:    full gate green
+   Review:  <agent>, <agent> - M must-fix addressed, K deferred to the body
+            (omit the line entirely when no review agents are declared)
    Bead:    <id> in progress, URL recorded, <beads pushed | not pushed,
             tracker is local-only | tracker push deferred to the orchestrator>
    Next:    merging is a human decision; the bead closes on merge, not here
@@ -362,9 +437,9 @@ change:
 - **Never close the bead here.** Closing fires on merge, verified against the
   remote. Closing at request-open time asserts to every other machine that
   the work landed when it has not.
-- **The gate is the command invocation, not a prompt in step 6.** Typing
+- **The gate is the command invocation, not a prompt in step 7.** Typing
   `/wurk:mr` is the user asking for the push in their own words; the skill
-  does not stop to ask again once it starts. That is why steps 1-5 stay
+  does not stop to ask again once it starts. That is why steps 1-6 stay
   strict rather than advisory.
 - **Merge strategy matters downstream.** Where the project merges by rebase,
   the branch tip never becomes an ancestor of the default branch, so merge

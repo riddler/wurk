@@ -154,6 +154,13 @@ defaults are listed under "Defaults" below.
 
   "rebase": {                         // (opt) omit = auto-resolution off
     "auto_resolve_paths": []          // (opt) default []; see "rebase.auto_resolve_paths" below
+  },
+
+  "mr": {                             // (opt) omit = no pre-request review round
+    "review_agents": [                // required when mr is present; non-empty.
+      "diff-reviewer",                // Bare agent names the repo ships as
+      "convention-reviewer"           // .claude/agents/<name>.md; see
+    ]                                 // "mr.review_agents" below
   }
 }
 ```
@@ -408,6 +415,46 @@ split into two classes, and only one of them is a disjointness surface:
 Each rejection names both the offending entry and the list or field it
 collided with, so a consumer can fix its manifest without reading the kit
 source.
+
+## `mr.review_agents`
+
+The read-only review agents this repo ships in `.claude/agents/`, spawned
+once against the worktree by `/wurk:mr` after the gate is green and before
+the push. Names only: the kit never learns what any of them review, only
+which ones to run.
+
+This is not `judge`. `judge` (ADR-0008) is a merge-time propose/refute pass
+over **registered documents**, asking whether a change to judgment-bearing
+prose broke the rule that document states. This is a review of **the diff**
+by agents the consumer wrote, in the consumer's own terms. A repo can
+declare both, neither, or either one.
+
+- **review_agents** - required when `mr` is present, non-empty array of
+  bare agent names. Each name resolves to `.claude/agents/<name>.md`, so a
+  name is a filename segment and never a path: an entry containing `/`, a
+  `..` segment, a leading `-`, or an empty string blocks. A name repeated
+  in the list blocks too - the round is deliberately single, so a second
+  instance of the same agent is another run rather than another opinion.
+
+**Absent means no round, silently.** Present-or-absent, never
+half-present, the same rule `gate.sabotage`, `judge` and `rebase` follow: an
+`mr` section with a missing or empty `review_agents` is a schema error, not
+a quietly disabled round. Off is spelled by omitting the section, and the
+skill skips it without a warning - a repo that ships no review agents is not
+a repo with a gap in its process.
+
+The two checks split the same way `beads.sync` splits. Shape - a non-array,
+an empty list, a path-shaped name, a duplicate - is validated on every
+manifest load. **Whether a declared name has a file behind it is checked
+only by `manifest.rb check`**, because `validate!` reads no filesystem; that
+check **blocks** (code `mr_review_agent_missing`) rather than warning, since
+a name with nothing behind it has no legitimate reading, and the alternative
+to rejecting it in the lint is discovering it in `/wurk:mr` after the gate
+has run.
+
+`manifest.rb check` reports the resolved list as `data.mr_review_agents`,
+which is how `/wurk:mr` and `wurk-repo-worker` read the round without
+parsing the manifest themselves - empty when the consumer declares none.
 
 ## `gate.cwd`
 
@@ -705,8 +752,10 @@ skipped stage blocks, no
 false, `missing` always `[]`, no `git diff` shelled out for it), no `judge`
 section means `judge?` is `false` and the judge never runs, no `rebase`
 section (or an empty `auto_resolve_paths`) means rebase auto-resolution is
-off - see "`rebase.auto_resolve_paths`" above, and no `gate.cwd` means the
-gate commands run at the root of the checkout being gated.
+off - see "`rebase.auto_resolve_paths`" above, no `mr` section means
+`/wurk:mr` runs no pre-request review round and says nothing about it, and
+no `gate.cwd` means the gate commands run at the root of the checkout being
+gated.
 
 ## Validation
 
@@ -735,6 +784,12 @@ gate commands run at the root of the checkout being gated.
   "`rebase.auto_resolve_paths`" above for why the hazard surfaces are
   validated rather than merely documented, and why the coverage lists are
   not disjointness surfaces.
+- **`mr.review_agents` must be a non-empty array of bare agent names**
+  when the `mr` section is present. A non-array, an empty list, a name
+  containing a path separator or a `..` segment, and a name repeated in the
+  list all block. Whether the name resolves to `.claude/agents/<name>.md` is
+  checked by `manifest.rb check` only, and blocks there. See
+  "`mr.review_agents`" above.
 - **`gate.timeout_seconds` must be a positive integer.** Zero, a negative
   number, a float, and a non-numeric value all block.
 - **`gate.long_timeout_seconds` must be a positive integer.** Same rule as

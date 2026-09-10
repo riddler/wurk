@@ -75,7 +75,8 @@ class Manifest
   # The known key surface, for the unknown-key warning. Nested sections list
   # their own keys; a section absent from this map is not validated further.
   KNOWN = {
-    nil => %w[wurk repo beads forge gate parallelism tmux models artifacts commits changelog release judge rebase],
+    nil => %w[wurk repo beads forge gate parallelism tmux models artifacts commits changelog release judge rebase
+             mr],
     "repo" => %w[default_branch],
     "beads" => %w[prefix topology sync areas],
     "beads.areas" => %w[labels lands_alone always_batchable],
@@ -92,7 +93,8 @@ class Manifest
     "commits.trailer" => %w[key],
     "changelog" => %w[mode dir],
     "judge" => %w[model registry],
-    "rebase" => %w[auto_resolve_paths]
+    "rebase" => %w[auto_resolve_paths],
+    "mr" => %w[review_agents]
   }.freeze
 
   DEFAULTS = {
@@ -585,6 +587,45 @@ class Manifest
     Array(fetch("judge.registry"))
   end
 
+  # The read-only review agents a consumer ships in .claude/agents/ and
+  # wants spawned against the worktree between the gate and the push (the
+  # pre-request review round in /wurk:mr). Names only - the kit never learns
+  # what any of them do.
+  #
+  # Absent means the consumer ships no such agents, and the step is skipped
+  # in silence rather than warned about: a repo that never declared a review
+  # round is not missing one. Distinct from `judge` (ADR-0008), which is a
+  # merge-time propose/refute pass over registered DOCUMENTS; this is a
+  # review of the diff by the consumer's own agents.
+  #
+  # The filter is a safety valve, not a schema: a malformed value already
+  # blocks in validate_mr, and this keeps a non-string from reaching
+  # File.join in the lint before that block is read.
+  def mr_review_agents
+    value = fetch("mr.review_agents")
+    return [] unless value.is_a?(Array)
+
+    value.select { |name| name.is_a?(String) }
+  end
+
+  def mr_review_agents?
+    !mr_review_agents.empty?
+  end
+
+  # Where a declared name has to resolve. A name is a bare agent name and
+  # never a path, which is what validate_mr enforces - the file is always
+  # <checkout>/.claude/agents/<name>.md.
+  def mr_review_agent_path(name, root: checkout_root)
+    File.join(root, ".claude", "agents", "#{name}.md")
+  end
+
+  # Declared names with no file behind them. Reads the filesystem, so the
+  # lint calls it and validate! does not - the same split as
+  # beads_dolt_remotes.
+  def mr_review_agents_missing(root: checkout_root)
+    mr_review_agents.reject { |name| File.file?(mr_review_agent_path(name, root: root)) }
+  end
+
   # The only paths a rebase conflict may be auto-resolved in. Empty - the
   # default - means the feature is off, which is where every consumer starts.
   # Same matching rule as the gate path lists (see lib/gate_paths.rb): a
@@ -694,6 +735,7 @@ class Manifest
     validate_sabotage
     validate_judge
     validate_rebase
+    validate_mr
     validate_gate_timeout_seconds
     validate_gate_long_timeout_seconds
     validate_parallelism_timeout_seconds
@@ -1014,6 +1056,63 @@ class Manifest
     nil
   end
 
+  # A bare agent name, not a path: the name is joined to
+  # .claude/agents/<name>.md, so a separator or a ".." segment would let a
+  # declared "name" address a file outside the consumer's own agent
+  # directory.
+  MR_REVIEW_AGENT_RE = /\A[A-Za-z0-9][A-Za-z0-9._-]*\z/
+
+  # Present-or-absent, never half-present, the same rule gate.sabotage,
+  # judge and rebase follow: an `mr` section whose review_agents is missing
+  # or empty is a schema error, not a silently disabled review round. Off is
+  # spelled by omitting the section, and that omission is the only thing
+  # /wurk:mr skips on - silently, because a repo with no review agents is
+  # not a repo with a gap.
+  #
+  # Shape only. Whether a declared name has a file behind it is a fact about
+  # the filesystem, and validate! runs on every script's manifest load and
+  # touches no disk (see validate_gate_cwd, and warn_local_mode_with_dolt_remote
+  # for the same split), so that check lives in `manifest.rb check`.
+  def validate_mr
+    section = fetch("mr")
+    return if section.nil?
+
+    unless section.is_a?(Hash)
+      errors << "#{path}: mr must be an object (see wurk docs/manifest.md)"
+      return
+    end
+
+    agents = section["review_agents"]
+    unless agents.is_a?(Array) && !agents.empty?
+      errors << "#{path}: mr.review_agents must be a non-empty array of agent names " \
+                "(omit the mr section entirely to run no pre-request review round)"
+      return
+    end
+
+    agents.each { |name| validate_mr_review_agent(name) }
+    validate_mr_review_agents_distinct(agents)
+  end
+
+  def validate_mr_review_agent(name)
+    return if name.is_a?(String) && name.match?(MR_REVIEW_AGENT_RE)
+
+    errors << "#{path}: mr.review_agents entry #{name.inspect} must be a bare agent name " \
+              "(letters, digits, '.', '_', '-'; no leading '-' and no path separator) - it " \
+              "resolves to .claude/agents/<name>.md"
+  end
+
+  # A repeated name would spawn the same agent twice in one round, which is
+  # a second run and not a second opinion - and the round is deliberately
+  # single (see the /wurk:mr step), so the duplicate buys nothing and costs
+  # a full agent.
+  def validate_mr_review_agents_distinct(agents)
+    repeated = agents.select { |name| name.is_a?(String) }.tally.select { |_, count| count > 1 }.keys
+    return if repeated.empty?
+
+    errors << "#{path}: mr.review_agents lists #{repeated.join(', ')} more than once; a second " \
+              "instance of the same agent is another run, not another opinion"
+  end
+
   def validate_regex_lists
     REGEX_LIST_FIELDS.each do |dotted|
       value = fetch(dotted)
@@ -1138,7 +1237,12 @@ module ManifestCli
       env.data[:beads_sync] = manifest.beads_sync
       env.data[:beads_sync_declared] = manifest.beads_sync_declared?
 
+      # The pre-request review round, read by /wurk:mr: the names to spawn,
+      # and empty when the consumer declares none.
+      env.data[:mr_review_agents] = manifest.mr_review_agents
+
       warn_local_mode_with_dolt_remote(env, manifest)
+      block_unresolved_review_agents(env, manifest)
 
       manifest.warnings.each { |w| env.warn(code: "unknown_key", message: w) }
       manifest.errors.each { |e| env.block!(code: "invalid", message: e) }
@@ -1183,6 +1287,28 @@ module ManifestCli
                  "checkout's .beads has a dolt remote configured: #{remotes.join('; ')}. " \
                  "No wurk skill will push it, but any hand-run bd dolt push would. Remove the " \
                  "remote, or declare the mode that matches it."
+      )
+    end
+
+    # Every declared review agent has to exist as a file, and this is the
+    # only place that can say so: Manifest#validate! is pure shape over the
+    # parsed JSON and never reads the disk (see validate_mr).
+    #
+    # A block rather than a warning, which is the other half of the split
+    # from warn_local_mode_with_dolt_remote above. A stray dolt remote has a
+    # legitimate reading and the real guarantee sits upstream of it; a name
+    # with no agent behind it has no legitimate reading at all, and the
+    # alternative to rejecting it here is discovering it in /wurk:mr after
+    # the gate has already run, with the review round half-done.
+    def block_unresolved_review_agents(env, manifest)
+      missing = manifest.mr_review_agents_missing
+      return if missing.empty?
+
+      env.block!(
+        code: "mr_review_agent_missing",
+        message: "#{manifest.path}: mr.review_agents names #{missing.join(', ')}, which " \
+                 "#{missing.one? ? 'does' : 'do'} not resolve to a file under .claude/agents/ " \
+                 "in #{manifest.checkout_root}. Ship the agent, or drop the name."
       )
     end
 

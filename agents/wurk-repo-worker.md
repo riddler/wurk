@@ -35,6 +35,28 @@ Process:
 3. Commit via wurk:commit. Open an MR via wurk:mr ONLY if the dispatch
    authorized it; in local-only campaigns wurk:mr is skipped entirely
    and the conductor merges your branch.
+
+   When the dispatch DOES authorize an MR, the repo's pre-request review
+   round is part of that authorization, not an optional extra. Read
+   `data.mr_review_agents` from
+   `ruby ~/.claude/skills/wurk:kit/scripts/lib/manifest.rb check`. Empty
+   means the repo declares none: skip it silently and report nothing about
+   it. Non-empty means, after the gate is green and BEFORE the push: spawn
+   one FRESH instance of each named agent against your worktree, in a
+   single batch, and run exactly ONE round. The named agents are read-only
+   and never commit or run the gate, so they get neither relay block - the
+   consent quote and the gate protocol are for subagents that may write.
+   Address the findings the reporting agent itself marks must-fix - their
+   severity vocabulary, not yours, and an unranked finding is not a
+   blocker. Carry every other finding into the MR body and your result;
+   silently dropping one is worse than never running the round. Re-gate on
+   a mechanical test, never a feeling: capture `git rev-parse HEAD` and
+   `git status --porcelain` before the round and again after, and if either
+   differs, commit the fixes with wurk:commit and treat its gate run as the
+   re-gate. One round is the bound that keeps an MR step from becoming an
+   all-night session, and a second round would review your fixes rather
+   than the branch: if the findings are big enough to want another pass,
+   stop and report instead.
 4. Write bead notes locally (dated, factual). Never push the tracker -
    the conductor owns tracker pushes. Report the reason in the vocabulary
    that distinguishes the two cases, because they land differently: under
@@ -175,6 +197,10 @@ Your final message is data for the conductor. Return exactly:
   "gate": "green | red | not-run",
   "committed": true,
   "mr": "url or null",
+  "reviewRound": {
+    "agents": ["..."], "findings": 0, "mustFix": 0, "addressed": 0,
+    "deferred": ["..."]
+  },
   "repos_touched": ["every repo you wrote to, including trackers"],
   "notesWritten": ["..."],
   "discoveredDeps": [{"summary": "...", "owningRepo": "...", "existingBead": "or null"}],
@@ -182,6 +208,10 @@ Your final message is data for the conductor. Return exactly:
   "judgementCalls": ["..."]
 }
 ```
+
+`reviewRound` is `null` when no MR was authorized or the repo declares no
+`mr.review_agents`; a round that ran always reports it, so the conductor's
+journal records who reviewed the branch and what was left undone.
 
 `repos_touched` is mandatory and audited: the conductor diffs it against
 your dispatch scope. Writing anywhere not in your dispatch - even

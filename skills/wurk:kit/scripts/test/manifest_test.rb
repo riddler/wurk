@@ -1261,3 +1261,168 @@ class ManifestBeadsSyncLintTest < Minitest::Test
     end
   end
 end
+
+# mr.review_agents - the consumer-declared pre-request review round. Two
+# properties under test: absent is silent (a repo with no review agents is
+# not a repo with a gap), and every check that reads the disk stays out of
+# validate!.
+class ManifestMrReviewAgentsTest < Minitest::Test
+  def with_mr(value)
+    ManifestFixtures.load_with("valid", { "mr" => { "review_agents" => value } })
+  end
+
+  # sabotage: warn on the absent section -> red. Silence is the contract.
+  def test_an_absent_section_is_silent_and_declares_no_agents
+    m = ManifestFixtures.load("valid")
+    assert m.valid?
+    assert_empty m.warnings
+    assert_empty m.mr_review_agents
+    refute m.mr_review_agents?
+  end
+
+  def test_a_declared_list_is_read_in_order
+    m = with_mr(%w[alpha-reviewer beta.reviewer])
+    assert m.valid?, m.errors.inspect
+    assert_empty m.warnings
+    assert_equal %w[alpha-reviewer beta.reviewer], m.mr_review_agents
+    assert m.mr_review_agents?
+  end
+
+  # sabotage: accept a bare string and wrap it -> red. The field is a list.
+  def test_a_non_array_blocks
+    m = with_mr("alpha-reviewer")
+    refute m.valid?
+    assert_match(/mr\.review_agents must be a non-empty array/, m.errors.join("\n"))
+    assert_empty m.mr_review_agents
+  end
+
+  # Present-or-absent, never half-present: "off" is spelled by omitting the
+  # section, not by declaring an empty list.
+  def test_an_empty_array_blocks
+    m = with_mr([])
+    refute m.valid?
+    assert_match(/non-empty array of agent names/, m.errors.join("\n"))
+    assert_match(/omit the mr section entirely/, m.errors.join("\n"))
+  end
+
+  def test_a_missing_review_agents_key_blocks
+    m = ManifestFixtures.load_with("valid", { "mr" => {} })
+    refute m.valid?
+    assert_match(/mr\.review_agents must be a non-empty array/, m.errors.join("\n"))
+  end
+
+  def test_a_non_object_mr_section_blocks
+    m = ManifestFixtures.load_with("valid", { "mr" => ["alpha-reviewer"] })
+    refute m.valid?
+    assert_match(/mr must be an object/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop MR_REVIEW_AGENT_RE and accept any string -> red. The name
+  # is joined to .claude/agents/<name>.md, so a path escapes that directory.
+  def test_a_name_that_is_a_path_blocks
+    ["../../etc/passwd", "sub/alpha", "-alpha", "", "alpha/"].each do |name|
+      m = with_mr([name])
+      refute m.valid?, "expected #{name.inspect} to be rejected as an agent name"
+      assert_match(/must be a bare agent name/, m.errors.join("\n"))
+    end
+  end
+
+  def test_a_non_string_entry_blocks
+    m = with_mr([{ "name" => "alpha-reviewer" }])
+    refute m.valid?
+    assert_match(/must be a bare agent name/, m.errors.join("\n"))
+  end
+
+  def test_a_repeated_name_blocks
+    m = with_mr(%w[alpha-reviewer alpha-reviewer])
+    refute m.valid?
+    assert_match(/lists alpha-reviewer more than once/, m.errors.join("\n"))
+  end
+
+  def test_an_unknown_key_under_mr_warns_without_blocking
+    m = ManifestFixtures.load_with("valid", { "mr" => { "review_agents" => %w[alpha], "rounds" => 3 } })
+    assert m.valid?, m.errors.inspect
+    assert_match(/unknown key mr\.rounds/, m.warnings.join("\n"))
+  end
+
+  # The split this section is built on, asserted directly: validate! runs on
+  # every script's manifest load, so it must not go looking for the agent
+  # files. Resolving them is the lint's job (see the CLI test below).
+  # sabotage: move the resolve check into validate! -> red.
+  def test_validate_does_not_resolve_the_agent_files
+    m = with_mr(%w[nothing-ships-this-agent])
+    assert m.valid?, "validate! must not touch the filesystem: #{m.errors.inspect}"
+    assert_empty m.warnings
+  end
+end
+
+# The lint's environmental check: a declared name with no agent file behind
+# it.
+class ManifestMrReviewAgentsLintTest < Minitest::Test
+  # A throwaway checkout: <root>/.claude/wurk.json, so checkout_root - and
+  # therefore the .claude/agents lookup - lands where the fixture writes it.
+  def in_checkout(agents:, ships: [])
+    Dir.mktmpdir do |root|
+      raw = JSON.parse(File.read(ManifestFixtures.path("valid")))
+      raw["mr"] = { "review_agents" => agents } unless agents.nil?
+      FileUtils.mkdir_p(File.join(root, ".claude"))
+      manifest = File.join(root, ".claude", "wurk.json")
+      File.write(manifest, JSON.pretty_generate(raw))
+
+      unless ships.empty?
+        dir = File.join(root, ".claude", "agents")
+        FileUtils.mkdir_p(dir)
+        ships.each { |name| File.write(File.join(dir, "#{name}.md"), "---\nname: #{name}\n---\n") }
+      end
+
+      io = StringIO.new
+      code = ManifestCli.run(["check", "--file", manifest], io: io)
+      yield code, JSON.parse(io.string)
+    end
+  end
+
+  def blocked_codes(env)
+    env["blocked"].map { |b| b["code"] }
+  end
+
+  def test_a_declared_agent_that_ships_passes
+    in_checkout(agents: %w[alpha-reviewer beta-reviewer], ships: %w[alpha-reviewer beta-reviewer]) do |code, env|
+      assert_equal 0, code
+      assert_equal true, env["ok"]
+      assert_equal %w[alpha-reviewer beta-reviewer], env["data"]["mr_review_agents"]
+    end
+  end
+
+  # sabotage: delete block_unresolved_review_agents' call site -> red.
+  def test_a_declared_agent_with_no_file_blocks
+    in_checkout(agents: %w[alpha-reviewer beta-reviewer], ships: %w[alpha-reviewer]) do |code, env|
+      assert_equal 1, code
+      assert_equal false, env["ok"]
+      assert_includes blocked_codes(env), "mr_review_agent_missing"
+      message = env["blocked"].map { |b| b["message"] }.join
+      assert_match(/names beta-reviewer/, message)
+      refute_match(/alpha-reviewer,/, message)
+    end
+  end
+
+  # sabotage: warn instead of block -> red. There is no legitimate reading
+  # of a name with no agent behind it.
+  def test_an_absent_section_needs_no_agents_directory
+    in_checkout(agents: nil) do |code, env|
+      assert_equal 0, code
+      assert_equal true, env["ok"]
+      assert_empty env["data"]["mr_review_agents"]
+      refute_includes blocked_codes(env), "mr_review_agent_missing"
+    end
+  end
+
+  # A malformed value blocks on shape and must not also crash the resolve
+  # check on its way through.
+  def test_a_malformed_value_blocks_on_shape_without_crashing
+    in_checkout(agents: { "first" => "alpha-reviewer" }) do |code, env|
+      assert_equal 1, code
+      assert_match(/mr\.review_agents must be a non-empty array/, env["blocked"].map { |b| b["message"] }.join)
+      refute_includes blocked_codes(env), "mr_review_agent_missing"
+    end
+  end
+end
