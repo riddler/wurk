@@ -323,6 +323,18 @@ the strings quoted. Clearing a hit is the operator's call, never the
 conductor's; the conductor's job ends at refusing and quoting. Empty
 scan/push output is unconfirmed - re-run with full output.
 
+**Quote the hit where it cannot be published.** The operator cannot rule
+on "something matched" - they need the literal that tripped the scan - so
+the answer is never to stop quoting it, it is to control where the quote
+lands. The matched literal goes to the terminal and to the campaign's
+excluded report, and never to a tracked file. The journal records the
+FACT and the REASONING - which channel refused, which artifact hit, what
+a ruling would unblock - by reference rather than by reproducing the
+literal. Both halves matter: a journal that omits the refusal is not
+resumable, and a literal written into the scanned tree is the leak the
+scan exists to stop. See Journal and morning report for where campaign
+state lives.
+
 **Scan what the push would publish, not what the campaign touched.**
 Deciding what the publish set IS for a given channel is a judgement call
 and stays the conductor's - a script can run the scan, it cannot name the
@@ -376,6 +388,32 @@ campaigns) - the campaign must be resumable from the journal alone. Closed event
 bead-status). `[operator]` records mid-campaign operator instructions
 with the scope you gave them; when it is a consent carve-out, quote it.
 An event fitting no type: nearest type + a retro schema-gap entry.
+
+**Campaign state lives outside what the campaign publishes.** The
+journal, the morning report, scratch files and any status doc the
+conductor writes are campaign state, and campaign state is never
+committed to a repo the campaign pushes. Use the project's fleet/journal
+dir when that dir already sits outside the scanned tree; the default
+`.claude/campaigns/` sits inside the repo, so exclude it before the
+first write. A refused literal belongs only in these excluded artifacts
+and the terminal (Outbound content).
+
+**Exclude it with `.git/info/exclude`, not `.gitignore`.** "Do not
+commit it" is not enforcement; the next `git add .` decides. A local
+exclude is enforcement and costs nothing: machine-local, invisible to
+reviewers, and not itself an edit to the consumer's repo. A `.gitignore`
+line would be a tracked change the conductor made to someone's repo,
+outside the campaign's scope and visible to everyone who reads the diff,
+to buy exactly the same protection.
+
+The rule runs in both directions. Any artifact the conductor writes into
+a tree it also pushes inherits that tree's scan - a status doc written
+into a repo the campaign is publishing is the journal problem again, not
+a different one. Either the artifact is excluded, or it is tracked and
+everything in it must be publishable. Deciding which paths are campaign
+state, and whether a given path is inside a publish set, is the
+conductor's judgement; a script can write the exclude line, it cannot
+make the call.
 
 Final act: the morning report - what landed (branch, SHA, gate,
 PR/merge), graph end state, discovered beads, the queue with required
