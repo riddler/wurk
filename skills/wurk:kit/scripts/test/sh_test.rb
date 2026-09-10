@@ -84,10 +84,9 @@ class ShTest < Minitest::Test
     Dir.mktmpdir do |dir|
       pid_file = File.join(dir, "grandchild.pid")
       # The grandchild's stdio is redirected away from the inherited pipe on
-      # purpose. A grandchild that keeps holding that pipe also stalls #run
-      # past its own timeout, because the reader threads block until the
-      # pipe closes - a separate defect this test is not about (ADR-0015's
-      # consequences record it).
+      # purpose, so that this test isolates signal delivery. The
+      # pipe-holding variant is
+      # test_run_timeout_returns_when_a_grandchild_holds_the_pipe below.
       script = "sleep 30 >/dev/null 2>&1 & echo $! > #{pid_file}; wait"
       grandchild_pid = nil
 
@@ -104,6 +103,69 @@ class ShTest < Minitest::Test
         assert alive?(grandchild_pid),
                "grandchild was reaped - #run appears to have gained process-group semantics (see ADR-0015)"
       ensure
+        begin
+          Process.kill("KILL", grandchild_pid) if grandchild_pid
+        rescue Errno::ESRCH
+          nil
+        end
+      end
+    end
+  end
+
+  # The timeout has to bound the call's wall clock, not just the moment the
+  # child is signalled. Here the grandchild inherits the child's stdout, so
+  # it holds that pipe open for 30s after the child is killed; before the
+  # reader join was bounded, this call returned when the grandchild exited
+  # rather than when the timeout fired. The assertion is generous on purpose
+  # - the gap it is protecting is 0.3s against 30s, so a slow machine cannot
+  # make it flaky without also making it wrong.
+  def test_run_timeout_returns_when_a_grandchild_holds_the_pipe
+    Dir.mktmpdir do |dir|
+      pid_file = File.join(dir, "grandchild.pid")
+      script = "sleep 30 & echo $! > #{pid_file}; wait"
+
+      begin
+        started = Time.now
+        result = Sh.run(["/bin/bash", "-c", script], timeout: 0.3)
+        elapsed = Time.now - started
+
+        assert result.timed_out?
+        refute result.success?
+        assert_operator elapsed, :<, 5.0,
+                        "Sh.run waited on a pipe-holding grandchild instead of its own timeout"
+      ensure
+        grandchild_pid = wait_for_pid_file(pid_file)
+        begin
+          Process.kill("KILL", grandchild_pid) if grandchild_pid
+        rescue Errno::ESRCH
+          nil
+        end
+      end
+    end
+  end
+
+  # The other half of the same rule, and the case that is not a "timeout" in
+  # the old sense at all: the child exits 0 immediately, but its grandchild
+  # keeps the stdout pipe open past the deadline. The call fails closed - it
+  # reports timed_out? rather than a success whose output is quietly
+  # truncated - and it returns the bytes that had arrived when the deadline
+  # passed rather than dropping them. See ADR-0015.
+  def test_run_reports_a_timeout_when_output_outlives_the_deadline
+    Dir.mktmpdir do |dir|
+      pid_file = File.join(dir, "grandchild.pid")
+      script = "sleep 30 & echo $! > #{pid_file}; echo partial; exit 0"
+
+      begin
+        started = Time.now
+        result = Sh.run(["/bin/bash", "-c", script], timeout: 0.5)
+        elapsed = Time.now - started
+
+        assert result.timed_out?
+        refute result.success?
+        assert_equal "partial\n", result.out
+        assert_operator elapsed, :<, 5.0
+      ensure
+        grandchild_pid = wait_for_pid_file(pid_file)
         begin
           Process.kill("KILL", grandchild_pid) if grandchild_pid
         rescue Errno::ESRCH
