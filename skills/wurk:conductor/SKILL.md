@@ -116,6 +116,50 @@ For each ready bead, spawn a wurk-repo-worker with the dispatch template
 (appendix). Parallel only when the graph shows genuine independence;
 worktree isolation when parallel workers share directories.
 
+- **Claim and probe before you dispatch.** Before you spawn a worker
+  for a bead - and again at the moment you FILE a discovery (Phase 5),
+  not only when you dispatch one - check whether another session is
+  already on the same work. Two checks, seconds each:
+  - **Bead-id branch probe.** Across every repo in campaign scope,
+    `git fetch --quiet` then `git branch --list '<bead-id>*'` and
+    `git branch -r --list '*<bead-id>*'`. This works only because the
+    project names branches after the bead; that convention is
+    load-bearing here, not cosmetic. In the incident the duplicate
+    branch already existed under a discoverable name while the
+    conductor was still deciding what to dispatch.
+  - **Peer-session scan.** List the sessions the harness knows about
+    (ListAgents, or the equivalent it exposes) and read their subjects
+    for the same bead or the same discovery.
+  Then leave the claim where a peer's probe will find it: a dated
+  `bd note` naming the claiming session, written before the worker is
+  spawned and before a discovery bead is filed.
+- **The probe narrows the race; it does not close it.** Nothing here
+  serializes anything. Two conductors can probe in the same second,
+  both see nothing, and both dispatch - the branch and the note appear
+  only after the other side has already looked. Say it plainly to
+  yourself every time, because a step trusted as a lock is worse than
+  no step: the next duplicate gets waved through on the strength of a
+  clean probe. What it does buy is the common case, where the peer is
+  minutes rather than milliseconds ahead and has already left a branch
+  or a note behind - that is most of the incidents, and it costs a
+  fetch to see.
+- **On a hit, do not dispatch.** Detection alone was never the
+  shortfall: in the incident (campaign 004, two sessions in one fleet)
+  the conductor had already dispatched, and paid for the collision by
+  killing its own worker and resetting a worktree. So do not start a
+  competing worker, and do not race one already running. Treat the
+  peer's work as authoritative until it is proven otherwise, queue
+  your side behind it, journal the hit, and re-render the graph
+  without that bead.
+- **This is a verification discipline, and the judgment is yours.**
+  The probe commands are mechanical; reading what comes back is not.
+  A hit is evidence to weigh - whether that branch is this bead's
+  work, whether the peer is live or abandoned, whether the duplicate
+  is a bead to merge or a fix already landed - and no exit status
+  carries that. Never reduce the step to a script that passes or
+  fails, and never accept a clean probe as proof that nobody else is
+  working the bead; it is proof only that nobody had left a trace when
+  you looked.
 - **Worktrees**: create via the wurk:kit script
   (`worktree_create.rb`, `--base <integration-branch>` for stacked/
   local-only work) - not raw git; the kit seeds and warms. Do not run
