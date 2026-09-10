@@ -658,16 +658,47 @@ Recorded during research; no human was available to resolve them.
    documented here, and I did not find a harness document in the repo that
    states it.
 
+
+   **Settled (2026-09-02):** the cap is 600000ms, and the default a caller gets
+   without asking is 120000ms. So "explicit 600000ms" in the conductor prose is
+   the ceiling, not an arbitrary large value - and the gap that actually bites
+   is the default, five times under the cap. See the same question in the plan
+   document for what this means for `poll`'s `--wait-seconds` default (it stays
+   at 60, deliberately under the 120s default rather than merely under the
+   cap). This is a fact about the harness, not this repo, so it can drift.
+
 2. **`gate.timeout_seconds` defaults to 600 and `gate.rb` enforces it.** A
    gate that outruns the harness also outruns `gate.rb`'s own kill timer, so
    today the two limits coincide by default. Whether that coincidence is
    deliberate is not recorded in `docs/manifest.md`, the ADRs, or the commit
    comments I read.
 
+
+   **Settled (2026-09-02):** it is a coincidence, as far as any record goes. Commit
+   082f019 ("Makes the gate timeout configurable") says `gate.rb` had
+   "hard-coded a 600 second timeout at both Sh.run call sites" and made it a
+   manifest field for one stated reason: a consumer whose gate runs inside
+   docker-compose can exceed it cold. Nothing in that change, in
+   `docs/manifest.md`, or in the ADRs refers to any harness limit. The 600 is
+   about cold docker builds; matching the Bash cap is accidental.
+
+   The question is also moot going forward: wu-4x9 gives the detached path its
+   own `gate.long_timeout_seconds`, precisely so the foreground leash and the
+   detached one stop being the same number by accident.
+
 3. **`Sh.kill_process_group` kills only the direct pid**
    (`lib/sh.rb:174-180`), not a process group - there is no
    `Process.setsid` or `-pid` form in the file. What happens to a killed
    gate command's own children is not documented.
+
+
+   **Settled (2026-09-02):** documented now, and confirmed by running it. `Sh.run`
+   kills the direct pid only, so a gate's children survive its timeout. The new
+   `Sh.run_streaming` path runs the child in its own process group and kills
+   the negative pgid: a grandchild spawned by the gate was dead within 0.5s of
+   that timeout firing, where the `Sh.run` path leaves it running. `Sh.run` is
+   deliberately unchanged on this branch; the fix, and the misleading
+   `kill_process_group` name, are filed as **wu-2kh**.
 
 4. **The lock owner file has no specified filename or format.**
    `REFERENCE.md:81-82` says it "carries `campaign=<id> bead=<id>
@@ -675,10 +706,26 @@ Recorded during research; no human was available to resolve them.
    agents could write it differently and neither would be wrong per the
    prose.
 
+
+   **Settled (2026-09-02):** fixed by this bead. The shipped format is a file named
+   `owner` in the lock dir, one `key=value` per line, keys in the fixed order
+   `campaign`, `bead`, `pid`, `host`, `purpose`, `acquired_at`. Two agents can
+   no longer write it differently. Updating the conductor prose to match is
+   sibling work (wu-4nc / wu-i0z).
+
 5. **Which repos actually have gates that exceed 10 minutes cold** is not
    recorded in this repo. wurk's own gate is a fast minitest suite; the
    incidents came from a consumer campaign, and no consumer manifest is
    checked in here.
+
+
+   **Settled (2026-09-02):** not answerable from this repo, and recorded as such
+   rather than left looking unexamined. The one figure this repo does hold is
+   in sibling bead wu-ec5: the host repo's full gate budget is 1800s, which is
+   what made the conductor's "explicit 600000ms" mandate structurally
+   impossible and prompted this epic. Enumerating the rest would need consumer
+   manifests that are deliberately not checked in here - which is exactly why
+   `gate.long_timeout_seconds` is a manifest field rather than a kit constant.
 
 6. **`/wurk:verify` and `/wurk:refresh` gate runs.** `/wurk:verify` re-runs a
    gate after an unattended fix but names no command
