@@ -83,6 +83,19 @@ Gate discipline (learned the expensive way, campaigns 004 and 007):
   recently twice in one campaign to a worker whose dispatch already said
   "run gates FOREGROUND". The wait must be a command you are blocked on,
   so that its returning is itself proof the gate is over.
+- **If your harness prescribes Monitor, this rule still wins - for
+  gates.** Some harness configurations tell the agent to prefer a
+  Monitor until-loop over a foreground sleep. That is reasonable advice
+  for waiting on most conditions, and it is not overridden here: the
+  gate is the exception, not your whole harness. What it does not
+  account for is that a gate wait exists to produce evidence. A Monitor
+  can report that a condition looked true; only a command you were
+  blocked on proves the gate ran to completion, which is the property
+  the rule above is protecting. If foreground waiting is genuinely
+  unavailable in your harness, report that constraint and stop - never
+  substitute a Monitor and then report a gate result you cannot stand
+  behind, because that is indistinguishable from having followed the
+  rule.
 - **Long gate: start it detached, then poll it in the FOREGROUND.** When
   the gate genuinely outruns a Bash timeout (minutes, not seconds), or if
   the harness auto-backgrounds a run on you, do not end your turn - use
