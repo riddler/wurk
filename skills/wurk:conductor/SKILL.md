@@ -127,6 +127,34 @@ worktree isolation when parallel workers share directories.
   Before trusting a held lock, probe liveness yourself: lock mtime vs
   `ps` for any live gate process, machine-wide. Clear a verified-stale
   lock and journal it; never let workers break locks.
+- **Short gate or long gate - you decide, before you dispatch.**
+  Measure the repo's gate budget against the host's Bash timeout cap
+  (600000ms). Under the cap it is a short gate and the foreground rule
+  stands unchanged. At or over the cap - including a budget close
+  enough that a slow run crosses it - the foreground rule is not
+  merely awkward, it is unimplementable, and a dispatch that states it
+  anyway is telling the worker to do something impossible; every such
+  worker improvises, and the improvisations that background the gate
+  with nothing parenting it are exactly the silent deaths the rule
+  exists to prevent. For those repos name the long-gate path instead:
+  `gate_run.rb start` (the sanctioned runner) and the `poll_command`
+  it returns, run verbatim in the foreground until `data.state` stops
+  being `"running"`. The runner preserves the property the foreground
+  rule was written for - its supervisor is the gate's real parent and
+  the only thing that can record the gate's exit status, and a dead
+  supervisor or a passed deadline surfaces as `"abandoned"` instead of
+  a worker waiting on a corpse. This is a conductor judgment made per
+  repo from a measured budget; it is never left to the worker, and
+  "the gate is slow" is not by itself the condition.
+- **Long-gate re-verification is mandatory, not implied.** A long-gate
+  dispatch must require the worker to re-read the run's state from the
+  run dir (`gate_run.rb status --run-dir <dir>`) before believing
+  anything about the gate on any resume, takeover, or new turn - its
+  own last message is not evidence that a gate ran. Only `"finished"`
+  carries the gate's `ok`; `"abandoned"` and `"not_found"` mean the
+  gate did not produce a result and the bead's gate is red-or-unknown,
+  never green. Hold the same line yourself before accepting a worker's
+  result: a green claim with no sentinel behind it is not-run.
 - **Pivot on block**: queue the ruling, journal [ruling-queued], keep
   dispatching everything the block does not touch.
 - **Correction broadcast**: when a dispatch-time assumption dies,
@@ -139,9 +167,14 @@ A stopped worker proves nothing about its background children. Before
 ANY resume: probe the worktree (fresh commits, mtimes) and the machine
 (live gate processes). Expect this failure mode: workers end their turn
 on an auto-backgrounded gate that dies silently (three occurrences in
-one campaign) - dispatches must say "gate FOREGROUND, explicit 600000ms
+one campaign). The cure is that every dispatch names one gate path and
+leaves no third option - short gate: "FOREGROUND, explicit 600000ms
 timeout; if auto-backgrounded anyway, poll the output file, do not end
-your turn".
+your turn"; long gate: "`gate_run.rb start`, then its `poll_command`
+until the state leaves `running`, and re-read `status` on any resume".
+The killer is the improvised middle - a bare background gate with no
+supervisor - which is what a worker builds when the dispatch demands a
+foreground run its gate budget cannot deliver.
 
 Escalation ladder:
 1. Resume: "check actual state from disk, then continue directly. Do
@@ -262,10 +295,25 @@ overrides for THIS dispatch (each cites its source):
   branch <name>, verify via git branch --show-current", or "none">
 - <per-repo hazard slot, or "none">
 
-GATE: Run gates FOREGROUND with an explicit 600000ms timeout; if
+GATE: <Gate path - fill exactly one, chosen from the measured gate
+budget, and delete the other.
+SHORT GATE (budget under the host's 600000ms Bash timeout cap): run
+gates FOREGROUND with an explicit 600000ms timeout; if
 auto-backgrounded anyway, poll the task output file with Read - do not
-end your turn on a running gate. <Gate-semaphore slot: lock dir,
-bounded-wait shape, always-release, staleness = report not break.>
+end your turn on a running gate. Do not build a background runner.
+LONG GATE (budget at or over that cap, so a foreground run cannot
+finish): start the gate with `ruby <kit>/scripts/gate_run.rb start
+<profile/lock flags>`, then run the `poll_command` it returns,
+verbatim and in the foreground, until data.state is no longer
+"running". Do not improvise a background task or a watchdog of your
+own. MANDATORY re-verification: on every resume, takeover, or new
+turn, re-read the run with `gate_run.rb status --run-dir <dir>` before
+you state anything about the gate - your own last message is not
+evidence. "finished" carries the gate's ok; "abandoned" and
+"not_found" mean the gate produced no result - report gate not-run,
+never green.>
+<Gate-semaphore slot: lock dir, bounded-wait shape, always-release,
+staleness = report not break.>
 <Known-flake slot.> Never truncate a failing gate.
 
 MECHANICS: Append-only bead notes (bd note). Absolute paths. Branch
@@ -279,4 +327,5 @@ repos_touched (audited against this dispatch's scope).
 
 Slots filled per dispatch: repo dir, bead id, ground-truth delta,
 linkage entries (fleets), policy block, mode/MR authorization, stacking
-base, gate-semaphore details, known flakes.
+base, gate path (short or long, from the measured budget),
+gate-semaphore details, known flakes.
