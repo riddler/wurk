@@ -38,14 +38,45 @@ Process:
 4. Write bead notes locally (dated, factual). Never push the tracker -
    the conductor owns tracker pushes.
 
-Gate discipline (learned the expensive way, campaign 004):
+Gate discipline (learned the expensive way, campaigns 004 and 007):
 
-- **Run gates FOREGROUND and watch them.** Pass an explicit long timeout
-  (600000ms) on the Bash call. If the harness auto-backgrounds the run
-  anyway, do NOT end your turn - poll the task's output file with Read
-  until it exits. A worker that ends its turn "waiting" on a background
-  gate has, three times out of three, come back to a silently dead gate,
-  uncommitted work, and (once) a starved mutex.
+- **Short gate: a plain foreground Bash call.** Most repo gates finish in
+  seconds. Run the gate command in the foreground with an explicit long
+  timeout (600000ms) on the Bash call, read its output, and move on. That
+  is the whole procedure - do not build a log-poll loop around a
+  three-second test suite.
+- **A Monitor, a background task, or a notification is NEVER the wait
+  mechanism for a gate.** Not as a convenience, not "just this once", not
+  because the run looks long. The reason matters more than the rule: a
+  backgrounded gate can die without ever re-invoking you, so a wait that
+  is not itself a foreground command can wait forever on a dead process -
+  you come back to a corpse, uncommitted work, and (once) a starved
+  mutex. This has happened to a worker three times out of three, most
+  recently twice in one campaign to a worker whose dispatch already said
+  "run gates FOREGROUND". The wait must be a command you are blocked on,
+  so that its returning is itself proof the gate is over.
+- **Long gate: start it detached, then poll it in the FOREGROUND.** When
+  the gate genuinely outruns a Bash timeout (minutes, not seconds), or if
+  the harness auto-backgrounds a run on you, do not end your turn - use
+  the kit's sanctioned runner rather than improvising:
+
+      ruby ~/.claude/skills/wurk:kit/scripts/gate_run.rb start --profile loop
+      # -> data.run_dir plus data.poll_command, a literal command to run next
+
+      ruby ~/.claude/skills/wurk:kit/scripts/gate_run.rb poll --run-dir RUN_DIR
+
+  Run `poll` (or the returned `poll_command` verbatim) as a FOREGROUND
+  Bash call with a 600000ms timeout, and repeat it until `data.state` is
+  no longer `"running"`: `"running"` exits 0 and means "run that same
+  command again", `"finished"` carries the gate's own `ok`, `"abandoned"`
+  means the supervisor died or the deadline passed - stop and report. In
+  a repo with no `gate_run.rb`, the equivalent improvisation is a
+  foreground wait on the gate's own log, repeated if it times out:
+
+      until grep -qE 'GREEN|RED' <log>; do sleep 15; done
+
+  Either way the poll is a foreground command you repeat yourself, never
+  a Monitor and never a background task.
 - **Gate semaphore.** If the dispatch names a campaign gate-lock dir:
   mkdir to acquire before any full-suite run; bounded wait (the dispatch
   names the loop shape) if held; ALWAYS rmdir after your run, pass or
@@ -55,9 +86,10 @@ Gate discipline (learned the expensive way, campaign 004):
 Mechanics (hard rules):
 
 - **Never wait on detached work.** Never sleep, poll, or end your turn
-  "waiting" on a loop, timer, or background notification (the gate-lock
-  bounded wait is the one exception, and only when the dispatch names
-  it). Drive to completion or stop-and-report. If you are resumed,
+  "waiting" on a loop, timer, or background notification. The only two
+  exceptions are foreground and bounded: the gate-lock bounded wait, when
+  the dispatch names it, and the long-gate `poll` above. Drive to
+  completion or stop-and-report. If you are resumed,
   re-check actual state from disk (git log, file mtimes, worktree
   status) before believing your own last message.
 - **Halt on foreign commits.** If commits you did not make appear on
