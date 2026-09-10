@@ -792,12 +792,41 @@ the meantime so the plan stays actionable.
    default `--wait-seconds` is therefore 60 - an order of magnitude under any
    plausible cap - rather than a value tuned to a number nobody here has
    confirmed. If the real cap is later documented, only the default changes.
+
+   **Settled (2026-09-02):** the cap is confirmed: the Bash tool's timeout is
+   600000ms maximum, 120000ms by default. The conductor prose's "explicit
+   600000ms" is therefore the ceiling, not an arbitrary large value. The
+   gap that actually bites is the DEFAULT: a caller who passes no timeout
+   gets 120s, five times under the cap, which is how a gate that would have
+   fit under the ceiling still gets auto-backgrounded.
+
+   `poll`'s `--wait-seconds 60` default stays as it is, and deliberately so:
+   60s sits under the 120s default rather than merely under the 600s cap, so
+   a poll call survives even when its caller forgets to set a timeout at all.
+   This closes the question with no code change.
+
+   Caveat for a later reader: this is a fact about the harness, not about
+   this repo, so it can drift without anything here changing.
 2. **`gate.long_timeout_seconds`'s 3600 default is a guess.** No consumer
    manifest is checked into this repo and no record exists of which repos
    actually have gates exceeding 10 minutes cold, so the default was chosen
    as "six times the foreground leash" rather than from data. It is a
    manifest field precisely so a consumer can correct it without a kit
    change.
+
+   **Settled (2026-09-02):** 3600 stays, and it is no longer unsourced. Sibling bead
+   wu-ec5 records a real consumer figure - the host repo's full gate budget is
+   1800s - and 3600 is double that, so the one slow gate this project actually
+   knows about sits comfortably inside the default.
+
+   The rationale for erring high, recorded so nobody "tightens" it later
+   thinking they are being careful: the two failure modes are not symmetric.
+   Too low silently truncates a legitimately slow gate, which presents as a red
+   gate and costs a debugging cycle. Too high only means a genuinely hung gate
+   holds its lock longer - and the staleness probe this bead ships makes such a
+   holder detectable by `lock.rb status` regardless of the timeout, which
+   removes most of that cost. No code change.
+
 3. **Whether `Sh.run` should adopt process-group kill semantics.** This plan
    deliberately does not change it (see What We're NOT Doing), which leaves
    `gate.rb`'s foreground timeout still able to orphan a gate's children.
@@ -806,16 +835,47 @@ the meantime so the plan stays actionable.
    `docs/plans/260817-wu-9fb-subdirectory-gate-cwd.md:207-213`, where the
    same class of adjacent timeout gap was filed separately rather than
    absorbed.
+
+   **Settled (2026-09-02):** confirmed real, and deliberately still out of scope here.
+   Verified during this pass: the new detached path (`Sh.run_streaming`, run
+   under `pgroup: true`) does reap a grandchild when its timeout fires, while
+   `Sh.run` leaves one running. Changing `Sh.run` alters signal delivery for
+   every existing call site, so the split stands and the blocking path stays
+   byte-identical on this branch.
+
+   Filed as **wu-2kh** (P2, area:kit), which depends on wu-4x9. That bead also
+   carries a defect this pass turned up beside it: the helper is named
+   `kill_process_group` but does not kill a process group, so the name asserts
+   something untrue whichever way the behavior question is decided.
+
 4. **Where lock directories live is still caller-supplied.**
    `multiCampaign.locksDir` is a fleet-manifest field wurk neither documents
    nor lints. `lock.rb` takes directories as arguments, so the conductor
    keeps owning the policy; teaching `lib/manifest.rb` about the fleet
    manifest is out of scope here and worth its own bead.
+
+   **Settled (2026-09-02):** lock directories stay caller-supplied, and the bead this
+   question asks for already exists: **wu-n3l**, "Document and lint the fleet
+   manifest (.claude/wurk-fleet.json)", is open and ready. That is where
+   `multiCampaign.locksDir` gets documented and linted.
+
+   Keeping `lock.rb` on plain directory arguments is the right seam regardless:
+   the conductor owns lock-location policy, and a kit script that read the
+   fleet manifest itself would take that policy away from it.
+
 5. **The owner-file format is being specified here for the first time.**
    `skills/wurk:conductor/REFERENCE.md:81-82` names the three fields but no
    filename or encoding. This plan fixes it at `owner`, `key=value` lines.
    Reconciling the prose with the shipped format is sibling work (wu-4nc /
    wu-i0z), not this bead's.
+
+
+   **Settled (2026-09-02):** the format is specified, shipped, and was observed live
+   during this pass: a file named `owner` inside the lock dir, one `key=value`
+   per line, keys written in the fixed order `campaign`, `bead`, `pid`, `host`,
+   `purpose`, `acquired_at`, with absent keys simply omitted. Reconciling
+   `skills/wurk:conductor/REFERENCE.md:81-82` with it remains sibling work
+   (wu-4nc / wu-i0z), unchanged by this note.
 
 ## References
 
