@@ -53,3 +53,13 @@ commit on review of the diff.
   the directory name. Cross-references between skills use the installed name
   (`/wurk:commit`), and renames must update every referencing skill, script,
   and script test in the same commit.
+- A document outside a skill cites that skill's steps by NAME, not by number:
+  "`/wurk:mr`'s push-and-open step", not "`/wurk:mr` step 8". A number is a
+  position, and every step inserted above it silently invalidates every
+  external citation below - nothing checks them, and the last such break was
+  found only because a reader happened to notice. A name identifies the step
+  instead of locating it, so it survives renumbering and a stale one is
+  greppable. Numbers inside a skill's own file are fine; a renumber edits
+  that file anyway. If a number is genuinely useful outside, it follows the
+  name as decoration ("the push-and-open step, currently step 8") and is
+  never the only identifier.
