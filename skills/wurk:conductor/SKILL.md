@@ -293,8 +293,10 @@ conductor double-dispatched the same problem).
 
 MR mode: verify merge via the forge, pull, close bead (queue the close
 if the tracker links it to work elsewhere), remove worktree,
-force-delete branch, run the manifest's outbound scan, push tracker with
-confirmed output - but only where the repo's `beads.sync` is `git` or
+force-delete branch, run the manifest's outbound scan over the full
+tracker export (see Outbound content - the push unit is the whole db,
+not the beads this campaign touched), push tracker with confirmed
+output - but only where the repo's `beads.sync` is `git` or
 `dolthub`. Under `local` (including an unset key, which defaults to
 `local`) there is no tracker push at all: journal "tracker is local-only,
 nothing pushed" and land the rest. The conductor owning tracker pushes
@@ -317,8 +319,42 @@ journal that risk when a landing composes anything non-trivial.
 Before ANY push, MR, or tracker push: run the project's outbound scan
 (a consumer's terminology firewall is one instance; the hook is general,
 see ADR-0014). Any hit: do not push, do not rephrase-and-retry - queue with
-the strings quoted. Empty scan/push output is unconfirmed - re-run with
-full output.
+the strings quoted. Clearing a hit is the operator's call, never the
+conductor's; the conductor's job ends at refusing and quoting. Empty
+scan/push output is unconfirmed - re-run with full output.
+
+**Scan what the push would publish, not what the campaign touched.**
+Deciding what the publish set IS for a given channel is a judgement call
+and stays the conductor's - a script can run the scan, it cannot name the
+payload. Before each push, ask what one invocation of that channel
+actually sends:
+
+- A branch push or an MR publishes the diff and its commit messages. The
+  artifact and the scan unit coincide; scanning what you changed is
+  correct here, which is why the habit forms.
+- A whole-database tracker push publishes every record in the db, not the
+  records the campaign touched. Scan the full export - pipe
+  `bd export --all` through the scan - never a loop over the beads you
+  worked.
+- Same shape elsewhere: a squashed or force push, a mirror, a release
+  bundle. Any channel whose push unit is larger than the artifact you
+  edited gets scanned at the unit it publishes.
+
+**A hit anywhere in an all-or-nothing payload refuses the whole channel.**
+Where the push unit is larger than the artifact, one hit refuses EVERY
+push through that channel until the operator clears it - including
+artifacts that scanned clean and artifacts the campaign never touched.
+Journal the refusal against the channel, not against the artifact that
+hit, so the queue says "tracker push blocked" rather than "two records
+blocked".
+
+Scanning the touched set instead of the publish set undercounts, and the
+undercount reaches the operator as a number they rule on. One campaign
+scanned the records it had worked, reported two of them as blocking, and
+got a ruling on that two; a full-payload scan run afterwards found seven
+carrying the term across the whole db - five of them never touched by
+that campaign, one of them explicitly out of scope. The ruling had been
+made against a number the scan invented.
 
 Hard stops regardless of mode: no merges to the default branch, no
 releases or version bumps, no deciding open contract forks (except
