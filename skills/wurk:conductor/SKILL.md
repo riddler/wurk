@@ -94,6 +94,19 @@ queues a note (unrelated dirt - e.g. mobile lockfiles under a backend
 campaign - is journaled, not disqualifying). Never resolve tracker sync
 conflicts autonomously.
 
+**Measure the gate, once, per repo.** Actually run the repo's gate
+command on the synced checkout and journal two things: the wall-clock
+number, and what the run occupies while it holds it - a database
+sandbox, a docker daemon, a fixed port, a shared build cache, most of
+the CPU. Do not estimate it, do not carry a number forward from an
+earlier campaign, and do not let the budget appear from nowhere later:
+everything downstream that says "the measured gate budget" means this
+run. One measurement settles two decisions, both of them yours and
+both made before the first dispatch (Phase 3): which gate PATH every
+dispatch names, short or long; and whether this campaign runs a gate
+semaphore at all. A repo whose gate cannot be run here is a repo that
+is not ready to be dispatched into.
+
 ## Phase 1 - Ground truth
 
 Verify the campaign's ground-truth claims against live state (the
@@ -165,11 +178,36 @@ worktree isolation when parallel workers share directories.
   local-only work) - not raw git; the kit seeds and warms. Do not run
   many warms concurrently with a live gate - warms include a full test
   run and will contend (DB sandbox failures at 4x on one machine).
-- **Gate semaphore - two caps, two locks.** When multiple workers share
-  one machine, every dispatch names the lock dirs a gate run must hold
-  (mkdir-mutex, bounded wait as an explicit named override of the
-  worker no-sleep rule, always-release). Two different caps are in
-  play, and one lock dir cannot enforce both:
+- **Gate semaphore - first decide whether gates contend at all.** A
+  semaphore exists because concurrent gate runs INTERFERE: they
+  saturate the CPU, bind the same fixed port, share one database
+  sandbox or one docker daemon, thrash one build cache. Contention is
+  the condition, not slowness. Duration is the proxy you will reach
+  for from the Phase 0 measurement, and it is a good one - a gate long
+  enough to still be running when the next worker starts one is a gate
+  that gets the chance to interfere, and a few-second suite usually
+  does not - but hold on to what it is a proxy FOR, or a fast gate
+  that binds a fixed port reads its own three seconds as permission to
+  skip a lock it needs on the first overlap. Whether gates contend in
+  THIS repo on THIS machine is a judgement, made by you before you
+  dispatch; the measurement informs it and never makes it.
+- **When they do not contend, say so in the dispatch.** A gate that
+  neither contends nor outruns the foreground cap runs under NO
+  semaphore: no campaign mutex, no repo lock, no machine slots, no
+  lock dir of any kind. Silence is not enough. A dispatch that merely
+  omits the semaphore leaves the worker to guess, and the observed
+  guess is to build one - a lock dir, a bounded wait, a watchdog
+  around a three-second test suite, the same improvised machinery the
+  foreground rule exists to stop. Fill the gate-semaphore slot with
+  the explicit negative instead, carrying the measured number so the
+  worker can see why: "NO semaphore, no lock dir, no slots - gate
+  measured at Ns; run it foreground and build no coordination around
+  it."
+- **When they do contend - two caps, two locks.** Every dispatch names
+  the lock dirs a gate run must hold (mkdir-mutex, bounded wait as an
+  explicit named override of the worker no-sleep rule,
+  always-release). Two different caps are in play, and one lock dir
+  cannot enforce both:
   - the **per-campaign concurrency cap** - how many gates YOUR campaign
     runs at once - enforced by a **campaign mutex** keyed to the
     campaign id;
@@ -204,10 +242,11 @@ worktree isolation when parallel workers share directories.
   verified-stale lock (`lock.rb clear` refuses anything not provably
   stale, and hands the ambiguous cases back to a human) and journal it;
   never let workers break locks.
-- **Short gate or long gate - you decide, before you dispatch.**
-  Measure the repo's gate budget against the host's Bash timeout cap
-  (600000ms). Under the cap it is a short gate and the foreground rule
-  stands unchanged. At or over the cap - including a budget close
+- **Short gate or long gate - you decide, before you dispatch.** Hold
+  the Phase 0 measurement against the host's Bash timeout cap
+  (600000ms) - that run is the budget, and there is no second one.
+  Under the cap it is a short gate and the foreground rule stands
+  unchanged. At or over the cap - including a budget close
   enough that a slow run crosses it - the foreground rule is not
   merely awkward, it is unimplementable, and a dispatch that states it
   anyway is telling the worker to do something impossible; every such
@@ -467,11 +506,15 @@ you state anything about the gate - your own last message is not
 evidence. "finished" carries the gate's ok; "abandoned" and
 "not_found" mean the gate produced no result - report gate not-run,
 never green.>
-<Gate-semaphore slot: the campaign mutex dir, the repo gate-lock dir
+<Gate-semaphore slot - fill exactly one, and never leave it empty.
+CONTENDING GATES: the campaign mutex dir, the repo gate-lock dir
 and the slots dir + slot count, acquired in that fixed order (campaign
 mutex, then repo lock, then machine slot) via `lock.rb acquire` and
 released in reverse; bounded-wait shape, always-release, staleness =
-report not break.>
+report not break.
+NON-CONTENDING GATES: the explicit negative - "NO semaphore, no lock
+dir, no slots - gate measured at Ns; run it foreground and build no
+coordination around it.">
 <Known-flake slot.> Never truncate a failing gate.
 
 MECHANICS: Append-only bead notes (bd note). Absolute paths. Branch
