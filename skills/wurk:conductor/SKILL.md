@@ -173,6 +173,36 @@ worktree isolation when parallel workers share directories.
   fails, and never accept a clean probe as proof that nobody else is
   working the bead; it is proof only that nobody had left a trace when
   you looked.
+- **Tell the worker which files moved under its bead.** Ground-truth
+  delta (Phase 1) is about BEAD state - open, blocked, claimed, still in
+  scope. It says nothing about the TEXT a bead quotes, and the two
+  expire independently: a bead can be entirely accurate about the
+  PROBLEM and entirely stale about the prose it proposes to fix. A
+  worker told only that its bead is open and unblocked will cheerfully
+  apply the fix the description spells out to a passage that is already
+  gone, and nothing downstream catches it - the edit lands somewhere,
+  the gate stays green, and the problem the bead was filed for survives
+  untouched. The general case is any bead filed against code that has
+  changed since, for any reason; the sharp case, because it bites within
+  hours, is a campaign whose beads cluster on one file. In one campaign
+  two files were rewritten three and four times in an afternoon, and
+  every bead after the first named prose a sibling had already replaced
+  - one of them by ninety minutes. The hand-written paragraph that
+  fixed it is now a slot; fill it.
+- **Fill it from your own landings, and judge what belongs in it.**
+  Every `[complete]` journal entry already carries the bead, the sha and
+  what merged, so the campaign case costs remembering rather than
+  research; for a bead filed long before the campaign, the file's
+  history since the bead was created is the same lookup. What the slot
+  carries is the file, the merge sha that moved it, the section that
+  changed, and the instruction to prefer the current text over the
+  bead's description of it. WHICH moved files matter to a given bead is
+  your judgement and does not reduce to a list of shas: a rewrite of a
+  neighbouring section is noise, and pasting every landing into every
+  dispatch buries the one entry the worker needed to read. And when
+  nothing moved, say that - for the same reason a non-contending gate
+  gets an explicit negative: a worker that sees no slot cannot tell
+  "nothing moved" from "the conductor did not check".
 - **Worktrees**: create via the wurk:kit script
   (`worktree_create.rb`, `--base <integration-branch>` for stacked/
   local-only work) - not raw git; the kit seeds and warms. Do not run
@@ -489,6 +519,18 @@ overrides for THIS dispatch (each cites its source):
   branch <name>, verify via git branch --show-current", or "none">
 - <per-repo hazard slot, or "none">
 
+<Moved-files slot - fill exactly one, and never leave it empty. The
+bead describes the tree as it stood when it was FILED; what expires is
+that description, never the bead's premise.
+MOVED: "the file MOVED under you: <path> was rewritten by <bead/change>,
+merged as <sha>, in <section> - <repeat per file>. Your worktree is cut
+from those merges. READ THE CURRENT TEXT and work the bead's problem
+against it; do not apply the bead's description of what the file used
+to say."
+NOT MOVED: the explicit negative - "<path(s)> unchanged since this bead
+was filed - checked against this campaign's landings and the file's
+history since.">
+
 GATE: <Gate path - fill exactly one, chosen from the measured gate
 budget, and delete the other.
 SHORT GATE (budget under the host's 600000ms Bash timeout cap): run
@@ -528,5 +570,5 @@ repos_touched (audited against this dispatch's scope).
 
 Slots filled per dispatch: repo dir, bead id, ground-truth delta,
 linkage entries (fleets), policy block, mode/MR authorization, stacking
-base, gate path (short or long, from the measured budget),
-gate-semaphore details, known flakes.
+base, moved files (or the explicit "unchanged"), gate path (short or
+long, from the measured budget), gate-semaphore details, known flakes.
