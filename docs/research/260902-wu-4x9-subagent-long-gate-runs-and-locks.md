@@ -191,6 +191,11 @@ any `run_level` skip (`gate.rb:660-665`). 0 otherwise;
   KILL, rescuing `Errno::ESRCH`. Despite the name it calls `Process.kill` on
   the pid directly - there is no `-pid` process-group form and no
   `Process.setsid` anywhere in the file.
+
+  **Later (2026-09-10):** the helper is now named `kill_child_pid` (wu-2kh).
+  The behavior described above is unchanged and deliberate; only the name was
+  wrong, because it asserted something the method never did. ADR-0015 records
+  the decision. Everything else on this page is as of 2026-09-02.
 - **Status shapes**: a real `Process::Status`, or `TimeoutStatus`
   (`sh.rb:51-59`), or `StartFailureStatus` (`sh.rb:65-73`). `Result#success?`
   is `!timed_out && status && status.success?` (`sh.rb:30-32`);

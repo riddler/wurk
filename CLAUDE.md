@@ -63,3 +63,23 @@ commit on review of the diff.
   that file anyway. If a number is genuinely useful outside, it follows the
   name as decoration ("the push-and-open step, currently step 8") and is
   never the only identifier.
+- Dated documents (`docs/research/*`, `docs/plans/*`) are never rewritten to
+  match later reality - a reader who lands in a 2026-09-02 document must
+  learn what was true on 2026-09-02. They may be ANNOTATED. A later addition
+  is a paragraph whose first thing is a bold label carrying its own date:
+  `**Later (2026-09-10):** ...`, the same shape as the `**Settled (...)**`
+  and `**Machine-checked (...)**` notes these documents already carry. The
+  date in the label against the date in the frontmatter is how a reader
+  tells an addition from the original, so an addition never appears as
+  unmarked prose; that would falsify the record, which is the whole thing
+  this convention exists to prevent.
+- Annotate only what a reader will GREP FOR: a renamed or removed
+  identifier. The pointer goes inline, on the passage that defines or
+  describes the thing, because that is where the grep lands - a banner at
+  the top of the file is only found by someone who already knows to look
+  for it, so it is a later index over inline notes, not a substitute for
+  them. One pointer per document at the definitional mention is enough; do
+  not decorate every occurrence. This is also the line between annotating
+  and sweeping: a stale step number or a moved line range is a dangling
+  reference nobody searches for, and chasing those through dated documents
+  is the rewriting this convention forbids.

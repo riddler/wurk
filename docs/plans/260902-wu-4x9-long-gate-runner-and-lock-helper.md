@@ -44,6 +44,11 @@ From `docs/research/260902-wu-4x9-subagent-long-gate-runs-and-locks.md`
 - **`Sh.kill_process_group` kills only the direct pid** (`lib/sh.rb:174-180`)
   - despite the name there is no `-pid` form and no `Process.setsid`
   anywhere in the file. A killed gate's own children are orphaned.
+
+  **Later (2026-09-10):** the helper is now named `kill_child_pid` (wu-2kh).
+  The behavior described above is unchanged and deliberate; only the name was
+  wrong, because it asserted something the method never did. ADR-0015 records
+  the decision. Everything else on this page is as of 2026-09-02.
 - **The FOREGROUND / 600000ms / poll discipline reaches only two files**
   (`agents/wurk-repo-worker.md:40-57`, `skills/wurk:conductor/SKILL.md:136-150`
   and `:265-269`). None of the five Bash-tool `gate.rb` call sites mentions
