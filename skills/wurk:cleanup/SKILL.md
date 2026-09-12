@@ -35,6 +35,13 @@ So: ask the forge, never git. `request_state.rb` - reached through
 `worktree_survey.rb` and `worktree_cleanup.rb` - is the one place that encodes
 this.
 
+`worktree_cleanup.rb` also runs a second, narrower git check downstream of
+the forge's answer, once a request is already confirmed merged: a
+`git cherry`-based patch-equivalence probe that can only REFUSE a removal
+the forge already authorized, never declare a merge on its own. Git still
+gets no vote on whether something merged - see ADR-0017 for the full
+distinction between this check and the ancestry check banned above.
+
 This is verified on both supported forges, not just inferred for one. Across a
 sample of merged requests on a live remote, the recorded head was not an
 ancestor of the target under more than one of the forge's merge settings - so
@@ -85,10 +92,15 @@ Omitted, sweep every worktree.
    This enumerates worktrees (dropping the main checkout - removing it would
    take the repository with it), asks the forge whether each branch's request
    merged, refuses on a dirty tree, and compares the local `HEAD` against the
-   SHA the forge actually merged, to catch commits made after the push.
+   SHA the forge actually merged, to catch commits made after the push. When
+   the two shas differ, the script does not treat that as unlanded work by
+   itself - it decides the difference by patch-equivalence against the
+   manifest's default branch (ADR-0017).
 
-   Read `data.results[].result` per worktree. `"merged in request #<n>, would
-   remove"` marks a candidate; anything else is not touched this run.
+   Read `data.results[].result` per worktree. A candidate is any string
+   starting with `"merged in request #"` and ending in `", would remove"` -
+   the string now carries an optional middle clause when the probe found a
+   rewritten local tip. Anything else is not touched this run.
 
 2. **Quiesce each candidate's session**, before touching anything on disk -
    see Guidelines for why this order matters:
@@ -199,14 +211,25 @@ Omitted, sweep every worktree.
 - `data.results` empty with `ok: true` - no worktrees at all. Say so and stop.
 - The result strings are the report vocabulary directly: `"not merged (no
   request, open, or closed unmerged), kept"`, `"dirty, skipped"`, `"commits
-  after merge (<sha> != <sha>), skipped"`, `"merged in request #<n>,
-  removed"`, `"merged in request #<n>, would remove"` (dry run), `"remove
+  after merge (<sha> != <sha>), skipped"`, `"commits after merge (<sha> !=
+  <sha>), unverified, skipped"` (the patch-equivalence probe itself failed;
+  see below), `"merged in request #<n>, removed"`, `"merged in request #<n>
+  (local tip rewritten, patches already on <default-branch>), removed"` (the
+  probe found every local commit already on the default branch under a
+  different sha), `"merged in request #<n>, would remove"` / `"merged in
+  request #<n> (local tip rewritten, ...), would remove"` (dry run), `"remove
   failed, skipped"`.
-- **`"commits after merge"` has a benign second cause worth probing before
-  reporting it as unlanded work**: someone rebased or force-updated the
-  branch's history around the merge (an operator restacking a chain, a
-  `/wurk:refresh` after the push), so the local tip is a different SHA
-  carrying the **same patches** that merged. Probe it by hand:
+- **A `"commits after merge"` skip now means the script already ran the
+  patch-equivalence probe and found a real unmatched commit** - the sha
+  inequality is not, by itself, proof of unlanded work; the script decides
+  that by comparing patch ids against the default branch before reporting
+  the skip (ADR-0017). Nothing further to check by hand for this variant:
+  the skip stands.
+- **The `"...unverified, skipped"` variant is different: the probe itself
+  could not run** (a non-zero `git cherry` exit), which comes with a
+  `patch_equivalence_unknown` warning naming why. "Could not tell" must
+  never read as "nothing left", so this still skips - but it is worth
+  diagnosing by hand rather than accepting silently:
 
   ```bash
   git -C <worktree> status --porcelain        # must be empty
@@ -217,12 +240,14 @@ Omitted, sweep every worktree.
   patch-equivalent to something already on the default branch - safe to
   remove the worktree and delete the branch manually, and say in the
   report that the patch-equivalence probe is what justified it. Any `+`
-  line or any dirt: leave it alone, the skip stands.
+  line, any dirt, or a command that still fails: leave it alone, the skip
+  stands, and report what the probe error was.
 - `data.beads_to_close` is already deduped and sorted per call. Union across
   calls; do not re-derive it from the forge yourself.
 - `warnings` `beads_lookup_failed`, `worktree_remove_failed`,
-  `branch_delete_failed` each name one worktree's partial outcome - surface
-  them per line rather than as a footnote.
+  `branch_delete_failed`, `patch_equivalence_unknown` each name one
+  worktree's partial outcome - surface them per line rather than as a
+  footnote.
 
 ## Report
 
@@ -257,7 +282,7 @@ avoid.
   destroy work that exists nowhere else. `git worktree remove` already refuses
   on a dirty tree; that refusal is a feature, and no script routes around it.
   Every skip is reported so a human can deal with it.
-- **Quiesce comes after the dirty and SHA checks, not before.** A worktree
+- **Quiesce comes after the dirty and merged-content checks, not before.** A worktree
   about to be skipped should keep its session running; shutting one down and
   then deciding not to clean up is pure loss. The residual race - the session
   dirties the tree between check and removal - costs nothing, because the
