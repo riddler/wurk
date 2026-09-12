@@ -9,9 +9,9 @@ require_relative "lib/refs"
 require_relative "lib/manifest"
 require_relative "lib/forge"
 
-# PrState is the one place that knows PR/MR-merge detection is forge-based,
-# and that git ancestry is *wrong* here - verified independently on GitHub and
-# GitLab.
+# RequestState is the one place that knows PR/MR-merge detection is
+# forge-based, and that git ancestry is *wrong* here - verified independently
+# on GitHub and GitLab.
 #
 # Wrong alternative #1: `@{upstream}` / `git branch --merged origin/main`.
 # Rebase merging replays a branch's commits onto main as new SHAs, so a
@@ -40,9 +40,9 @@ require_relative "lib/forge"
 # the GitHub side needs a mapping).
 #
 # So: ask the forge, never git. On a forge-CLI failure or an unauthenticated
-# call this script (and PrState.query_merged/beads_for_pr) reports "not
+# call this script (and RequestState.query_merged/beads_for_pr) reports "not
 # available" - it must never fall back to ancestry as a substitute.
-module PrState
+module RequestState
   QueryResult = Struct.new(:available, :merged, :number, :merged_at, :head_oid, :error, keyword_init: true)
   BeadsResult = Struct.new(:available, :beads, :error, keyword_init: true)
 
@@ -238,10 +238,10 @@ module PrState
     end
 
     def run(argv, io: $stdout)
-      parser, _options = Cli.build("pr_state.rb [options] (<branch> | beads <pr-number>)")
+      parser, _options = Cli.build("request_state.rb [options] (<branch> | beads <pr-number>)")
       args = Cli.parse!(parser, argv)
 
-      env = Envelope.new(script: "pr_state")
+      env = Envelope.new(script: "request_state")
 
       manifest = Manifest.require!(env)
       return env.emit(io) unless manifest
@@ -265,7 +265,7 @@ module PrState
 
     def run_beads(number, env, io, parser)
       if number.to_s.strip.empty?
-        warn "usage: pr_state.rb beads <pr-number>\n\n#{parser}"
+        warn "usage: request_state.rb beads <pr-number>\n\n#{parser}"
         exit 2
       end
 
@@ -282,7 +282,7 @@ module PrState
 
     def run_branch(branch, env, io, parser)
       if branch.to_s.strip.empty?
-        warn "usage: pr_state.rb [options] <branch>\n\n#{parser}"
+        warn "usage: request_state.rb [options] <branch>\n\n#{parser}"
         exit 2
       end
 
@@ -305,4 +305,4 @@ module PrState
   end
 end
 
-exit PrState.run(ARGV) if __FILE__ == $PROGRAM_NAME
+exit RequestState.run(ARGV) if __FILE__ == $PROGRAM_NAME

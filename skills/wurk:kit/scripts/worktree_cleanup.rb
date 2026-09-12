@@ -9,24 +9,25 @@ require_relative "lib/cli"
 require_relative "lib/manifest"
 require_relative "lib/forge"
 require_relative "worktree_survey"
-require_relative "pr_state"
+require_relative "request_state"
 
 # WorktreeCleanup is the /wurk:cleanup sweep, minus the two pieces that
 # stay at the skill boundary on purpose (see
 # statifier-ex docs/plans/260806-st-hzf-skill-mechanics-scripts.md Phase 4):
 #
 # - Closing beads: this script never calls `bd close`. It emits
-#   `data.beads_to_close`, gathered from `pr_state.rb beads` over each merged
-#   PR's commits, and the SKILL.md performs the close - `bd close` is
+#   `data.beads_to_close`, gathered from `request_state.rb beads` over each
+#   merged PR's commits, and the SKILL.md performs the close - `bd close` is
 #   agent-authorized only against a verified merge, and keeping the call at
 #   the skill boundary is what keeps that trigger visible.
 # - tmux quiescing: Phase 5's script, invoked by the SKILL.md between this
 #   script's check phase and its removal phase.
 #
-# Merge detection goes entirely through pr_state.rb (via worktree_survey.rb,
-# which already queries it per worktree) - never git ancestry. This repo
-# allows rebase merging only, so a merged branch's tip is never an ancestor
-# of main; see pr_state.rb's header comment for the verified failure modes.
+# Merge detection goes entirely through request_state.rb (via
+# worktree_survey.rb, which already queries it per worktree) - never git
+# ancestry. This repo allows rebase merging only, so a merged branch's tip is
+# never an ancestor of main; see request_state.rb's header comment for the
+# verified failure modes.
 #
 # Never remove a dirty worktree, and never delete a branch `git worktree
 # remove` itself would refuse - that refusal is a feature. This script has no
@@ -151,7 +152,7 @@ module WorktreeCleanup
     end
 
     def beads_for(request, env)
-      result = PrState.beads_for_pr(request["number"], env: env)
+      result = RequestState.beads_for_pr(request["number"], env: env)
       unless result.available
         env.warn(code: "beads_lookup_failed", message: "could not read commits for request ##{request['number']}: #{result.error}")
         return []

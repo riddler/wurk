@@ -146,10 +146,10 @@ module PermalinksCli
     Identity = Struct.new(:project, :code, :message, keyword_init: true)
 
     # Which forge answers "what is this repo's project path", per kind - the
-    # same adapter shape pr_state.rb uses for request state, and for the same
-    # reason: the question is one the forge owns, and the git remote is not a
-    # substitute (an ssh alias, an insteadOf rewrite, or a fork remote all
-    # produce a path the forge would not agree with).
+    # same adapter shape request_state.rb uses for request state, and for the
+    # same reason: the question is one the forge owns, and the git remote is
+    # not a substitute (an ssh alias, an insteadOf rewrite, or a fork remote
+    # all produce a path the forge would not agree with).
     #
     # Both adapters go through Forge.project_path so the joined shape has one
     # definition site, and both refuse a payload they cannot read rather than
@@ -186,10 +186,10 @@ module PermalinksCli
     end
 
     # GitLab's side asks the REST project endpoint rather than a `repo view`
-    # subcommand, for the same two reasons pr_state.rb's commits adapter does:
-    # the endpoint and its field names are the documented API surface, and
-    # `:id` resolution from the current repo's remote is already the pattern in
-    # this tree. The field is `path_with_namespace` - the namespace path
+    # subcommand, for the same two reasons request_state.rb's commits adapter
+    # does: the endpoint and its field names are the documented API surface,
+    # and `:id` resolution from the current repo's remote is already the pattern
+    # in this tree. The field is `path_with_namespace` - the namespace path
     # already "/"-joined and already carrying every subgroup segment, which is
     # the whole reason the identity model is a path.
     #

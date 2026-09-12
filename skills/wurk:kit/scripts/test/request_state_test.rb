@@ -3,11 +3,11 @@
 require "minitest/autorun"
 require "json"
 require "stringio"
-require_relative "../pr_state"
+require_relative "../request_state"
 require_relative "support/manifest_helper"
 require_relative "support/fake_sh"
 
-class PrStateTest < Minitest::Test
+class RequestStateTest < Minitest::Test
   include ManifestHelper
 
   FIXTURE = "worktree"
@@ -22,10 +22,10 @@ class PrStateTest < Minitest::Test
     Manifest.reset!
   end
 
-  def run_pr_state(argv, fixture: FIXTURE)
+  def run_request_state(argv, fixture: FIXTURE)
     io = StringIO.new
     code = nil
-    with_manifest(fixture) { code = PrState.run(argv, io: io) }
+    with_manifest(fixture) { code = RequestState.run(argv, io: io) }
     [code, JSON.parse(io.string)]
   end
 
@@ -37,11 +37,11 @@ class PrStateTest < Minitest::Test
   # to make that path reachable; the forge after these arrives into this test,
   # not into a regression.
   #
-  # sabotage: drop the Forge.guard! call from pr_state.rb -> gh is called
+  # sabotage: drop the Forge.guard! call from request_state.rb -> gh is called
   # and FakeSh raises UnexpectedCommand -> red
   def test_an_unimplemented_forge_blocks_clearly_rather_than_calling_a_forge_cli
     code, env = Forge.with_implemented(%w[github]) do
-      run_pr_state(["zz-abc-x"], fixture: "forge_gitlab")
+      run_request_state(["zz-abc-x"], fixture: "forge_gitlab")
     end
 
     assert_equal 1, code
@@ -57,7 +57,7 @@ class PrStateTest < Minitest::Test
       out: %({"number":41,"mergedAt":"2026-08-01T00:00:00Z","headRefOid":"deadbeef"}\n)
     )
 
-    code, env = run_pr_state(["zz-abc-x"])
+    code, env = run_request_state(["zz-abc-x"])
 
     assert_equal 0, code
     assert_equal true, env["ok"]
@@ -74,7 +74,7 @@ class PrStateTest < Minitest::Test
       out: "null\n"
     )
 
-    code, env = run_pr_state(["zz-abc-x"])
+    code, env = run_request_state(["zz-abc-x"])
 
     assert_equal 0, code
     assert_equal false, env["data"]["merged"]
@@ -88,7 +88,7 @@ class PrStateTest < Minitest::Test
       exitstatus: 1, err: "gh: authentication required\n"
     )
 
-    code, env = run_pr_state(["zz-abc-x"])
+    code, env = run_request_state(["zz-abc-x"])
 
     assert_equal 1, code
     assert_equal false, env["ok"]
@@ -105,7 +105,7 @@ class PrStateTest < Minitest::Test
            "Fixes other thing, related to zz-zzz but no trailer here.\n"
     )
 
-    code, env = run_pr_state(%w[beads 41])
+    code, env = run_request_state(%w[beads 41])
 
     assert_equal 0, code
     assert_equal ["zz-abc"], env["data"]["beads"]
@@ -117,7 +117,7 @@ class PrStateTest < Minitest::Test
       exitstatus: 1, err: "gh: not found\n"
     )
 
-    code, env = run_pr_state(%w[beads 41])
+    code, env = run_request_state(%w[beads 41])
 
     assert_equal 1, code
     assert_equal false, env["ok"]
@@ -150,7 +150,7 @@ class PrStateTest < Minitest::Test
   end
 
   def run_gitlab(argv)
-    run_pr_state(argv, fixture: GITLAB_FIXTURE)
+    run_request_state(argv, fixture: GITLAB_FIXTURE)
   end
 
   def test_gitlab_merged_request_reports_merged_true_from_the_rest_field_names

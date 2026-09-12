@@ -256,9 +256,9 @@ class PermalinksCliTest < Minitest::Test
   #
   # Both kinds the schema accepts now have a permalink shape, so the
   # unsupported-forge path is only reachable by narrowing the implemented list
-  # - the same seam pr_state_test.rb uses, and the reason Forge.with_implemented
-  # exists. Narrowing to github alone makes the gitlab fixture the unsupported
-  # case again.
+  # - the same seam request_state_test.rb uses, and the reason
+  # Forge.with_implemented exists. Narrowing to github alone makes the gitlab
+  # fixture the unsupported case again.
   def test_an_unimplemented_forge_blocks_before_touching_the_document
     Dir.mktmpdir do |tmp|
       path = File.join(tmp, "doc.md")

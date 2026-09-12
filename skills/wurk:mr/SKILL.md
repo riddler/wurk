@@ -92,7 +92,7 @@ change:
 2. **Resolve the beads.** From `$ARGUMENTS` if given. Otherwise read
    `data.refs_beads` from step 1 - the same anchored trailer extraction
    (`lib/refs.rb`, keyed on `commits.trailer.key`) that `/wurk:cleanup`
-   closes on via `pr_state.rb beads`, so the request body and the eventual
+   closes on via `request_state.rb beads`, so the request body and the eventual
    closes agree.
 
    `data.refs_beads` is computed over commits not yet on the branch's
@@ -451,7 +451,7 @@ change:
 - **Merge strategy matters downstream.** Where the project merges by rebase,
   the branch tip never becomes an ancestor of the default branch, so merge
   detection anywhere downstream must use the forge's request state rather
-  than git ancestry - which is exactly why `pr_state.rb` exists (see
+  than git ancestry - which is exactly why `request_state.rb` exists (see
   `/wurk:cleanup`). Do not restructure a branch's commits on the assumption
   they will be squashed.
 - **One bead per branch is the default, not a law.** Several small beads
