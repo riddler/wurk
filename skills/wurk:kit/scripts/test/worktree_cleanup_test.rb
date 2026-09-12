@@ -175,6 +175,7 @@ class WorktreeCleanupTest < Minitest::Test
   end
 
   def test_dry_run_never_removes_or_deletes_the_branch
+    @fake.expect(%w[git fetch --prune], out: "")
     expect_survey
     @fake.expect(%w[git status --porcelain], out: "")
     @fake.expect(%w[git rev-parse HEAD], out: "deadbeef\n")
@@ -182,17 +183,62 @@ class WorktreeCleanupTest < Minitest::Test
       ["gh", "pr", "view", "42", "--json", "commits", "--jq", ".commits[].messageBody"],
       out: "Refs: zz-abc\n"
     )
-    # No "git worktree remove", "git worktree prune", "git branch -D" or
-    # "git fetch --prune" expectations - dry-run must not execute any of
-    # them.
+    # No "git worktree remove" or "git branch -D" expectations - dry-run
+    # must not execute either, even though the fetch above is real.
 
     code, env = run_cleanup(["--dry-run"])
 
     assert_equal 0, code
     assert env["commands"].any? { |c| c.include?("git worktree remove") }
     assert env["commands"].any? { |c| c.include?("git branch -D") }
-    assert env["commands"].any? { |c| c.include?("git fetch --prune") }
     refute env["commands"].any? { |c| c.include?("--force") }
+    assert @fake.calls.any? { |c| c.argv == %w[git fetch --prune] }
+    refute @fake.calls.any? { |c| c.argv.include?("remove") && c.argv.include?("worktree") }
+    refute @fake.calls.any? { |c| c.argv == ["git", "branch", "-D", "zz-abc-merged-thing"] }
+  end
+
+  def test_the_sweep_fetches_before_it_judges_any_worktree
+    @fake.expect(%w[git fetch --prune], out: "")
+    expect_survey
+    @fake.expect(%w[git status --porcelain], out: "")
+    @fake.expect(%w[git rev-parse HEAD], out: "deadbeef\n")
+    @fake.expect(
+      ["gh", "pr", "view", "42", "--json", "commits", "--jq", ".commits[].messageBody"],
+      out: "Fixes a thing.\n\nRefs: zz-abc\n"
+    )
+    @fake.expect(["git", "worktree", "remove", WT1], out: "")
+    @fake.expect(%w[git worktree prune], out: "")
+    @fake.expect(["git", "branch", "-D", "zz-abc-merged-thing"], out: "")
+
+    run_cleanup
+
+    fetch_index = @fake.calls.find_index { |c| c.argv == %w[git fetch --prune] }
+    first_rev_parse_index = @fake.calls.find_index { |c| c.argv == %w[git rev-parse HEAD] }
+
+    refute_nil fetch_index
+    refute_nil first_rev_parse_index
+    assert_operator fetch_index, :<, first_rev_parse_index
+  end
+
+  def test_a_failed_survey_fetches_nothing
+    @fake.expect(%w[git worktree list --porcelain], out: porcelain)
+    @fake.expect(%w[git status --porcelain], out: "")
+    @fake.expect(%w[git merge-base --is-ancestor origin/main HEAD], exitstatus: 0)
+    @fake.expect(%w[bd show zz-abc --json], out: '[{"id":"zz-abc","labels":[]}]')
+    @fake.expect(
+      ["gh", "pr", "list", "--state", "merged", "--head", "zz-abc-merged-thing",
+       "--json", "number,mergedAt,headRefOid", "--jq", ".[0]"],
+      exitstatus: 1, err: "gh: authentication required\n"
+    )
+    @fake.expect(%w[git status --porcelain], out: "")
+    @fake.expect(%w[git merge-base --is-ancestor origin/main HEAD], exitstatus: 1)
+    @fake.expect(%w[bd show zz-def --json], out: '[{"id":"zz-def","labels":[]}]')
+
+    code, env = run_cleanup
+
+    assert_equal 1, code
+    assert_equal "forge_unavailable", env["blocked"].first["code"]
+    refute @fake.calls.any? { |c| c.argv == %w[git fetch --prune] }
   end
 
   def test_no_bd_close_call_anywhere_in_source

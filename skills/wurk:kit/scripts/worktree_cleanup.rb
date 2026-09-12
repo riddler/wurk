@@ -62,6 +62,18 @@ module WorktreeCleanup
         return env.emit(io)
       end
 
+      # Fetched before the check phase, and on a dry run too. The
+      # patch-equivalence probe below can only see commits reachable from
+      # the merge target in this checkout, so a stale remote-tracking ref
+      # would make it refuse a worktree whose work has landed - the failure
+      # this check exists to stop reporting. The dry run joins in because
+      # /wurk:cleanup selects candidates on the dry run and removes them by
+      # name afterwards: the two must decide against the same refs. This is
+      # not an exception to ADR-0006's dry-run rule - a fetch writes only
+      # remote-tracking refs, and touches no branch, no worktree, and no
+      # bead.
+      Sh.run(%w[git fetch --prune], envelope: env)
+
       results = []
       beads_to_close = []
 
@@ -73,15 +85,6 @@ module WorktreeCleanup
 
       env.data[:results] = results
       env.data[:beads_to_close] = beads_to_close.uniq.sort
-
-      # Remote branches are usually already gone - GitHub deletes them on
-      # merge. Cleanup here is purely local, once per sweep, not per
-      # worktree.
-      if dry_run
-        env.commands << Sh.render(%w[git fetch --prune])
-      else
-        Sh.run(%w[git fetch --prune], envelope: env)
-      end
 
       env.emit(io)
     end
