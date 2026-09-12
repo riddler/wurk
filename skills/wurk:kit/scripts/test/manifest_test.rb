@@ -589,6 +589,83 @@ class ManifestValidationTest < Minitest::Test
     assert_match(/parallelism\.timeout_seconds must be a positive integer, got "600"/, m.errors.join("\n"))
   end
 
+  # --- forge.host (wu-4wl.1) ---------------------------------------------
+  #
+  # The field is additive: an existing consumer manifest with no forge.host
+  # keeps validating, and resolves to the forge kind's own host in
+  # lib/forge.rb. That back-compatibility is the first test here, not an
+  # afterthought - three consumer manifests predate the field.
+
+  def test_forge_host_absent_validates
+    m = ManifestFixtures.load("valid")
+    assert m.valid?, "expected an absent forge.host to validate: #{m.errors.inspect}"
+    assert_nil m.forge_host
+  end
+
+  def test_forge_host_hostname_validates
+    m = ManifestFixtures.load_with("valid", "forge" => { "host" => "gitlab.example.com" })
+    assert m.valid?, "expected a bare hostname to validate: #{m.errors.inspect}"
+    assert_equal "gitlab.example.com", m.forge_host
+  end
+
+  def test_forge_host_with_a_port_validates
+    m = ManifestFixtures.load_with("valid", "forge" => { "host" => "git.example.com:8443" })
+    assert m.valid?, "expected a host:port to validate: #{m.errors.inspect}"
+  end
+
+  def test_forge_host_single_label_validates
+    m = ManifestFixtures.load_with("valid", "forge" => { "host" => "gitlab" })
+    assert m.valid?, "expected an intranet single-label host to validate: #{m.errors.inspect}"
+  end
+
+  # Shape only, never the network - the same line validate_gate_cwd draws.
+  def test_forge_host_validation_does_not_resolve_the_name
+    m = ManifestFixtures.load_with("valid", "forge" => { "host" => "definitely-not-a-real-host.invalid" })
+    assert m.valid?, "expected validation to accept an unresolvable host: #{m.errors.inspect}"
+  end
+
+  # sabotage: drop FORGE_HOST_RE and accept any non-empty string -> red. A
+  # scheme survives into "https://https://host/...", which 404s in a document
+  # nobody re-reads.
+  def test_forge_host_with_a_scheme_blocks
+    m = ManifestFixtures.load_with("valid", "forge" => { "host" => "https://gitlab.example.com" })
+    refute m.valid?
+    assert_match(/forge\.host must be a bare hostname/, m.errors.join("\n"))
+  end
+
+  def test_forge_host_with_a_path_blocks
+    m = ManifestFixtures.load_with("valid", "forge" => { "host" => "gitlab.example.com/gitlab" })
+    refute m.valid?
+    assert_match(/forge\.host must be a bare hostname/, m.errors.join("\n"))
+  end
+
+  def test_forge_host_with_a_trailing_slash_blocks
+    m = ManifestFixtures.load_with("valid", "forge" => { "host" => "gitlab.example.com/" })
+    refute m.valid?
+    assert_match(/forge\.host must be a bare hostname/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the is_a?(String) check -> red
+  def test_forge_host_non_string_blocks
+    m = ManifestFixtures.load_with("valid", "forge" => { "host" => 443 })
+    refute m.valid?
+    assert_match(/forge\.host must be a non-empty hostname string, got 443/, m.errors.join("\n"))
+  end
+
+  def test_forge_host_empty_string_blocks
+    m = ManifestFixtures.load_with("valid", "forge" => { "host" => "  " })
+    refute m.valid?
+    assert_match(/forge\.host must be a non-empty hostname string/, m.errors.join("\n"))
+  end
+
+  # sabotage: leave "host" out of KNOWN["forge"] -> the field a consumer
+  # declares on purpose warns as unknown -> red
+  def test_forge_host_is_a_known_key_and_warns_about_nothing
+    m = ManifestFixtures.load_with("valid", "forge" => { "host" => "gitlab.example.com" })
+    m.valid?
+    assert_empty m.warnings
+  end
+
   def test_gate_cwd_absent_validates
     m = ManifestFixtures.load("valid")
     assert m.valid?, "expected an absent gate.cwd to validate: #{m.errors.inspect}"

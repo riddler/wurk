@@ -32,10 +32,14 @@ defaults are listed under "Defaults" below.
   "forge": {
     "kind": "github",                 // or "gitlab"; picks gh/glab, PR/MR wording,
                                       // permalink format, close-line syntax.
-                                      // The enum accepts "gitlab" today, but
-                                      // only "github" is implemented; see
-                                      // Forge::IMPLEMENTED in
+                                      // Both values are implemented for every
+                                      // capability; see Forge::IMPLEMENTED in
                                       // skills/wurk:kit/scripts/lib/forge.rb.
+    "host": "gitlab.example.com",     // (opt) a self-hosted instance's bare
+                                      // hostname, optionally with a port.
+                                      // Absent means the kind's own host
+                                      // (github.com, gitlab.com) - see
+                                      // "forge.host" below
     "labels": {}                      // (opt) e.g. {"agent_filed": "agent-filed"}
   },
 
@@ -205,6 +209,39 @@ the same field:
 
 A consumer whose default branch is `master`, `trunk`, or `develop` sets this
 field once instead of getting silently wrong diffs from every site above.
+
+## `forge.host`
+
+Where the forge lives, for a consumer not on the public instance: a
+self-hosted GitLab, a GitHub Enterprise server. It is a **bare host** - a
+hostname, optionally with a port (`gitlab.example.com`,
+`git.example.com:8443`) - and never a URL. The value is interpolated between
+`https://` and the project path when a permalink is written
+(`Forge.blob_url`), so a scheme, a path, or a trailing slash would produce a
+link that is wrong in a way nothing downstream can notice: it is written into
+a document and 404s for whoever clicks it weeks later. `lib/manifest.rb`
+therefore blocks on the shape rather than warning. It checks the shape only -
+no DNS lookup, no reachability probe - the same line `gate.cwd` draws.
+
+**Absent means the forge kind's own host**, and that default lives in
+`Forge::DEFAULT_HOSTS` (`github` -> `github.com`, `gitlab` -> `gitlab.com`)
+rather than in this schema's defaults table, for two reasons. It is a fact
+about the forge and not a consumer value, which is what keeps it out of the
+kit's no-consumer-constants rule (CLAUDE.md); and it depends on another field,
+which the defaults table - a flat map of dotted key to value - cannot express.
+So every manifest written before this field existed keeps validating and keeps
+resolving to the same host it always used.
+
+The companion of the host is the **project path**: a repo's identity on its
+forge, as one string of `/`-joined namespace segments. That is not a manifest
+field - the forge is asked for it (`gh repo view` on GitHub,
+`glab api projects/:id` on GitLab, both in `permalinks.rb`) because the git
+remote is not a reliable answer: an ssh alias, an `insteadOf` rewrite, or a
+fork remote all yield a path the forge would not agree with. It is a path
+rather than the `owner` + `repo` pair the kit carried before wu-4wl.1 because
+a GitLab project can be `group/subgroup/project` or deeper, which a
+two-segment pair cannot hold at all; GitHub's two-segment identity is simply
+the shortest case of the same model.
 
 ## Release recipes
 
@@ -665,6 +702,7 @@ is already handled there.
 | beads.topology | beads | beads | beads-with-forge-projection |
 | beads.sync | git | git | (TBD - declare before the first `/wurk:mr`) |
 | forge.kind | github | github | gitlab |
+| forge.host | absent (github.com) | absent (github.com) | absent (gitlab.com) unless the instance is self-hosted - declare it before the first permalink run |
 | gate.full | mix quality | mix quality | mise run quality |
 | gate.loop | mix quality --profile loop | mix quality --profile loop | mise run quality:quick |
 | gate.report | yes (ex_quality JSON) | yes | no (tier 0; tier 1 later) |
@@ -742,6 +780,11 @@ common one),
 `gate.long_timeout_seconds` = `3600`,
 `parallelism.timeout_seconds` = `600`, `tmux.layout` = `window-per-issue`.
 
+One default is not in that list because it cannot be: `forge.host` defaults to
+the host of the declared `forge.kind`, which a flat dotted-key table cannot
+express. It is resolved in `lib/forge.rb` (`Forge::DEFAULT_HOSTS`) instead -
+see "`forge.host`" above.
+
 Everything else absent means the capability is off, and the scripts say so
 rather than guessing: no `tmux` section means no tmux integration, and a
 `tmux` section with no `layout` means `window-per-issue`; no
@@ -790,6 +833,11 @@ gated.
   list all block. Whether the name resolves to `.claude/agents/<name>.md` is
   checked by `manifest.rb check` only, and blocks there. See
   "`mr.review_agents`" above.
+- **`forge.host` must be a bare hostname**, optionally with a port, when the
+  field is present. A scheme, a path, a trailing slash, an empty string, and
+  a non-string all block; the shape is checked without any DNS or
+  reachability probe. An absent field is legal and resolves per forge kind.
+  See "`forge.host`" above.
 - **`gate.timeout_seconds` must be a positive integer.** Zero, a negative
   number, a float, and a non-numeric value all block.
 - **`gate.long_timeout_seconds` must be a positive integer.** Same rule as

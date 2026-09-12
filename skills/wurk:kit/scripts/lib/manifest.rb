@@ -80,7 +80,7 @@ class Manifest
     "repo" => %w[default_branch],
     "beads" => %w[prefix topology sync areas],
     "beads.areas" => %w[labels lands_alone always_batchable],
-    "forge" => %w[kind labels],
+    "forge" => %w[kind host labels],
     "gate" => %w[cwd full loop report report_loop attest guard_ledger build_paths also_gated_paths moving_files
                  project_level_skips not_applicable_skips sabotage timeout_seconds long_timeout_seconds],
     "gate.sabotage" => %w[test_roots test_pattern exempt_prefixes],
@@ -96,6 +96,12 @@ class Manifest
     "rebase" => %w[auto_resolve_paths],
     "mr" => %w[review_agents]
   }.freeze
+
+  # A hostname of dot-separated labels, optionally with a :port. Deliberately
+  # not a URI parse: URI.parse accepts "https://host/path" happily, and the
+  # value this rule exists to reject is exactly the one a URI parse would
+  # accept - see validate_forge_host.
+  FORGE_HOST_RE = /\A[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?)*(?::\d+)?\z/.freeze
 
   DEFAULTS = {
     "repo.default_branch" => "main",
@@ -318,6 +324,17 @@ class Manifest
 
   def forge_kind
     fetch("forge.kind")
+  end
+
+  # The forge host, when the consumer declares one - a self-hosted GitLab, a
+  # GitHub Enterprise instance. nil means "the forge kind's own host", which
+  # lib/forge.rb resolves from Forge::DEFAULT_HOSTS. The default lives there
+  # rather than in DEFAULTS above for two reasons: it is a fact about the
+  # forge rather than a consumer value (CLAUDE.md's no-consumer-constants
+  # rule), and it depends on another field - DEFAULTS is a flat dotted-key
+  # table and cannot express a default conditioned on forge.kind.
+  def forge_host
+    fetch("forge.host")
   end
 
   def forge_labels
@@ -732,6 +749,7 @@ class Manifest
     validate_regex_lists
     validate_default_branch
     validate_beads_sync
+    validate_forge_host
     validate_sabotage
     validate_judge
     validate_rebase
@@ -787,6 +805,33 @@ class Manifest
     warnings << "#{path}: beads.sync is unset - defaulting to local, which means no skill will run " \
                 "bd dolt push in this repo. Declare beads.sync (local, git, or dolthub) to say so " \
                 "on purpose; see wurk docs/manifest.md"
+  end
+
+  # A bare host - a hostname, optionally with a port - and never a URL. The
+  # value is interpolated into a permalink between "https://" and the project
+  # path (lib/forge.rb's blob_url), so a value carrying a scheme, a path, or a
+  # trailing slash yields a URL that is wrong in a way nothing downstream can
+  # see: the link is written into a document and 404s for whoever clicks it
+  # weeks later. Blocking on load is the last point where the mistake is still
+  # cheap, which is why this is an error and not a warning.
+  #
+  # Shape only, never a DNS or reachability probe - the line
+  # validate_gate_cwd draws, for the same reason: validation must not depend
+  # on the network or on the process environment.
+  def validate_forge_host
+    value = fetch("forge.host")
+    return if value.nil?
+
+    unless value.is_a?(String) && !value.strip.empty?
+      errors << "#{path}: forge.host must be a non-empty hostname string, got #{value.inspect}"
+      return
+    end
+
+    return if value.match?(FORGE_HOST_RE)
+
+    errors << "#{path}: forge.host must be a bare hostname, optionally with a port " \
+              "(gitlab.example.com, git.example.com:8443) - no scheme, no path, no trailing slash; " \
+              "omit the field to use the forge kind's own host. Got #{value.inspect}"
   end
 
   # Present-or-absent, never half-present: a section that declares roots but

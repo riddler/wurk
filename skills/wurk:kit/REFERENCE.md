@@ -58,11 +58,12 @@ return env.emit(io) unless manifest
 than an exception mid-run. A capability the manifest does not configure is
 reported, never guessed: no `tmux` section blocks `tmux_window.rb`'s
 session-addressing subcommands rather than inventing a session name, no
-`gate.report` means tier 0, and a forge whose capability has no adapter
-blocks with `unsupported_forge` (see `lib/forge.rb`) instead of half-working -
-request-state detection speaks both `github` and `gitlab`, while permalink
-writing is still GitHub-only, so `forge.kind: gitlab` blocks
-`permalinks.rb` and nothing else. Within a `tmux` section, `tmux.layout` selects the
+`gate.report` means tier 0, and a forge with no adapter blocks with
+`unsupported_forge` (see `lib/forge.rb`) instead of half-working. Both kinds
+the schema accepts - `github` and `gitlab` - now have an adapter for every
+capability, request-state detection and permalink writing alike, so
+`Forge.guard!` checks one list rather than a per-capability one; a self-hosted
+instance supplies its own host through `forge.host`. Within a `tmux` section, `tmux.layout` selects the
 topology and defaults to `window-per-issue` when absent; `tmux.editor` is an
 optional argv array, and its absence means no editor window is opened.
 
