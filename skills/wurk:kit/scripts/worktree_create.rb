@@ -13,8 +13,10 @@ require_relative "lib/manifest"
 # after this script reports success.
 #
 # Never force: a pre-existing branch or worktree directory is `blocked` with
-# needs: "human" - see new-worktree/SKILL.md Step 1. This script has no path
-# that deletes a branch or a directory to make room for a new one.
+# needs: "human" - see the wurk:branch SKILL.md's create-and-warm step. This
+# script has no path that deletes a branch or a directory to make room for a
+# new one. The single exception is ADOPTION (wu-mya.3), and it is narrow
+# because it loosens that safety default: see #adopt_refusal_reason.
 module WorktreeCreate
   class << self
     def run(argv, io: $stdout)
@@ -71,15 +73,53 @@ module WorktreeCreate
 
       # --- Guard ----------------------------------------------------------
 
-      branch_res = Sh.run(["git", "branch", "--list", name], chdir: root, envelope: env)
-      if branch_res.success? && !branch_res.out.to_s.strip.empty?
-        env.block!(code: "branch_exists", message: "branch #{name} already exists", needs: "human")
+      adopt = false
+
+      if branch_exists?(env, root: root, name: name)
+        # The branch is already there. Adoption is the one way past this, and
+        # only when there is nothing left to decide - see
+        # #adopt_refusal_reason for the conditions and why each mismatch is
+        # still a human's call.
+        reason = adopt_refusal_reason(env, root: root, path: path, name: name)
+        if reason
+          env.block!(code: "branch_exists", message: "branch #{name} already exists; #{reason}", needs: "human")
+          return env.emit(io)
+        end
+        adopt = true
+      elsif Dir.exist?(path)
+        # A directory with no branch of this name is a stray sibling: there is
+        # no workspace here to adopt, only a name collision.
+        env.block!(code: "worktree_dir_exists", message: "#{path} already exists", needs: "human")
         return env.emit(io)
       end
 
-      if Dir.exist?(path)
-        env.block!(code: "worktree_dir_exists", message: "#{path} already exists", needs: "human")
-        return env.emit(io)
+      if adopt
+        # Nothing is cut on the adopt path, so the whole base-ref ladder is
+        # moot: no fetch, no default-branch fallback, and base_ref stays nil
+        # rather than naming a ref this run never used. An explicit --base
+        # cannot be honored either, and saying so beats both silence and
+        # pretending the existing branch was cut from it.
+        if options[:base]
+          env.warn(
+            code: "base_ignored_on_adopt",
+            message: "--base #{options[:base]} does not apply: #{name} already exists and is being adopted, not cut"
+          )
+        end
+
+        env.data[:name] = name
+        env.data[:path] = path
+        env.data[:base_ref] = nil
+        env.data[:action] = "adopted"
+        env.data[:dry_run] = dry_run
+
+        if dry_run
+          record_dry_run_steps(env, manifest, root: root, path: path, worktrees_root: worktrees_root,
+                                base_ref: nil, name: name, adopt: true)
+          return env.emit(io)
+        end
+
+        return create_and_warm(env, io, manifest, root: root, path: path, worktrees_root: worktrees_root,
+                                base_ref: nil, name: name, adopt: true)
       end
 
       # An explicit --base wins over the default-branch ladder: stacked work
@@ -118,6 +158,7 @@ module WorktreeCreate
       env.data[:name] = name
       env.data[:path] = path
       env.data[:base_ref] = base_ref
+      env.data[:action] = "created"
       env.data[:dry_run] = dry_run
 
       if dry_run
@@ -130,15 +171,77 @@ module WorktreeCreate
 
     private
 
+    def branch_exists?(env, root:, name:)
+      res = Sh.run(["git", "branch", "--list", name], chdir: root, envelope: env)
+      res.success? && !res.out.to_s.strip.empty?
+    end
+
+    # The adoption gate, and the only loosening of the never-force default
+    # above. Returns nil when the existing branch's workspace can simply be
+    # adopted, or a sentence naming the mismatch that keeps it blocked.
+    #
+    # Adoption requires ALL of: the branch exists (the caller already checked),
+    # git has a worktree registered for that branch, that worktree is at
+    # exactly the expected path under parallelism.worktrees_dir, the directory
+    # is really there, and the tree is clean. That is the case the first
+    # worktree-per-issue consumer hit - a worktree it had made by hand before
+    # adopting wurk - and in it there is nothing for a human to decide.
+    #
+    # Every other combination stays blocked, because each one hides a decision
+    # this script must not make: a dirty tree holds uncommitted work only a
+    # human can judge; the branch checked out somewhere else would leave two
+    # directories for one branch, one of them unknown to /wurk:cleanup; a
+    # registered worktree whose directory is gone is a prunable entry, not a
+    # workspace; a branch with no worktree at all may be someone else's
+    # in-flight work.
+    def adopt_refusal_reason(env, root:, path:, name:)
+      checkout = worktree_path_for_branch(env, root: root, name: name)
+      return "no worktree is checked out for it (expected #{path})" unless checkout
+
+      unless File.expand_path(checkout) == File.expand_path(path)
+        return "it is checked out at #{checkout}, not at #{path}"
+      end
+      return "#{path} is not a directory" unless Dir.exist?(path)
+
+      status = Sh.run(%w[git status --porcelain], chdir: path, envelope: env)
+      return "git status in #{path} could not be read" unless status.success?
+      return "#{path} has uncommitted changes" unless status.out.to_s.strip.empty?
+
+      nil
+    end
+
+    # The path of the worktree git has registered for `name`, or nil when no
+    # worktree carries that branch. `git worktree list --porcelain` emits one
+    # blank-line-separated stanza per worktree, `worktree <path>` first and
+    # `branch refs/heads/<name>` present only for a non-detached one.
+    def worktree_path_for_branch(env, root:, name:)
+      res = Sh.run(%w[git worktree list --porcelain], chdir: root, envelope: env)
+      return nil unless res.success?
+
+      current = nil
+      res.out.to_s.each_line do |raw|
+        line = raw.strip
+        if line.start_with?("worktree ")
+          current = line[("worktree ".length)..-1]
+        elsif line == "branch refs/heads/#{name}"
+          return current
+        end
+      end
+
+      nil
+    end
+
     # A pre-existing branch or directory is blocked before this ever runs, so
     # the guard checks above always execute for real (they are reads, not
     # mutations, and dry-run reporting an accurate guard result is more
     # useful than a guess). Only what follows here - the worktree add, the
     # mise trust, the cache warm, and the verify - is mutating, and that is
     # what --dry-run records without executing.
-    def record_dry_run_steps(env, manifest, root:, path:, worktrees_root:, base_ref:, name:)
-      env.commands << Sh.render(["mkdir", "-p", worktrees_root])
-      env.commands << Sh.render(["git", "worktree", "add", path, "-b", name, "--no-track", base_ref], chdir: root)
+    def record_dry_run_steps(env, manifest, root:, path:, worktrees_root:, base_ref:, name:, adopt: false)
+      unless adopt
+        env.commands << Sh.render(["mkdir", "-p", worktrees_root])
+        env.commands << Sh.render(["git", "worktree", "add", path, "-b", name, "--no-track", base_ref], chdir: root)
+      end
       trust = trust_argv(manifest, path)
       env.commands << Sh.render(trust) if trust
       record_clone_dry_run(env, manifest.warm_clone, root: root, path: path)
@@ -199,17 +302,24 @@ module WorktreeCreate
       manifest.gate_chdir(root: path) || path
     end
 
-    def create_and_warm(env, io, manifest, root:, path:, worktrees_root:, base_ref:, name:)
-      mkdir_res = Sh.run(["mkdir", "-p", worktrees_root], envelope: env)
-      unless mkdir_res.success?
-        env.block!(code: "mkdir_failed", message: err_or(mkdir_res, "mkdir -p #{worktrees_root} failed"))
-        return env.emit(io)
-      end
+    # Adoption skips exactly the two creating steps (the worktrees_root mkdir
+    # and the `git worktree add`) and nothing else: the trust, the cache
+    # clone, the warm commands and the gate all run, because every one of them
+    # is idempotent and the point of adopting is a workspace that is warm and
+    # verified green, not merely present.
+    def create_and_warm(env, io, manifest, root:, path:, worktrees_root:, base_ref:, name:, adopt: false)
+      unless adopt
+        mkdir_res = Sh.run(["mkdir", "-p", worktrees_root], envelope: env)
+        unless mkdir_res.success?
+          env.block!(code: "mkdir_failed", message: err_or(mkdir_res, "mkdir -p #{worktrees_root} failed"))
+          return env.emit(io)
+        end
 
-      add_res = Sh.run(["git", "worktree", "add", path, "-b", name, "--no-track", base_ref], chdir: root, envelope: env)
-      unless add_res.success?
-        env.block!(code: "worktree_add_failed", message: err_or(add_res, "git worktree add failed"))
-        return env.emit(io)
+        add_res = Sh.run(["git", "worktree", "add", path, "-b", name, "--no-track", base_ref], chdir: root, envelope: env)
+        unless add_res.success?
+          env.block!(code: "worktree_add_failed", message: err_or(add_res, "git worktree add failed"))
+          return env.emit(io)
+        end
       end
 
       # A toolchain manager may trust its config per directory path rather
