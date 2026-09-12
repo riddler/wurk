@@ -278,7 +278,7 @@ open and still owned by the phase each names.
    names, and keep the parser and the skill prose that writes the notes in
    the same repo (both move to wurk together).
 8. **Forge-format leaks** (phases 1, 4). `permalinks.rb` builds GitHub blob
-   URLs; `pr_state.rb` shells `gh pr list`; merge-request writes
+   URLs; `request_state.rb` shells `gh pr list`; merge-request writes
    `Closes st-xxx` lines. Phase 1 routes these through the manifest's forge
    field with `github` as the only implemented kind; phase 4 adds `gitlab`
    (glab equivalents: `glab mr list`, GL permalink format, `Closes #NN`).
@@ -433,7 +433,7 @@ Steps:
    | `worktree_refresh.rb` | `gate.loop`, and `parallelism.*` through `rebase_onto` | `gate.moving_files` **has no consumer** - see the open item below |
    | `worktree_cleanup.rb` | `forge.kind` | guards in its own voice rather than relaying a nested `survey_failed` - it is the script that deletes branches |
    | `worktree_survey.rb` | `forge.kind`, via refs | item 8 |
-   | `pr_state.rb` | `forge.kind` | gitlab blocks `unsupported_forge` before any `gh` call, never half-works |
+   | `request_state.rb` | `forge.kind` | gitlab blocks `unsupported_forge` before any `gh` call, never half-works |
    | `permalinks.rb` | `forge.kind` | URL shape moved to `lib/forge.rb`; a forge with no format raises rather than guessing a URL that 404s inside a document nobody re-reads |
    | `tmux_window.rb` | `tmux.session/model` | main repo derived from `git rev-parse --git-common-dir` at runtime (item 22 - the `/Users/johnnyt` constant is gone); no `tmux` section blocks rather than inventing a session name; templates still name old skills until phase 2 (item 4) |
    | `select_batch.rb` | via areas, refs | beads#5358 re-verified (item 11) - see below |
@@ -547,7 +547,7 @@ Definition of done:
   opening a session whose working directory is the *derived* main checkout;
   `open --dry-run` rendering `--model haiku`, not `opus`; `find`/`classify`/
   `close` against a real window; `worktree_survey.rb` decomposing branch
-  `zz-smk-scratch-thing` to bead `zz-smk`; and `pr_state`,
+  `zz-smk-scratch-thing` to bead `zz-smk`; and `request_state`,
   `worktree_survey`, `worktree_cleanup` all blocking `unsupported_forge`
   once `forge.kind` was flipped to `gitlab`. Torn down afterwards.
   `tmux_window.rb open` was not run for real - it launches a live claude
@@ -1181,8 +1181,8 @@ Definition of done:
 3. Parallelism: implement `branch-in-place` in wurk:branch (guards in
    refresh/cleanup report not-applicable); `post_branch` runs the
    xcodegen/dev-icon/Dock chain.
-4. Forge: implement `gitlab` in `pr_state.rb` (glab mr list), `permalinks.rb`
-   (GL URL format), wurk:mr (MR wording, `--label agent-filed`, `in_review`
+4. Forge: implement `gitlab` in `request_state.rb` (glab mr list),
+   `permalinks.rb` (GL URL format), wurk:mr (MR wording, `--label agent-filed`, `in_review`
    bead status, `Closes #NN`), wurk:commit (`(GL-NN)` subject tags,
    conventional `type(package):` mode with the package map).
 5. Tracker topology: implement `beads-with-forge-projection` - promotion at

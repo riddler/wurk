@@ -8,7 +8,7 @@ require_relative "lib/cli"
 require_relative "lib/refs"
 require_relative "lib/manifest"
 require_relative "lib/forge"
-require_relative "pr_state"
+require_relative "request_state"
 
 # WorktreeSurvey is one survey standing in for three near-identical ones:
 # /wurk:next Step 2, /wurk:refresh Step 1, and /wurk:cleanup
@@ -146,7 +146,7 @@ module WorktreeSurvey
       stale = false
 
       if forge_available
-        result = PrState.query_merged(branch.to_s, env: env)
+        result = RequestState.query_merged(branch.to_s, env: env)
         if result.available
           if result.merged
             request = { number: result.number, state: Forge::REQUEST_MERGED,

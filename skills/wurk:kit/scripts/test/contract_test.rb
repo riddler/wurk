@@ -297,7 +297,7 @@ module Contract
   end
 
   # Forge-CLI vocabulary leaking into the kit's own words. A forge CLI's name
-  # may appear in an argv the Forge.guard! seam protects (pr_state.rb's
+  # may appear in an argv the Forge.guard! seam protects (request_state.rb's
   # ["gh", "pr", "list", ...]) and in a diagnostic message naming what
   # failed; it may not appear in an envelope code, a data key, or a
   # synthesized value, because those are the kit's vocabulary and outlive the

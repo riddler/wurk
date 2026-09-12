@@ -8,8 +8,9 @@ require_relative "manifest"
 # The manifest's `forge.kind` enum accepts `gitlab` because the schema is
 # shared with a repo that lives there (see wurk docs/manifest.md). Every kind
 # the enum accepts now has an adapter for every capability: request-state
-# detection (`pr_state.rb`) and permalink writing (the `blob_url` shape below
-# plus the repo-identity lookup in `permalinks.rb`) both speak both forges.
+# detection (`request_state.rb`) and permalink writing (the `blob_url` shape
+# below plus the repo-identity lookup in `permalinks.rb`) both speak both
+# forges.
 # `guard!` therefore checks one list - a capability that half-works is worse
 # than one that stops with a named block, because a `gh` call against a GitLab
 # repo fails with a message about authentication, which sends the reader

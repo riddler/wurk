@@ -31,7 +31,7 @@ of it**. Two consequences, and both are traps:
    path short of the reflog. Never force-delete a branch without a confirmed
    merged state from the forge.
 
-So: ask the forge, never git. `pr_state.rb` - reached through
+So: ask the forge, never git. `request_state.rb` - reached through
 `worktree_survey.rb` and `worktree_cleanup.rb` - is the one place that encodes
 this.
 
@@ -285,7 +285,7 @@ avoid.
 - **The trailer anchor is required, not tidiness.** Commit bodies routinely
   name other beads in prose - citing a design note, crediting a discovery,
   explaining a deviation - and an unanchored match closes every one of them.
-  `pr_state.rb beads` is the single definition site for this extraction,
+  `request_state.rb beads` is the single definition site for this extraction,
   keyed on the manifest's `commits.trailer`, and shared with `/wurk:mr`.
 - **A merged request whose commits carry no trailer closes nothing - report
   that, do not pass over it.** It means either work that skipped

@@ -6,7 +6,7 @@ require_relative "../worktree_survey"
 require_relative "../worktree_cleanup"
 
 # Forge (the neutral vocabulary, not the guard - the guard is exercised
-# behaviorally in pr_state_test.rb, permalinks_test.rb,
+# behaviorally in request_state_test.rb, permalinks_test.rb,
 # worktree_survey_test.rb, and worktree_cleanup_test.rb).
 class ForgeTest < Minitest::Test
   def test_request_merged_is_lowercase
