@@ -664,7 +664,7 @@ class Manifest
   def remotes_from_config(file)
     return [] unless File.file?(file)
 
-    File.readlines(file).filter_map do |line|
+    File.readlines(file).map do |line|
       body = line.sub(/#.*\z/, "").rstrip
       next unless (m = body.match(/^\s*(?:sync\.)?remote:\s*(.+)\z/))
 
@@ -672,7 +672,7 @@ class Manifest
       next if url.empty?
 
       "config.yaml: sync.remote -> #{url}"
-    end
+    end.compact
   rescue SystemCallError
     []
   end
@@ -1106,7 +1106,8 @@ class Manifest
   # single (see the /wurk:mr step), so the duplicate buys nothing and costs
   # a full agent.
   def validate_mr_review_agents_distinct(agents)
-    repeated = agents.select { |name| name.is_a?(String) }.tally.select { |_, count| count > 1 }.keys
+    named = agents.select { |name| name.is_a?(String) }
+    repeated = named.group_by { |name| name }.select { |_, uses| uses.length > 1 }.keys
     return if repeated.empty?
 
     errors << "#{path}: mr.review_agents lists #{repeated.join(', ')} more than once; a second " \

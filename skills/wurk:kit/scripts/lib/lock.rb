@@ -256,12 +256,12 @@ module Lock
     private
 
     def owner_content(owner)
-      lines = OWNER_KEYS.filter_map do |key|
+      lines = OWNER_KEYS.map do |key|
         value = owner[key] || owner[key.to_sym]
         next if value.nil?
 
         "#{key}=#{value}"
-      end
+      end.compact
       "#{lines.join("\n")}\n"
     end
 

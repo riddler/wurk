@@ -46,6 +46,27 @@ the scan takes its targets as an argument and the suite supplies the union
 of every fixture manifest's declarations. This is what `gate.moving_files`
 is for; it had no consumer before.
 
+**2. The version floor is macOS system Ruby, 2.6.** "Any Mac's system Ruby
+with no toolchain install" above is a version claim, and the version is
+2.6.10 - Apple has not moved it and nothing in a consumer install does. So a
+kit script uses no core method added after 2.6: not `filter_map`, `tally`,
+`except`, `intersect?`, `ceildiv`, `byteindex`, `byterindex`, `bytesplice`,
+`bind_call`, `const_source_location`, `absolute_path?`,
+`set_temporary_name`, `Data.define`, or `Enumerator.produce`.
+
+Such a method parses on 2.6 and raises `NoMethodError` only when its line
+runs, which makes this the one contract rule a contributor cannot notice by
+reading: whoever has a 3.x `ruby` from homebrew or a version manager on
+PATH sees a green suite while the gate is red on the Ruby this ADR commits
+to. Three call sites did exactly that over five weeks in 2026-09 and left
+the suite with 38 errors on the floor. `Contract` therefore scans every
+`.rb` under `scripts/` - the tests included, since the suite is the gate -
+for these as method calls, and the drift check that guards the list above
+guards this list the same way: a method named in this paragraph without a
+matching rule fails the suite. The list is named methods rather than a
+version sweep on purpose; a rule this absolute has to fire on nothing
+innocent.
+
 ## Consequences
 
 - Zero install burden for consumers; the scripts run wherever Claude Code
