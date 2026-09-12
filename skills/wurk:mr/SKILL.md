@@ -341,10 +341,17 @@ change:
 
    Then create the request with the CLI `forge.kind` selects (`gh pr create`
    for `github`, `glab mr create` for `gitlab`), based against the default
-   branch. Under `forge.kind: gitlab` the kit's forge-dependent scripts still
-   block with `unsupported_forge` today (see `skills/wurk:kit/REFERENCE.md`),
-   so the automated steps around this one - merge detection, permalinks, the
-   note this skill records below - do not yet run on that forge.
+   branch. Forge support is per capability rather than per forge, and the
+   authority on what is available here is the script's own envelope, never a
+   list in this document: a kit script whose capability has no adapter for
+   this repo's `forge.kind` blocks with `unsupported_forge`, and one that
+   cannot reach the forge blocks with `forge_unavailable` (see
+   `skills/wurk:kit/REFERENCE.md`). Either block means that step did not run:
+   report it as a block and leave the step undone. Do not work around it by
+   deriving the answer from git or by hand-writing what the script would
+   have produced - a merge signal or a permalink invented locally reads
+   exactly like a verified one and is the reason the script refuses in the
+   first place.
 
    The title matches the project's commit style (`commits.style`) and its
    subject length limit. The body carries what a reviewer needs and the
