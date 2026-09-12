@@ -322,6 +322,92 @@ module Contract
     hits
   end
 
+  # Ruby's own version floor (ADR-0006's version-floor constraint): the kit
+  # runs on macOS system Ruby, which is 2.6.10 and which a consumer install
+  # does not move. A core method added after 2.6 parses on 2.6 and raises
+  # NoMethodError only when its line runs, so a contributor whose own `ruby`
+  # is a 3.x from homebrew or a version manager sees a green suite while the
+  # gate is red on the Ruby the ADR commits to. That is not hypothetical:
+  # three call sites (two filter_map, one tally) shipped over five weeks and
+  # left the suite with 38 errors on this repo's own floor.
+  #
+  # The list is named methods, never a version-feature sweep. Precision is
+  # the design constraint: this rule runs on every commit, there is no
+  # per-line escape hatch (see this file's header), and so a pattern that
+  # fires on innocent code stops all work in the repo. A candidate earns its
+  # place only when its spelling has no innocent 2.6 meaning here, which is
+  # why `fetch_values` (Hash's is 2.3, Array's is 3.4), `compact`, `floor`,
+  # and `name` are deliberately absent, and why `intersection` is too - Set
+  # has had it since long before 2.6 and Set is stdlib the kit may use.
+  #
+  # The version each name arrived in is recorded for the reader; only the
+  # names are enforced.
+  POST_26_METHOD_VERSIONS = {
+    "filter_map" => "2.7",
+    "tally" => "2.7",
+    "bind_call" => "2.7",
+    "const_source_location" => "2.7",
+    "absolute_path?" => "2.7",
+    "except" => "3.0",
+    "intersect?" => "3.1",
+    "ceildiv" => "3.2",
+    "byteindex" => "3.2",
+    "byterindex" => "3.2",
+    "bytesplice" => "3.2",
+    "set_temporary_name" => "3.3"
+  }.freeze
+
+  # A method CALL, not a mention: the name must arrive after a `.` or `&.`
+  # and end at a non-identifier character. That leaves alone a local named
+  # `tally`, a hash key `:tally`, a keyword argument `tally:`, and the
+  # longer name `tallying`.
+  def self.post_26_matcher(name)
+    /(?:&\.|\.)\s*#{Regexp.escape(name)}(?![\w?!])/
+  end
+
+  # Receiver-qualified additions, which the matcher above cannot express: the
+  # bare halves (`define`, `produce`) are ordinary method names on anything.
+  POST_26_CALLS = {
+    "Data.define" => /\bData\.define(?![\w?!])/.freeze,
+    "Enumerator.produce" => /\bEnumerator\.produce(?![\w?!])/.freeze
+  }.freeze
+
+  POST_26_PATTERNS = POST_26_METHOD_VERSIONS.keys
+                                            .map { |name| [name, post_26_matcher(name)] }
+                                            .to_h
+                                            .merge(POST_26_CALLS)
+                                            .freeze
+
+  # Replaces every double-quoted literal with its interpolated code alone and
+  # drops single-quoted literals whole. Two jobs at once: a method name
+  # quoted inside a diagnostic is a mention and must not count, while
+  # "#{rows.tally}" is a real call and must.
+  #
+  # Accepted false negatives, in the spirit of code_only's own note: heredocs
+  # and %-literals are not recognized as strings, and an interpolation
+  # containing a nested brace is dropped rather than scanned. The
+  # single-quote pass can also swallow the span between two apostrophes in a
+  # trailing comment; it only ever removes text, so it costs a detection and
+  # never invents one.
+  def strip_string_literals(code)
+    code.gsub(/"(?:\\.|[^"\\])*"/) { |literal| literal.scan(/#\{([^{}]*)\}/).flatten.join(" ") }
+        .gsub(/'(?:\\.|[^'\\])*'/, " ")
+  end
+
+  # Returns [[lineno, label], ...] for every post-2.6 core method call.
+  # Strings are stripped before comments, which also repairs code_only's
+  # blind spot for a `#` inside a string literal on the same line.
+  def post_26_methods(content)
+    hits = []
+    content.each_line.with_index(1) do |line, lineno|
+      code = code_only(strip_string_literals(line))
+      next if code.strip.empty?
+
+      POST_26_PATTERNS.each { |label, re| hits << [lineno, label] if code =~ re }
+    end
+    hits
+  end
+
   # Every "/wurk:<name>" skill cross-reference anywhere in a SKILL.md. The
   # markdown scan the whole file's other checks are: no code_only stripping
   # (a reference in prose counts the same as one in a fenced example), and
@@ -517,6 +603,37 @@ class ContractRulesTest < Minitest::Test
     assert_empty Contract.forge_vocabulary(%(# the gh_unavailable code was renamed in wu-mya.1\n))
   end
 
+  def test_post_26_methods_detected_as_calls
+    assert_equal [[1, "filter_map"]], Contract.post_26_methods(%(rows = list.filter_map { |r| r }\n))
+    assert_equal [[1, "tally"]], Contract.post_26_methods(%(counts = names.tally\n))
+    assert_equal [[1, "tally"]], Contract.post_26_methods(%(counts = names&.tally\n))
+    assert_equal [[1, "except"]], Contract.post_26_methods(%(rest = opts.except(:dir)\n))
+    assert_equal [[1, "absolute_path?"]], Contract.post_26_methods(%(return unless File.absolute_path?(dir)\n))
+    assert_equal [[1, "Data.define"]], Contract.post_26_methods(%(Owner = Data.define(:campaign, :bead)\n))
+    assert_equal [[1, "Enumerator.produce"]], Contract.post_26_methods(%(seq = Enumerator.produce(1) { |n| n + 1 }\n))
+  end
+
+  # An interpolated call is a call: stripping the literal must keep what is
+  # inside "#{...}" while dropping the prose around it.
+  def test_post_26_methods_detected_inside_string_interpolation
+    assert_equal [[1, "tally"]],
+                 Contract.post_26_methods(%(warn "counts=\#{names.tally.size}"\n))
+  end
+
+  # The precision half of the rule, and the reason it can run on every
+  # commit: a mention, a lookalike name, and the 2.6-legal spelling of a
+  # method whose post-2.6 sibling is banned all stay silent.
+  def test_post_26_methods_ignores_mentions_and_lookalikes
+    assert_empty Contract.post_26_methods(%(# filter_map is 2.7; use map + compact instead\n))
+    assert_empty Contract.post_26_methods(%(errors << "use map + compact, not .filter_map"\n))
+    assert_empty Contract.post_26_methods(%(tally = 0\n))
+    assert_empty Contract.post_26_methods(%(count = counts[:tally]\n))
+    assert_empty Contract.post_26_methods(%(report(tally: counts)\n))
+    assert_empty Contract.post_26_methods(%(rows.tallying\n))
+    assert_empty Contract.post_26_methods(%(dir = File.absolute_path(path)\n))
+    assert_empty Contract.post_26_methods(%(rows.map { |r| r }.compact\n))
+  end
+
   def test_skill_references_finds_every_reference_on_a_line
     content = "Compose with `/wurk:issue` and `/wurk:branch`.\nSee /wurk:kit-reference too.\n"
     assert_equal [[1, "issue"], [1, "branch"], [2, "kit-reference"]],
@@ -697,6 +814,29 @@ class ContractTest < Minitest::Test
                  "or a synthesized value"
   end
 
+  # Unlike every rule above, this one scans the test files too: a post-2.6
+  # method in a test breaks the suite on the version floor exactly as surely
+  # as one in lib/, and the suite IS the gate (ADR-0002). The single
+  # exemption is this file, which has to spell the banned names to enforce
+  # them - the planted-fixture meta-check below is what keeps that exemption
+  # from hiding a real regression.
+  def test_no_post_26_ruby_methods_anywhere_under_scripts
+    scanned = all_ruby_files.reject { |file| file == File.expand_path(__FILE__) }
+    refute_empty scanned, "no .rb files under scripts/ to scan - the version-floor scan would be vacuous"
+
+    offenders = []
+    scanned.each do |file|
+      Contract.post_26_methods(File.read(file)).each do |(lineno, label)|
+        offenders << "#{file}:#{lineno} (#{label})"
+      end
+    end
+    assert_empty offenders,
+                 "core method added after Ruby 2.6 called in kit source: #{offenders.join(', ')} - " \
+                 "the kit runs on macOS system Ruby 2.6 (ADR-0006's version-floor constraint), " \
+                 "where these parse and then raise NoMethodError at run time; use the 2.6 " \
+                 "equivalent (map + compact, group_by, and so on)"
+  end
+
   # Every "/wurk:<name>" cross-reference in any shipped SKILL.md must resolve
   # to a skill directory that actually exists. This is what makes a
   # cross-skill pointer (e.g. wurk:work naming wurk:verify) gate-verifiable
@@ -764,6 +904,25 @@ class ContractTest < Minitest::Test
       Contract.process_creation(File.read(planted)).each { |lineno| offenders << "#{planted}:#{lineno}" }
       refute_empty offenders,
                    "the process-creation file scan failed to catch a planted Process.spawn outside lib/sh.rb"
+    end
+  end
+
+  # The version-floor half of the meta-check. This one carries more weight
+  # than the others because the real scan exempts this file: without a
+  # planted fixture, "no offenders" and "the scan is broken" look identical
+  # from the outside.
+  def test_meta_the_post_26_scan_actually_catches_planted_violations
+    Dir.mktmpdir do |dir|
+      planted = File.join(dir, "planted.rb")
+      File.write(planted, <<~RUBY)
+        rows = lines.filter_map { |line| line }
+        repeated = rows.tally.select { |_, count| count > 1 }
+        Owner = Data.define(:campaign, :bead)
+      RUBY
+
+      hits = Contract.post_26_methods(File.read(planted))
+      assert_equal [[1, "filter_map"], [2, "tally"], [3, "Data.define"]], hits,
+                   "the version-floor scan failed to catch a planted post-2.6 method call"
     end
   end
 
@@ -837,10 +996,13 @@ class ContractTest < Minitest::Test
     lib/sh.rb gate.moving_files gate.guard_ledger system backticks cp rm mv
   ].freeze
 
+  def adr_0006_path
+    File.join(SCRIPTS_ROOT, "..", "..", "..", "docs", "adr",
+              "0006-ruby-stdlib-scripts-with-envelope-contract.md")
+  end
+
   def test_contract_coverage_matches_adr_0006_banned_operations
-    adr_path = File.join(SCRIPTS_ROOT, "..", "..", "..", "docs", "adr",
-                         "0006-ruby-stdlib-scripts-with-envelope-contract.md")
-    adr = File.read(adr_path)
+    adr = File.read(adr_0006_path)
 
     constraint = adr[/^\*\*1\. The banned-operation list is absolute\.\*\*.*?(?=\n\n)/m]
     refute_nil constraint, "could not locate the banned-operation constraint in ADR-0006 (did its wording change?)"
@@ -855,5 +1017,25 @@ class ContractTest < Minitest::Test
     missing = operations - covered
 
     assert_empty missing, "ADR-0006 names operations Contract does not cover: #{missing.join(', ')}"
+  end
+
+  # The same drift mechanism for the version floor. Only the constraint's
+  # first paragraph is read, which is the one that lists the methods; the
+  # paragraph after it backticks `NoMethodError` and `scripts/`, and those
+  # are explanation, not list entries.
+  def test_post_26_coverage_matches_adr_0006_version_floor
+    adr = File.read(adr_0006_path)
+
+    constraint = adr[/^\*\*2\. The version floor is macOS system Ruby, 2\.6\.\*\*.*?(?=\n\n)/m]
+    refute_nil constraint, "could not locate the version-floor constraint in ADR-0006 (did its wording change?)"
+    assert_match(/\b2\.6\.10\b/, constraint,
+                 "the version-floor constraint no longer states the floor version explicitly")
+
+    named = constraint.scan(/`([^`]+)`/).flatten
+    refute_empty named, "the constraint no longer names any post-2.6 methods - drift check is vacuous"
+
+    missing = named - Contract::POST_26_PATTERNS.keys
+    assert_empty missing,
+                 "ADR-0006 names post-2.6 methods Contract does not scan for: #{missing.join(', ')}"
   end
 end

@@ -42,6 +42,9 @@ provenance.
 ### Layer 2: the kit (scripts)
 
 The deterministic mechanics, in Ruby (system Ruby, stdlib only - ADR-0006).
+The version floor is macOS system Ruby, 2.6.10 at `/usr/bin/ruby`: no core
+method added after 2.6 (ADR-0006's version-floor constraint, enforced by the
+contract test).
 Ported from statifier-ex's `.claude/scripts/` with its contract intact:
 
 - One JSON envelope on stdout: `ok`, `script`, `data`, `warnings[]`,
@@ -164,7 +167,9 @@ never-widen-without-being-told rule as the symlink refusal above.
 ## Testing and gates for this repo
 
 The kit's minitest suite is the gate here, run directly (no mix, no mise
-required): `ruby skills/wurk:kit/scripts/test/run.rb`. The contract test is
+required): `ruby skills/wurk:kit/scripts/test/run.rb`. Run it on the version
+floor - `/usr/bin/ruby` - since a newer `ruby` on PATH hides exactly the
+breakage the floor rule exists to catch. The contract test is
 part of that suite. Consumer repos stop gating skill content they no longer
 contain; statifier-ex narrows its ADR judge scope accordingly (recorded in a
 statifier ADR, per docs/plan.md phase 2).
