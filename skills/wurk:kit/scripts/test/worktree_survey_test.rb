@@ -32,10 +32,18 @@ class WorktreeSurveyTest < Minitest::Test
     [code, JSON.parse(io.string)]
   end
 
+  # Both kinds the manifest schema accepts now have a request-state adapter,
+  # so the implemented list is narrowed to make the unsupported-forge path
+  # reachable at all: this script must refuse in its own voice for the forge
+  # after these, which is a property no fixture can express on its own.
+  #
   # sabotage: drop the Forge.guard! call from worktree_survey.rb -> the
-  # survey shells out to gh against a GitLab repo -> red
-  def test_a_gitlab_repo_blocks_rather_than_shelling_out_to_gh
-    code, env = run_survey([], fixture: "forge_gitlab")
+  # survey shells out to a forge CLI regardless and FakeSh raises
+  # UnexpectedCommand -> red
+  def test_an_unimplemented_forge_blocks_rather_than_shelling_out_to_a_forge_cli
+    code, env = Forge.with_implemented(%w[github]) do
+      run_survey([], fixture: "forge_gitlab")
+    end
 
     assert_equal 1, code
     assert_equal "unsupported_forge", env["blocked"].first["code"]

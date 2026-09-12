@@ -157,7 +157,7 @@ module WorktreeSurvey
           forge_available = false
           env.warn(
             code: "forge_unavailable",
-            message: "gh unavailable, falling back to the raw worktree list for PR state: #{result.error}"
+            message: "the forge CLI is unavailable, falling back to the raw worktree list for request state: #{result.error}"
           )
         end
       end
