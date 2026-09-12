@@ -78,7 +78,7 @@ module WorktreeCleanup
       beads_to_close = []
 
       worktrees.each do |wt|
-        result, beads = cleanup_one(wt, env, dry_run: dry_run)
+        result, beads = cleanup_one(wt, manifest, env, dry_run: dry_run)
         results << result
         beads_to_close.concat(beads)
       end
@@ -87,6 +87,36 @@ module WorktreeCleanup
       env.data[:beads_to_close] = beads_to_close.uniq.sort
 
       env.emit(io)
+    end
+
+    # Whether every commit this worktree carries already has a
+    # patch-equivalent on `upstream`. Three states, because "could not
+    # tell" must not read as "nothing left": :equivalent (safe to remove),
+    # :diverged (a commit is not upstream under any sha), :unknown (the
+    # probe itself failed).
+    #
+    # This is NOT the ancestry check request_state.rb's header bans, in
+    # two respects. Direction: the forge has already said this request
+    # merged, and git is consulted only to REFUSE - it can never declare a
+    # merge here, so its failure mode is a kept worktree, not a silent
+    # no-op. Power: `git cherry` matches on patch id, so it answers
+    # correctly in exactly the case plain ancestry gets wrong, a rebase
+    # that replayed the commits under new shas. Plain ancestry is
+    # subsumed - when a tip is an ancestor, `upstream..HEAD` is empty and
+    # the output below is empty too.
+    #
+    # Same probe /wurk:cleanup's SKILL.md tells an operator to run by
+    # hand, with the same all-"-" rule; it moved in here because the skip
+    # it disambiguates reads like unlanded work and mostly never got
+    # probed.
+    def patch_equivalence(path, upstream, env)
+      result = Sh.run(["git", "cherry", upstream, "HEAD"], chdir: path, envelope: env)
+      return [:unknown, err_or(result, "git cherry #{upstream} HEAD failed")] unless result.success?
+
+      unmatched = result.out.to_s.each_line.map(&:strip).select { |line| line.start_with?("+") }
+      return [:diverged, "#{unmatched.length} commit(s) not on #{upstream}"] unless unmatched.empty?
+
+      [:equivalent, nil]
     end
 
     private
@@ -119,7 +149,7 @@ module WorktreeCleanup
       [worktrees, nil]
     end
 
-    def cleanup_one(wt, env, dry_run:)
+    def cleanup_one(wt, manifest, env, dry_run:)
       path = wt["path"]
       branch = wt["branch"]
       request = wt["request"]
@@ -135,23 +165,38 @@ module WorktreeCleanup
 
       head_res = Sh.run(%w[git rev-parse HEAD], chdir: path, envelope: env)
       local_head = head_res.out.to_s.strip
+
+      rewritten = false
       if head_res.success? && local_head != request["head_oid"]
-        return [
-          { path: path, branch: branch, result: "commits after merge (#{local_head} != #{request['head_oid']}), skipped" },
-          []
-        ]
+        upstream = manifest.remote_default_branch
+        state, detail = patch_equivalence(path, upstream, env)
+
+        if state == :diverged
+          return [{ path: path, branch: branch,
+                    result: "commits after merge (#{local_head} != #{request['head_oid']}), skipped" }, []]
+        end
+
+        if state == :unknown
+          env.warn(code: "patch_equivalence_unknown",
+                    message: "could not compare #{path} against #{upstream}: #{detail}")
+          return [{ path: path, branch: branch,
+                    result: "commits after merge (#{local_head} != #{request['head_oid']}), unverified, skipped" }, []]
+        end
+
+        rewritten = true
       end
 
       beads = beads_for(request, env)
+      label = rewritten ? " (local tip rewritten, patches already on #{manifest.remote_default_branch})" : ""
 
       if dry_run
         env.commands << Sh.render(["git", "worktree", "remove", path])
         env.commands << Sh.render(%w[git worktree prune])
         env.commands << Sh.render(["git", "branch", "-D", branch])
-        return [{ path: path, branch: branch, result: "merged in request ##{request['number']}, would remove" }, beads]
+        return [{ path: path, branch: branch, result: "merged in request ##{request['number']}#{label}, would remove" }, beads]
       end
 
-      remove(path, branch, request, beads, env)
+      remove(path, branch, request, beads, label, env)
     end
 
     def beads_for(request, env)
@@ -166,7 +211,7 @@ module WorktreeCleanup
 
     # Order matters: the branch cannot be deleted while a worktree has it
     # checked out, so remove is always first.
-    def remove(path, branch, request, beads, env)
+    def remove(path, branch, request, beads, label, env)
       remove_res = Sh.run(["git", "worktree", "remove", path], envelope: env)
       unless remove_res.success?
         env.warn(code: "worktree_remove_failed", message: err_or(remove_res, "git worktree remove #{path} failed"))
@@ -181,7 +226,7 @@ module WorktreeCleanup
       branch_res = Sh.run(["git", "branch", "-D", branch], envelope: env)
       env.warn(code: "branch_delete_failed", message: err_or(branch_res, "git branch -D #{branch} failed")) unless branch_res.success?
 
-      [{ path: path, branch: branch, result: "merged in request ##{request['number']}, removed" }, beads]
+      [{ path: path, branch: branch, result: "merged in request ##{request['number']}#{label}, removed" }, beads]
     end
 
     def err_or(result, fallback)

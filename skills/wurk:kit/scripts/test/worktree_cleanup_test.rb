@@ -137,18 +137,93 @@ class WorktreeCleanupTest < Minitest::Test
     assert_equal [], env["data"]["beads_to_close"]
   end
 
-  def test_commits_after_merge_are_skipped_not_deleted
+  def test_a_commit_the_merged_request_never_saw_is_still_refused
     expect_survey
     @fake.expect(%w[git status --porcelain], out: "")
     @fake.expect(%w[git rev-parse HEAD], out: "0123456\n")
+    @fake.expect(%w[git cherry origin/main HEAD], out: "+ 0123456789012345678901234567890123456789\n")
     @fake.expect(%w[git fetch --prune], out: "")
-    # No removal expectations - the local tip diverged from what merged.
+    # No removal, prune, or branch-delete expectations - a genuine extra
+    # commit is still refused, probe or no probe.
 
     code, env = run_cleanup
 
     assert_equal 0, code
     wt1 = env["data"]["results"].find { |r| r["path"] == WT1 }
     assert_match(/commits after merge/, wt1["result"])
+    assert_equal [], env["data"]["beads_to_close"]
+  end
+
+  def test_a_mixed_cherry_output_refuses_on_the_single_unmatched_commit
+    expect_survey
+    @fake.expect(%w[git status --porcelain], out: "")
+    @fake.expect(%w[git rev-parse HEAD], out: "0123456\n")
+    @fake.expect(
+      %w[git cherry origin/main HEAD],
+      out: "- aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n+ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
+    )
+    @fake.expect(%w[git fetch --prune], out: "")
+
+    code, env = run_cleanup
+
+    assert_equal 0, code
+    wt1 = env["data"]["results"].find { |r| r["path"] == WT1 }
+    assert_match(/commits after merge/, wt1["result"])
+  end
+
+  def test_an_unverifiable_probe_refuses_and_says_so
+    expect_survey
+    @fake.expect(%w[git status --porcelain], out: "")
+    @fake.expect(%w[git rev-parse HEAD], out: "0123456\n")
+    @fake.expect(%w[git cherry origin/main HEAD], exitstatus: 1, err: "fatal: no such ref\n")
+    @fake.expect(%w[git fetch --prune], out: "")
+
+    code, env = run_cleanup
+
+    assert_equal 0, code
+    wt1 = env["data"]["results"].find { |r| r["path"] == WT1 }
+    assert_match(/unverified, skipped/, wt1["result"])
+    assert_equal "patch_equivalence_unknown", env["warnings"].first["code"]
+  end
+
+  def test_a_rewritten_tip_whose_patches_all_landed_is_removed_and_its_beads_gathered
+    expect_survey
+    @fake.expect(%w[git status --porcelain], out: "")
+    @fake.expect(%w[git rev-parse HEAD], out: "f1703cd\n")
+    @fake.expect(%w[git cherry origin/main HEAD], out: "- f1703cd0000000000000000000000000000000\n")
+    @fake.expect(
+      ["gh", "pr", "view", "42", "--json", "commits", "--jq", ".commits[].messageBody"],
+      out: "Fixes a thing.\n\nRefs: zz-abc\n"
+    )
+    @fake.expect(["git", "worktree", "remove", WT1], out: "")
+    @fake.expect(%w[git worktree prune], out: "")
+    @fake.expect(["git", "branch", "-D", "zz-abc-merged-thing"], out: "")
+    @fake.expect(%w[git fetch --prune], out: "")
+
+    code, env = run_cleanup
+
+    assert_equal 0, code
+    wt1 = env["data"]["results"].find { |r| r["path"] == WT1 }
+    assert_equal "merged in request #42 (local tip rewritten, patches already on origin/main), removed", wt1["result"]
+    assert_equal ["zz-abc"], env["data"]["beads_to_close"]
+  end
+
+  def test_the_probe_is_not_run_when_the_shas_match
+    expect_survey
+    @fake.expect(%w[git status --porcelain], out: "")
+    @fake.expect(%w[git rev-parse HEAD], out: "deadbeef\n")
+    @fake.expect(
+      ["gh", "pr", "view", "42", "--json", "commits", "--jq", ".commits[].messageBody"],
+      out: "Fixes a thing.\n\nRefs: zz-abc\n"
+    )
+    @fake.expect(["git", "worktree", "remove", WT1], out: "")
+    @fake.expect(%w[git worktree prune], out: "")
+    @fake.expect(["git", "branch", "-D", "zz-abc-merged-thing"], out: "")
+    @fake.expect(%w[git fetch --prune], out: "")
+
+    run_cleanup
+
+    refute @fake.calls.any? { |c| c.argv.first(2) == %w[git cherry] }
   end
 
   def test_forge_unavailable_stops_the_whole_sweep
@@ -253,5 +328,38 @@ class WorktreeCleanupTest < Minitest::Test
     hits = source.each_line.select { |l| l.include?("force") }
     assert_equal 1, hits.length
     assert_match(/\A\s*#/, hits.first)
+  end
+
+  def test_patch_equivalence_with_empty_output_is_equivalent
+    @fake.expect(%w[git cherry origin/main HEAD], out: "")
+    state, detail = WorktreeCleanup.patch_equivalence("/repos/wt", "origin/main", Envelope.new(script: "test"))
+    assert_equal :equivalent, state
+    assert_nil detail
+  end
+
+  def test_patch_equivalence_with_all_dash_lines_is_equivalent
+    @fake.expect(
+      %w[git cherry origin/main HEAD],
+      out: "- aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n- bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
+    )
+    state, = WorktreeCleanup.patch_equivalence("/repos/wt", "origin/main", Envelope.new(script: "test"))
+    assert_equal :equivalent, state
+  end
+
+  def test_patch_equivalence_with_any_plus_line_is_diverged
+    @fake.expect(
+      %w[git cherry origin/main HEAD],
+      out: "- aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n+ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
+    )
+    state, detail = WorktreeCleanup.patch_equivalence("/repos/wt", "origin/main", Envelope.new(script: "test"))
+    assert_equal :diverged, state
+    assert_match(/1 commit/, detail)
+  end
+
+  def test_patch_equivalence_with_a_nonzero_exit_is_unknown
+    @fake.expect(%w[git cherry origin/main HEAD], exitstatus: 1, err: "fatal: bad revision\n")
+    state, detail = WorktreeCleanup.patch_equivalence("/repos/wt", "origin/main", Envelope.new(script: "test"))
+    assert_equal :unknown, state
+    assert_match(/fatal: bad revision/, detail)
   end
 end
