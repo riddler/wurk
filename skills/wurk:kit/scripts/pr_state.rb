@@ -47,10 +47,29 @@ module PrState
   BeadsResult = Struct.new(:available, :beads, :error, keyword_init: true)
 
   class << self
-    # Queries gh for the merged-PR state of `branch`. `available: false`
-    # means gh itself failed, was unavailable, or unauthenticated - callers
-    # must treat that as "unknown", never as "not merged".
-    def query_merged(branch, env: nil)
+    # Queries the forge for the merged-request state of `branch`.
+    # `available: false` means the forge CLI itself failed, was unavailable,
+    # or unauthenticated - callers must treat that as "unknown", never as
+    # "not merged". `kind:` defaults to the manifest's forge, which is what
+    # every caller wants; it is a keyword so a test can be explicit.
+    def query_merged(branch, env: nil, kind: nil)
+      case forge_kind(kind)
+      when "gitlab" then query_merged_on_gitlab(branch, env)
+      else query_merged_on_github(branch, env)
+      end
+    end
+
+    # Extracts the beads a merged request's commits reference, via the single
+    # Refs definition site (lib/refs.rb) - so this and repo_state.rb's
+    # unpushed-commit scan cannot drift.
+    def beads_for_pr(number, env: nil, kind: nil)
+      case forge_kind(kind)
+      when "gitlab" then beads_for_pr_on_gitlab(number, env)
+      else beads_for_pr_on_github(number, env)
+      end
+    end
+
+    def query_merged_on_github(branch, env)
       result = Sh.run(
         ["gh", "pr", "list", "--state", "merged", "--head", branch,
          "--json", "number,mergedAt,headRefOid", "--jq", ".[0]"],
@@ -71,13 +90,10 @@ module PrState
         head_oid: json["headRefOid"]
       )
     rescue JSON::ParserError => e
-      QueryResult.new(available: false, merged: nil, error: "unparseable gh output: #{e.message}")
+      QueryResult.new(available: false, merged: nil, error: "unparseable forge output: #{e.message}")
     end
 
-    # Extracts the beads a merged PR's commits reference, via the single
-    # Refs definition site (lib/refs.rb) - so this and repo_state.rb's
-    # unpushed-commit scan cannot drift.
-    def beads_for_pr(number, env: nil)
+    def beads_for_pr_on_github(number, env)
       result = Sh.run(
         ["gh", "pr", "view", number.to_s, "--json", "commits", "--jq", ".commits[].messageBody"],
         envelope: env
@@ -86,6 +102,139 @@ module PrState
       return BeadsResult.new(available: false, beads: nil, error: result.err.to_s.strip) unless result.success?
 
       BeadsResult.new(available: true, beads: Refs.beads_from_messages([result.out.to_s]), error: nil)
+    end
+
+    # The GitLab side of the same two questions. Four differences from the
+    # GitHub adapter, each verified live in
+    # docs/research/260817-wu-mya.2-gitlab-merged-request-detection.md:
+    #
+    # 1. There is no `--state` flag; merged-only is its own boolean flag, and
+    #    the default state is "opened", so the flag is not optional.
+    # 2. There is no field allow-list. The list command emits the raw REST
+    #    object, so the field names are the API's (`iid`, `merged_at`, `sha`),
+    #    and `diff_refs` is not among them on the list payload.
+    # 3. `--source-branch` matches on the branch NAME alone, across projects,
+    #    so a fork's identically named branch is a false positive. Hence the
+    #    same-project filter below.
+    # 4. Machine output is emitted on failure too - an error OBJECT where the
+    #    success shape is an array, with a non-zero exit - so success is read
+    #    off the exit status, never off stdout being parseable. Hence the
+    #    `success?` gate first and the "is it an Array" check after.
+    #
+    # `state == Forge::REQUEST_MERGED` is the only merged signal used here:
+    # under a fast-forward merge method the merge-commit field is the empty
+    # string, and ancestry is wrong on both forges (see this file's header).
+    def query_merged_on_gitlab(branch, env)
+      result = Sh.run(
+        ["glab", "mr", "list", "--merged", "--source-branch", branch, "--output", "json"],
+        envelope: env
+      )
+
+      return QueryResult.new(available: false, merged: nil, error: result.err.to_s.strip) unless result.success?
+
+      text = result.out.to_s.strip
+      return QueryResult.new(available: true, merged: false) if text.empty? || text == "null"
+
+      requests = JSON.parse(text)
+      unless requests.is_a?(Array)
+        return QueryResult.new(available: false, merged: nil,
+                               error: "unexpected forge output: a list of requests was expected, got #{requests.class}")
+      end
+
+      request = select_merged_request(requests)
+      return QueryResult.new(available: true, merged: false) unless request
+
+      QueryResult.new(
+        available: true,
+        merged: true,
+        number: request["iid"],
+        merged_at: request["merged_at"],
+        head_oid: request["sha"]
+      )
+    rescue JSON::ParserError => e
+      QueryResult.new(available: false, merged: nil, error: "unparseable forge output: #{e.message}")
+    end
+
+    # DECISION (wu-mya.7), selection when one source branch carries several
+    # merged requests: take the one with the greatest `merged_at`, decided in
+    # Ruby over the whole list, not the list's first element.
+    #
+    # This is a real case, not a hypothetical: a renovate branch in
+    # gitlab-org/cli carried 23 merged requests at once (research section 1),
+    # and the list arrives ordered by `created_at` descending, so its first
+    # element is the most recently OPENED request, not the most recently
+    # merged. Those differ exactly when an older request is merged after a
+    # newer one is opened, which is the normal shape of a long-lived shared
+    # branch. The alternative - asking the forge for the order with its
+    # order/sort flags and keeping the first element - was rejected for two
+    # reasons: the whole list has to be fetched and walked in Ruby anyway for
+    # the fork filter below, so server-side ordering buys nothing; and it
+    # would put the tie-break in flags whose effect the research could accept
+    # but not observe changing the output, where a reader cannot see it.
+    # Deciding here costs one pass over a short array and is greppable.
+    def select_merged_request(requests)
+      merged = requests.select do |request|
+        request.is_a?(Hash) && request["state"] == Forge::REQUEST_MERGED && same_project?(request)
+      end
+
+      merged.max_by { |request| request["merged_at"].to_s }
+    end
+
+    # Discards a request whose source branch lives in a fork: the list filter
+    # matches the branch name in any project, so a fork contribution named
+    # like a local branch would otherwise report a local branch as merged.
+    # Only a MISMATCH is evidence of a fork - an absent id proves nothing, and
+    # dropping those would report a merged request as unmerged, the one
+    # failure this file exists to prevent.
+    def same_project?(request)
+      source = request["source_project_id"]
+      target = request["target_project_id"]
+      return true if source.nil? || target.nil?
+
+      source == target
+    end
+
+    # DECISION (wu-mya.7), pagination: the commits request is paginated, at
+    # 20 per page by default, so it is always made with pagination on. A
+    # branch of more than 20 commits would otherwise silently yield the beads
+    # of its newest 20 only - a wrong answer that looks like a right one,
+    # since nothing downstream can tell a short branch from a truncated page.
+    # The cost is one extra round trip per 20 commits on long branches and
+    # none at all on short ones.
+    #
+    # Paginated output stays a single JSON array: the CLI documents its
+    # default output as pretty-printed JSON with "arrays output as a single
+    # JSON array" (verified from `glab api --help`, glab 1.117.0), so the
+    # pages arrive concatenated into one array rather than as one document
+    # per page. The `is_a?(Array)` check below is what would catch that
+    # assumption breaking, rather than a truncated read passing silently.
+    #
+    # This request has no server-side filter flag at all, so message
+    # extraction happens in Ruby. That stays inside ADR-0006: `json` is
+    # stdlib. `message` here is the full commit message rather than the body
+    # alone, which Refs handles unchanged - it anchors per line on the
+    # trailer key, and a subject line cannot match it.
+    def beads_for_pr_on_gitlab(number, env)
+      result = Sh.run(
+        ["glab", "api", "--paginate", "projects/:id/merge_requests/#{number}/commits"],
+        envelope: env
+      )
+
+      return BeadsResult.new(available: false, beads: nil, error: result.err.to_s.strip) unless result.success?
+
+      text = result.out.to_s.strip
+      return BeadsResult.new(available: true, beads: [], error: nil) if text.empty?
+
+      commits = JSON.parse(text)
+      unless commits.is_a?(Array)
+        return BeadsResult.new(available: false, beads: nil,
+                               error: "unexpected forge output: a list of commits was expected, got #{commits.class}")
+      end
+
+      messages = commits.map { |commit| commit.is_a?(Hash) ? commit["message"].to_s : "" }
+      BeadsResult.new(available: true, beads: Refs.beads_from_messages(messages), error: nil)
+    rescue JSON::ParserError => e
+      BeadsResult.new(available: false, beads: nil, error: "unparseable forge output: #{e.message}")
     end
 
     def run(argv, io: $stdout)
@@ -107,6 +256,13 @@ module PrState
 
     private
 
+    # The forge whose adapter answers a query: the manifest is the authority
+    # (every caller has already passed Forge.guard!), and an explicit kind: is
+    # the test seam.
+    def forge_kind(kind)
+      kind || Manifest.current.forge_kind
+    end
+
     def run_beads(number, env, io, parser)
       if number.to_s.strip.empty?
         warn "usage: pr_state.rb beads <pr-number>\n\n#{parser}"
@@ -115,7 +271,7 @@ module PrState
 
       result = beads_for_pr(number, env: env)
       unless result.available
-        env.block!(code: "forge_unavailable", message: "gh pr view failed: #{result.error}")
+        env.block!(code: "forge_unavailable", message: "the forge request-commits lookup failed: #{result.error}")
         return env.emit(io)
       end
 
@@ -132,7 +288,7 @@ module PrState
 
       result = query_merged(branch, env: env)
       unless result.available
-        env.block!(code: "forge_unavailable", message: "gh pr list failed or is unauthenticated: #{result.error}")
+        env.block!(code: "forge_unavailable", message: "the forge request lookup failed or is unauthenticated: #{result.error}")
         return env.emit(io)
       end
 

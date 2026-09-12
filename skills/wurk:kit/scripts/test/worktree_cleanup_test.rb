@@ -35,11 +35,19 @@ class WorktreeCleanupTest < Minitest::Test
     [code, JSON.parse(io.string)]
   end
 
+  # Both kinds the manifest schema accepts now have a request-state adapter,
+  # so the implemented list is narrowed to make the unsupported-forge path
+  # reachable at all: this script must refuse in its own voice for the forge
+  # after these, which is a property no fixture can express on its own.
+  #
   # sabotage: drop the Forge.guard! call from worktree_cleanup.rb -> the
-  # sweep proceeds to gh and FakeSh raises UnexpectedCommand -> red. This is
-  # the script that deletes branches, so it must refuse in its own voice.
-  def test_a_gitlab_repo_blocks_before_any_branch_is_touched
-    code, env = run_cleanup([], fixture: "forge_gitlab")
+  # sweep proceeds to a forge CLI and FakeSh raises UnexpectedCommand -> red.
+  # This is the script that deletes branches, so it must refuse in its own
+  # voice.
+  def test_an_unimplemented_forge_blocks_before_any_branch_is_touched
+    code, env = Forge.with_implemented(%w[github]) do
+      run_cleanup([], fixture: "forge_gitlab")
+    end
 
     assert_equal 1, code
     assert_equal "unsupported_forge", env["blocked"].first["code"]

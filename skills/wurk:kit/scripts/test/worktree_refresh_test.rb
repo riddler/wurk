@@ -36,12 +36,20 @@ class WorktreeRefreshTest < Minitest::Test
     [code, JSON.parse(io.string)]
   end
 
+  # Both kinds the manifest schema accepts now have a request-state adapter,
+  # so the implemented list is narrowed to make the unsupported-forge path
+  # reachable at all: this script must refuse in its own voice for the forge
+  # after these, which is a property no fixture can express on its own.
+  #
   # sabotage: drop the Forge.guard! call from worktree_refresh.rb -> the
-  # survey it drives shells out to gh against a GitLab repo -> red. Without
-  # its own guard this sweep would relay worktree_survey's "unsupported_forge"
-  # block as a nested "survey_failed" instead of naming the cause itself.
-  def test_a_gitlab_repo_blocks_in_its_own_voice_rather_than_relaying_survey_failed
-    code, env = run_refresh([], fixture: "forge_gitlab")
+  # survey it drives shells out to a forge CLI and FakeSh raises -> red.
+  # Without its own guard this sweep would relay worktree_survey's
+  # "unsupported_forge" block as a nested "survey_failed" instead of naming
+  # the cause itself.
+  def test_an_unimplemented_forge_blocks_in_its_own_voice_not_as_survey_failed
+    code, env = Forge.with_implemented(%w[github]) do
+      run_refresh([], fixture: "forge_gitlab")
+    end
 
     assert_equal 1, code
     assert_equal "unsupported_forge", env["blocked"].first["code"]

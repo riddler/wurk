@@ -82,7 +82,7 @@ module PermalinksCli
 
       manifest = Manifest.require!(env)
       return env.emit(io) unless manifest
-      return env.emit(io) unless Forge.guard!(env, manifest, doing: "permalink rewriting")
+      return env.emit(io) unless Forge.guard!(env, manifest, doing: "permalink rewriting", forges: Forge::PERMALINK_IMPLEMENTED)
 
       unless File.exist?(path)
         env.block!(code: "file_not_found", message: "no such file: #{path}")
