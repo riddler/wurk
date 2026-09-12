@@ -177,6 +177,17 @@ as a pre-existing branch). This is both the audit path for a human reading
 what a script intends to do, and how the test suite exercises scripts
 without a real `git`, `gh`, or `tmux`.
 
+The one narrow exception: `worktree_cleanup.rb` runs `git fetch --prune`
+even on a dry run. A fetch writes only remote-tracking refs
+(`refs/remotes/`), mirroring what the remote already says - it creates,
+moves, and deletes nothing under `refs/heads/`, nothing in any worktree,
+and nothing in the tracker, the three things a dry run exists to promise it
+will not touch. It has to run before the dry run's check phase because
+`/wurk:cleanup` selects candidates on the dry run and removes them by name
+afterwards; a dry run deciding against stale refs would refuse a candidate
+the real removal would have accepted. No other script gets this exception
+without the same argument.
+
 ## Step-scoping and the banned-operation list
 
 The consumer repo's CLAUDE.md authority table draws a hard line between what
@@ -630,7 +641,10 @@ the propose pass should look for.
    informational notes into `env.warn`, and exit with `env.emit`.
 4. Every `Sh.run` call that mutates anything must be skippable under
    `--dry-run` - populate `commands` regardless, but only actually invoke
-   `Sh.run` when `options[:dry_run]` is false.
+   `Sh.run` when `options[:dry_run]` is false. The only exception is a call
+   that writes solely to `refs/remotes/` (a `git fetch`) and that the check
+   phase needs current before a dry run judges anything - see `--dry-run`
+   above; do not assume a new exception without that same argument.
 5. Add `test/<name>_test.rb` using `test/support/fake_sh.rb` to fake every
    shelled-out command; a script that shells out to something the test did
    not register a fixture for fails loudly (`FakeSh::UnexpectedCommand`),
