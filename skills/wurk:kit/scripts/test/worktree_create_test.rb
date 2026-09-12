@@ -94,16 +94,214 @@ class WorktreeCreateTest < Minitest::Test
     end
   end
 
+  # A worktree git has registered for `name`, in the porcelain shape
+  # `git worktree list --porcelain` emits: the main checkout first, then the
+  # branch's own entry.
+  def worktree_list(root, entries)
+    out = "worktree #{root}\nHEAD 1111111\nbranch refs/heads/main\n\n"
+    entries.each do |wt_path, branch|
+      out += "worktree #{wt_path}\nHEAD 2222222\nbranch refs/heads/#{branch}\n\n"
+    end
+    out
+  end
+
+  # The branch exists but nothing is checked out for it - today's block,
+  # unchanged. Adoption needs a worktree to adopt.
   def test_blocks_when_branch_already_exists
     with_scratch_repo do |root, _worktrees_root|
       expect_location(root)
       @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "  zz-abc-new-thing\n")
+      @fake.expect(%w[git worktree list --porcelain], out: worktree_list(root, []))
 
       code, env = run_create(["zz-abc-new-thing"])
 
       assert_equal 1, code
       assert_equal "branch_exists", env["blocked"].first["code"]
       assert_equal "human", env["blocked"].first["needs"]
+      assert_match(/no worktree/, env["blocked"].first["message"])
+    end
+  end
+
+  # --- adoption (wu-mya.3) ---------------------------------------------------
+  #
+  # Every one of these blocks stays a block: adoption is only for the case
+  # where the workspace the caller asked for is already standing, clean, at
+  # exactly the expected path.
+
+  # sabotage: drop the clean-tree check -> red. Uncommitted work in the
+  # existing tree is precisely what a human has to judge.
+  def test_blocks_when_the_existing_worktree_is_dirty
+    with_scratch_repo do |root, worktrees_root|
+      path = File.join(worktrees_root, "zz-abc-new-thing")
+      FileUtils.mkdir_p(path)
+
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "  zz-abc-new-thing\n")
+      @fake.expect(%w[git worktree list --porcelain], out: worktree_list(root, [[path, "zz-abc-new-thing"]]))
+      @fake.expect(%w[git status --porcelain], out: " M lib/thing.rb\n")
+
+      code, env = run_create(["zz-abc-new-thing"])
+
+      assert_equal 1, code
+      assert_equal "branch_exists", env["blocked"].first["code"]
+      assert_equal "human", env["blocked"].first["needs"]
+      assert_match(/uncommitted changes/, env["blocked"].first["message"])
+    end
+  end
+
+  # sabotage: compare only that SOME worktree carries the branch, not that it
+  # is the expected path -> red. Adopting here would leave two directories
+  # for one branch, one of which nothing else in the workflow knows about.
+  def test_blocks_when_the_branch_is_checked_out_at_another_path
+    with_scratch_repo do |root, worktrees_root|
+      elsewhere = File.join(worktrees_root, "somewhere-else")
+      FileUtils.mkdir_p(elsewhere)
+
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "  zz-abc-new-thing\n")
+      @fake.expect(%w[git worktree list --porcelain], out: worktree_list(root, [[elsewhere, "zz-abc-new-thing"]]))
+
+      code, env = run_create(["zz-abc-new-thing"])
+
+      assert_equal 1, code
+      assert_equal "branch_exists", env["blocked"].first["code"]
+      assert_includes env["blocked"].first["message"], elsewhere
+    end
+  end
+
+  # A directory at the expected path that is not a worktree of this branch is
+  # a stray sibling, not something to adopt.
+  def test_blocks_when_the_directory_is_not_a_worktree_of_the_branch
+    with_scratch_repo do |root, worktrees_root|
+      path = File.join(worktrees_root, "zz-abc-new-thing")
+      FileUtils.mkdir_p(path)
+
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "  zz-abc-new-thing\n")
+      @fake.expect(%w[git worktree list --porcelain], out: worktree_list(root, [[path, "zz-other-branch"]]))
+
+      code, env = run_create(["zz-abc-new-thing"])
+
+      assert_equal 1, code
+      assert_equal "branch_exists", env["blocked"].first["code"]
+      assert_match(/no worktree/, env["blocked"].first["message"])
+    end
+  end
+
+  # The registered worktree's directory is gone (a prunable entry): nothing
+  # standing to adopt, so this stays blocked too.
+  def test_blocks_when_the_registered_worktree_directory_is_missing
+    with_scratch_repo do |root, worktrees_root|
+      path = File.join(worktrees_root, "zz-abc-new-thing")
+
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "  zz-abc-new-thing\n")
+      @fake.expect(%w[git worktree list --porcelain], out: worktree_list(root, [[path, "zz-abc-new-thing"]]))
+
+      code, env = run_create(["zz-abc-new-thing"])
+
+      assert_equal 1, code
+      assert_equal "branch_exists", env["blocked"].first["code"]
+      assert_match(/is not a directory/, env["blocked"].first["message"])
+    end
+  end
+
+  # sabotage: run the create steps on the adopt path anyway -> red
+  # (FakeSh::UnexpectedCommand: no mkdir, no git worktree add, and no git
+  # fetch is registered - there is no branch to cut).
+  def test_adopts_a_clean_matching_worktree_and_still_warms_and_verifies
+    with_scratch_repo do |root, worktrees_root|
+      FileUtils.mkdir_p(File.join(root, "build", "cache"))
+      FileUtils.touch(File.join(root, "build", "cache", "faketool-1.2.cache"))
+      path = File.join(worktrees_root, "zz-abc-new-thing")
+      FileUtils.mkdir_p(path)
+
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "  zz-abc-new-thing\n")
+      @fake.expect(%w[git worktree list --porcelain], out: worktree_list(root, [[path, "zz-abc-new-thing"]]))
+      @fake.expect(%w[git status --porcelain], out: "")
+      @fake.expect(["faketool", "trust", path], out: "")
+      @fake.expect(["cp", "-Rfc", "vendor", "build", "#{path}/"], out: "")
+      @fake.expect(%w[faketool fetch], out: "")
+      @fake.expect(%w[make quick], out: "loop green\n")
+
+      code, env = run_create(["zz-abc-new-thing"])
+
+      assert_equal 0, code
+      assert_equal true, env["ok"]
+      assert_equal "adopted", env["data"]["action"]
+      assert_equal path, env["data"]["path"]
+      assert_nil env["data"]["base_ref"]
+      assert_equal true, env["data"]["caches_cloned"]
+      assert_equal true, env["data"]["quality_green"]
+      assert_empty env["blocked"]
+      refute env["commands"].any? { |c| c.include?("git worktree add") }
+    end
+  end
+
+  # A created workspace says so too, so a caller routes on one key rather
+  # than on the absence of another.
+  def test_a_created_workspace_reports_action_created
+    with_scratch_repo do |root, worktrees_root|
+      path = File.join(worktrees_root, "zz-abc-new-thing")
+
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+      @fake.expect(%w[git fetch origin], out: "")
+
+      _code, env = run_create(["zz-abc-new-thing", "--dry-run"])
+
+      assert_equal "created", env["data"]["action"]
+      assert env["commands"].any? { |c| c.include?("git worktree add #{path}") }
+    end
+  end
+
+  # sabotage: render the create steps on the adopt dry-run anyway -> red.
+  # --dry-run is the contract for what a real run will do; an adopt preview
+  # that shows a `git worktree add` promises a mutation that will not happen.
+  def test_adopt_dry_run_omits_the_create_steps_and_keeps_the_warm_steps
+    with_scratch_repo do |root, worktrees_root|
+      path = File.join(worktrees_root, "zz-abc-new-thing")
+      FileUtils.mkdir_p(path)
+
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "  zz-abc-new-thing\n")
+      @fake.expect(%w[git worktree list --porcelain], out: worktree_list(root, [[path, "zz-abc-new-thing"]]))
+      @fake.expect(%w[git status --porcelain], out: "")
+
+      code, env = run_create(["zz-abc-new-thing", "--dry-run"])
+
+      assert_equal 0, code
+      assert_equal true, env["ok"]
+      assert_equal "adopted", env["data"]["action"]
+      assert_equal true, env["data"]["dry_run"]
+      refute env["commands"].any? { |c| c.include?("git worktree add") }
+      refute env["commands"].any? { |c| c =~ /\Amkdir -p/ }
+      assert env["commands"].any? { |c| c.include?("faketool trust") }
+      assert env["commands"].any? { |c| c.include?("cp -Rfc") }
+      assert env["commands"].any? { |c| c.include?("faketool fetch") }
+      assert env["commands"].any? { |c| c.include?("make quick") }
+    end
+  end
+
+  # --base names what to cut a new branch from, and adoption cuts nothing.
+  # Saying so beats honoring a flag that cannot apply and beats silence.
+  def test_adopt_warns_that_an_explicit_base_cannot_apply
+    with_scratch_repo do |root, worktrees_root|
+      path = File.join(worktrees_root, "zz-abc-new-thing")
+      FileUtils.mkdir_p(path)
+
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "  zz-abc-new-thing\n")
+      @fake.expect(%w[git worktree list --porcelain], out: worktree_list(root, [[path, "zz-abc-new-thing"]]))
+      @fake.expect(%w[git status --porcelain], out: "")
+
+      code, env = run_create(["zz-abc-new-thing", "--base", "zz-abc.1-parent", "--dry-run"])
+
+      assert_equal 0, code
+      assert_equal "adopted", env["data"]["action"]
+      assert_equal "base_ignored_on_adopt", env["warnings"].first["code"]
+      assert_includes env["warnings"].first["message"], "zz-abc.1-parent"
     end
   end
 

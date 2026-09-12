@@ -100,6 +100,18 @@ restated description goes stale the moment the bead is edited.
    manager before any managed command runs there, cloning the warm caches, and
    a final `gate.loop` run to confirm the workspace comes up green.
 
+   The guard has exactly one way past it, and it is not a force: when the
+   branch already exists **and** the worktree git has registered for it is
+   the expected path under `parallelism.worktrees_dir` **and** that directory
+   is really there **and** its tree is clean, the script **adopts** the
+   existing workspace - it skips the create, still runs the trust, the cache
+   clone, the warm commands and the gate, and reports
+   `data.action: "adopted"` instead of `"created"`. That is the
+   already-standing-workspace case (a worktree made by hand before the
+   project adopted wurk), where nothing is left for a human to decide.
+   Every other combination still blocks with `needs: "human"` - see the
+   result bullets below.
+
    Every one of those - where the worktree goes, what trusts it, what gets
    cloned, which gate runs - is read from `.claude/wurk.json`
    (`parallelism.worktrees_dir`, `parallelism.trust`,
@@ -156,7 +168,21 @@ restated description goes stale the moment the bead is edited.
 - `blocked` `branch_exists` or `worktree_dir_exists` - STOP and report. Offer a
   different name, or let the user remove the old one. **Never force**: this
   script has no path that deletes a branch or a directory to make room, and
-  neither do you.
+  neither do you. The block message names which mismatch kept the existing
+  branch from being adopted - a dirty tree, the branch checked out at another
+  path, a directory that is not a worktree of this branch, a registered
+  worktree whose directory is gone, or no worktree at all - and each of those
+  is a human's call: a dirty tree holds uncommitted work you may not judge,
+  and adopting a branch checked out elsewhere would leave two directories for
+  one branch, one of them unknown to `/wurk:cleanup`. Report the mismatch as
+  given; do not clean, stash, prune, or move anything to make the adopt
+  conditions true.
+- `data.action` - `"created"` or `"adopted"`. On `"adopted"` the workspace was
+  already standing, clean, at `data.path`: say so in the report rather than
+  claiming a fresh worktree, and note that `data.base_ref` is `null` because
+  nothing was cut. A `--base` passed alongside an adopt cannot apply and comes
+  back as the `base_ignored_on_adopt` warning; surface it, since the caller
+  asked for a base that was not used.
 - `blocked` `base_ref_not_found` - the `--base` ref does not resolve to a
   commit. Report it; a typo'd parent silently cut from the wrong base is the
   stacking defect the check exists to prevent. Do not fall back to the
