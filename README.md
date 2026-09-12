@@ -59,6 +59,11 @@ agents are linked, not copied, so an edit in this clone is live immediately.
 4. `docs/plan.md` - the migration, phase by phase
 5. `docs/adr/` - why it is shaped this way
 
+A repo evaluating wurk before committing anything to its own history reads
+`docs/local-only-pilot.md` - the zero-footprint adoption path and its
+prohibitions. It is adoption guidance rather than part of the reading order
+above.
+
 ## Testing
 
 The kit's minitest suite is this repo's quality gate, standalone on system
