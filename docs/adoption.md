@@ -255,6 +255,10 @@ Fix the manifest, not the script.
   skill; `.claude/wurk/codebase.md` orients the research agents
   (ADR-0011). A new repo needs none on day one. The recipes under
   `docs/recipes/` each end with the extension file they need, if any.
+  While the pilot keeps them untracked they are absent from every
+  worktree (`docs/local-only-pilot.md`, consequence 1), so under
+  `worktree-per-issue` an extension applies in the main checkout only
+  until graduation commits it.
 - **Disciplines.** Sabotage testing (`docs/recipes/sabotage-testing.md`),
   a coverage floor (`docs/recipes/coverage.md`), decision records
   (`docs/recipes/adrs.md`), a pre-request review round
