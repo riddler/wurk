@@ -107,7 +107,8 @@ plan.
    - **wurk-codebase-pattern-finder** - existing patterns to model after
    - **wurk-docs-locator** / **wurk-docs-analyzer** - prior research, plans,
      and ADRs. Pass the manifest's `artifacts.research` and `artifacts.plans`
-     (and the ADR directory) in the prompt.
+     in the prompt, and `artifacts.adr` when the manifest declares it
+     (`data.artifacts_adr` from `manifest.rb check`, `null` when absent).
    - **Explore** - a read-only breadth-first sweep when the question is "what
      touches X" and no specialized agent fits
    - **general-purpose** - only when the question needs more than reading:

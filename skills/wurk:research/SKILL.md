@@ -116,9 +116,11 @@ by every script below.
 
    **Pass the project's document roots** to `wurk-docs-locator` and
    `wurk-docs-analyzer` in their prompts: the manifest's `artifacts.research`
-   and `artifacts.plans`, plus the ADR directory if the project has one. The
-   agents can find these themselves, but a skill that forgets costs every
-   invocation an extra manifest read.
+   and `artifacts.plans`, plus `artifacts.adr` when the manifest declares it
+   (`data.artifacts_adr` from `manifest.rb check`; `null` means the project
+   named no records directory, and the agents fall back to convention and
+   say so). The agents can find these themselves, but a skill that forgets
+   costs every invocation an extra manifest read.
 
    **Pass the project's orientation** to every `wurk-codebase-*` agent you
    spawn: paste the content of `.claude/wurk/codebase.md`, verbatim, under

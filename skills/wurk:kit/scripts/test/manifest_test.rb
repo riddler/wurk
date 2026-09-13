@@ -1468,6 +1468,60 @@ class ManifestMrReviewAgentsLintTest < Minitest::Test
     end
   end
 
+  # artifacts.adr: absent is off, declared-and-present is the path,
+  # declared-and-missing blocks in the lint only.
+  def in_checkout_with_adr(adr:, mkdir: true)
+    Dir.mktmpdir do |root|
+      raw = JSON.parse(File.read(ManifestFixtures.path("valid")))
+      raw["artifacts"]["adr"] = adr unless adr.nil?
+      FileUtils.mkdir_p(File.join(root, ".claude"))
+      manifest = File.join(root, ".claude", "wurk.json")
+      File.write(manifest, JSON.pretty_generate(raw))
+      FileUtils.mkdir_p(File.join(root, adr)) if adr.is_a?(String) && mkdir && !adr.empty?
+
+      io = StringIO.new
+      code = ManifestCli.run(["check", "--file", manifest], io: io)
+      yield code, JSON.parse(io.string)
+    end
+  end
+
+  # sabotage: default adr_dir to "docs/adr" when absent -> red (absent
+  # must report nil, so a skill can tell "said" from "guessed").
+  def test_an_absent_adr_key_reports_nil_and_does_not_block
+    in_checkout_with_adr(adr: nil) do |code, env|
+      assert_equal 0, code
+      assert_nil env["data"]["artifacts_adr"]
+      refute_includes blocked_codes(env), "artifacts_adr_missing"
+    end
+  end
+
+  # sabotage: drop env.data[:artifacts_adr] from the check -> red.
+  def test_a_declared_adr_dir_that_exists_is_reported
+    in_checkout_with_adr(adr: "docs/decisions") do |code, env|
+      assert_equal 0, code
+      assert_equal "docs/decisions", env["data"]["artifacts_adr"]
+    end
+  end
+
+  # sabotage: delete block_missing_adr_dir's call site -> red.
+  def test_a_declared_adr_dir_that_is_missing_blocks
+    in_checkout_with_adr(adr: "docs/decisions", mkdir: false) do |code, env|
+      assert_equal 1, code
+      assert_includes blocked_codes(env), "artifacts_adr_missing"
+      assert_match(%r{docs/decisions}, env["blocked"].map { |b| b["message"] }.join)
+    end
+  end
+
+  # sabotage: accept an absolute path in validate_artifacts_adr -> red.
+  def test_an_absolute_or_empty_adr_value_blocks_on_shape
+    ["", "/abs/adr", 3].each do |bad|
+      in_checkout_with_adr(adr: bad, mkdir: false) do |code, env|
+        assert_equal 1, code, "expected #{bad.inspect} to block"
+        assert_match(/artifacts\.adr must be a non-empty/, env["blocked"].map { |b| b["message"] }.join)
+      end
+    end
+  end
+
   def write_agents(dir, names)
     return if names.empty?
 

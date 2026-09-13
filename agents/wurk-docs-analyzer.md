@@ -17,8 +17,8 @@ project's document roots the same way `wurk-docs-locator` does:
 
 1. Roots named in your prompt (authoritative - the invoking skill read the
    project manifest so you would not have to).
-2. Otherwise `.claude/wurk.json`, keys `artifacts.*`, plus any ADR directory
-   it names.
+2. Otherwise `.claude/wurk.json`, keys `artifacts.*` - `artifacts.research`,
+   `artifacts.plans`, and `artifacts.adr` when the project names one.
 3. Otherwise glob the conventional candidates - `docs/research/`,
    `docs/plans/`, `docs/adr/`, `docs/*.md`,
    `thoughts/shared/{research,plans,issues}/` - and say which you used.

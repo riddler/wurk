@@ -118,6 +118,7 @@ defaults are listed under "Defaults" below.
   "artifacts": {
     "plans": "docs/plans",            // fixative: thoughts/shared/plans
     "research": "docs/research",
+    "adr": "docs/adr",                // (opt) decision records; see "artifacts.adr"
     "filename": "YYMMDD-[id-]kebab",  // (opt) the shared grammar; literal for now
     "repository": "statifier-ex"      // (opt) research frontmatter; derived from the
                                       // git remote when absent
@@ -373,6 +374,28 @@ statifier-ex runs the broad form (`test_roots: ["test/"]`), scanning every
 new test declaration; predicator-ex runs the narrow form over its
 enumerated binding tests; fixative has no sabotage-discipline corpus and
 keeps the off state, honestly.
+
+## `artifacts.adr`
+
+The directory of the project's decision records, checkout-relative.
+`/wurk:plan` and `/wurk:research` forward it to the docs agents beside `artifacts.plans` and `artifacts.research`, and the
+Direction stage of `/wurk:work` writes a new record there at the next
+free number. Optional, and absent is a distinct state rather than a
+default: the docs agents then fall back to their conventional candidates
+(`docs/adr/` among them) and say in their report that the root was a
+guess, which is the honesty the key exists to remove. There is
+deliberately no default of `docs/adr`, so a manifest that says nothing
+never claims the project keeps records it does not.
+
+`validate!` checks the shape only: a non-empty, checkout-relative path.
+Whether the directory exists is checked by `manifest.rb check`, which
+**blocks** (code `artifacts_adr_missing`) on a declared directory that is
+not there, the same rule as `mr_review_agent_missing`: a declared root with
+nothing behind it has no legitimate reading, and the alternative is a
+Direction stage that finds no records to imitate and invents a format.
+`manifest.rb check` reports the value as `data.artifacts_adr`, `null` when
+absent. A new project that wants records seeds the directory with its
+first one before declaring the key; wurk's own ADR-0001 is the shape.
 
 ## `judge`
 
@@ -810,6 +833,8 @@ section means `judge?` is `false` and the judge never runs, no `rebase`
 section (or an empty `auto_resolve_paths`) means rebase auto-resolution is
 off - see "`rebase.auto_resolve_paths`" above, no `mr` section means
 `/wurk:mr` runs no pre-request review round and says nothing about it, and
+no `artifacts.adr` means the docs agents locate decision records by
+convention and say so, and
 no `gate.cwd` means the gate commands run at the root of the checkout being
 gated.
 
