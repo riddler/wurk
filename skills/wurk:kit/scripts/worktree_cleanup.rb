@@ -68,11 +68,23 @@ module WorktreeCleanup
       # would make it refuse a worktree whose work has landed - the failure
       # this check exists to stop reporting. The dry run joins in because
       # /wurk:cleanup selects candidates on the dry run and removes them by
-      # name afterwards: the two must decide against the same refs. This is
-      # not an exception to ADR-0006's dry-run rule - a fetch writes only
-      # remote-tracking refs, and touches no branch, no worktree, and no
-      # bead.
-      Sh.run(%w[git fetch --prune], envelope: env)
+      # name afterwards: the two must decide against the same refs. A fetch
+      # writes only remote-tracking refs, and touches no branch, no
+      # worktree, and no bead; that bound is the carve-out ADR-0006's
+      # "Amendment (2026-09-13)" makes to its dry-run rule, and the same
+      # record lists what a dry run still must not do.
+      fetch_res = Sh.run(%w[git fetch --prune], envelope: env)
+      unless fetch_res.success?
+        # A failed fetch is not fatal - the sweep still refuses rather than
+        # removes - but it must not be silent. Every probe below then judges
+        # against whatever refs this checkout already had, and a refusal on
+        # stale refs reads exactly like a genuine divergence: the false skip
+        # wu-mya.9 removed. Named for the condition, not for the rejected
+        # fallback of the same name in ADR-0006's amendment.
+        env.warn(code: "refs_not_fetched",
+                 message: "#{err_or(fetch_res, 'git fetch --prune failed')}; " \
+                          "patch-equivalence decisions below may rest on stale refs")
+      end
 
       results = []
       beads_to_close = []

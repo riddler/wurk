@@ -105,7 +105,9 @@ already named - the two have to decide against the same refs, or a dry
 run refuses a candidate the real removal would accept.
 
 That dry-run fetch is bounded, and the bound is what keeps it inside
-ADR-0006 rather than making `worktree_cleanup.rb` an exception to it:
+ADR-0006 rather than making `worktree_cleanup.rb` an exception to it
+(ADR-0006's "Amendment (2026-09-13)" records the carve-out from the
+rule's own side, with what still violates it):
 `git fetch --prune` writes only remote-tracking refs under
 `refs/remotes/`, mirroring what the remote already says. It creates,
 moves, and deletes nothing under `refs/heads/`, nothing in any worktree,
@@ -152,8 +154,9 @@ why nothing wider than a remote-tracking-ref update qualifies for it.
   diff version). Exact, with no patch-id heuristic and no fetch-freshness
   dependency, but rejected on three grounds. There is no comparable GitHub
   path - it would need force-push timeline archaeology through GraphQL,
-  and `lib/forge.rb:8-17` treats a capability that works on one forge and
-  half-works on the other as worse than one that names the gap and stops,
+  and `Forge::IMPLEMENTED`'s header comment in `lib/forge.rb` treats a
+  capability that works on one forge and half-works on the other as worse
+  than one that names the gap and stops,
   so this would be a two-adapter change plus a network call per diverged
   worktree plus a new unavailable-degradation path. It is also narrower
   where it matters: it answers "was this exact sha ever the branch head on
@@ -163,12 +166,13 @@ why nothing wider than a remote-tracking-ref update qualifies for it.
   that case as safe to remove. And it would leave the identical
   GitHub-side failure unfixed until a second adapter landed.
 - **Compare local commits against the request's own commit list**
-  (`request_state.rb:217-238` already fetches this). Rejected because that
-  endpoint returns the pre-rebase MR-side view, so in the rebased shape it
-  returns exactly the shas the local branch already has - confirming
-  equality with the thing already known and saying nothing about whether
-  the work landed. Matching on message text instead of sha would be a
-  heuristic that passes for any two commits sharing a subject.
+  (`beads_for_pr_on_gitlab` in `request_state.rb` already fetches this).
+  Rejected because that endpoint returns the pre-rebase MR-side view, so in
+  the rebased shape it returns exactly the shas the local branch already
+  has - confirming
+  equality with the thing already known and saying nothing about whether the
+  work landed. Matching on message text instead of sha would be a heuristic
+  that passes for any two commits sharing a subject.
 - **Drop the check and rely on git's own refusals.** Not available:
   `git worktree remove` only refuses a dirty tree, and the branch delete
   is `-D` by necessity because a rebase-merged branch is never

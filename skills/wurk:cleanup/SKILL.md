@@ -95,7 +95,8 @@ Omitted, sweep every worktree.
    SHA the forge actually merged, to catch commits made after the push. When
    the two shas differ, the script does not treat that as unlanded work by
    itself - it decides the difference by patch-equivalence against the
-   manifest's default branch (ADR-0017).
+   manifest's default branch on the remote - `origin/<default-branch>`,
+   not the local branch of the same name (ADR-0017).
 
    Read `data.results[].result` per worktree. A candidate is any string
    starting with `"merged in request #"` and ending in `", would remove"` -
@@ -214,11 +215,11 @@ Omitted, sweep every worktree.
   after merge (<sha> != <sha>), skipped"`, `"commits after merge (<sha> !=
   <sha>), unverified, skipped"` (the patch-equivalence probe itself failed;
   see below), `"merged in request #<n>, removed"`, `"merged in request #<n>
-  (local tip rewritten, patches already on <default-branch>), removed"` (the
-  probe found every local commit already on the default branch under a
-  different sha), `"merged in request #<n>, would remove"` / `"merged in
-  request #<n> (local tip rewritten, ...), would remove"` (dry run), `"remove
-  failed, skipped"`.
+  (local tip rewritten, patches already on origin/<default-branch>),
+  removed"` (the probe found every local commit already on the default
+  branch under a different sha), `"merged in request #<n>, would
+  remove"` / `"merged in request #<n> (local tip rewritten, ...), would
+  remove"` (dry run), `"remove failed, skipped"`.
 - **A `"commits after merge"` skip now means the script already ran the
   patch-equivalence probe and found a real unmatched commit** - the sha
   inequality is not, by itself, proof of unlanded work; the script decides
@@ -233,7 +234,7 @@ Omitted, sweep every worktree.
 
   ```bash
   git -C <worktree> status --porcelain        # must be empty
-  git cherry <default-branch> HEAD            # every line must start with "-"
+  git cherry origin/<default-branch> HEAD     # every line must start with "-"
   ```
 
   A clean tree plus all-`-` output means every local commit is
@@ -244,6 +245,13 @@ Omitted, sweep every worktree.
   stands, and report what the probe error was.
 - `data.beads_to_close` is already deduped and sorted per call. Union across
   calls; do not re-derive it from the forge yourself.
+- `warnings` `refs_not_fetched` is the one sweep-level warning: the
+  `git fetch --prune` that opens the sweep failed, so every refusal below
+  it may rest on stale remote-tracking refs rather than on real
+  divergence. Nothing was removed that should not have been - the sweep
+  still only refuses - but report it before the per-worktree lines and
+  re-run once the remote is reachable, because candidates can be
+  under-reported while it stands.
 - `warnings` `beads_lookup_failed`, `worktree_remove_failed`,
   `branch_delete_failed`, `patch_equivalence_unknown` each name one
   worktree's partial outcome - surface them per line rather than as a
