@@ -2,7 +2,7 @@
 name: wurk:init
 description: Adopt wurk in a repo that has never used it - survey the toolchain, forge, tests, and docs layout, ask the structural choices, draft .claude/wurk.json and the files beside it, initialize beads with zero footprint, seed the disciplines the user opts into (decision records, sabotage notes, a review round, an upstream-tracker convention), and prove the gate runs through the kit. Lands in the local-only pilot shape by default. Never commits, never pushes, never touches an existing manifest or tracker.
 model: sonnet
-argument-hint: ["optional: --tracked (skip the pilot exclusions; the config is meant to be committed), --with adr,sabotage,coverage,review,tracker,scan (pre-answer the opt-ins)"]
+argument-hint: ["optional: --defaults (take every structural default without asking), --tracked (skip the pilot exclusions; the config is meant to be committed), --with adr,sabotage,coverage,review,tracker,scan (pre-answer the opt-ins)"]
 ---
 
 # Init
@@ -29,14 +29,24 @@ Two things this skill never does, and refuses rather than works around:
   already someone's: stop and say so. An existing `CLAUDE.md` or
   `AGENTS.md` gets a section appended, never replaced.
 
+Beads is the tracker in every wurk project and step 4 initializes it on
+every run; it is never an opt-in, and a project with Jira or Linear
+upstream still gets it. The `tracker` opt-in in step 2 is about the
+upstream tracker beside beads, never instead of it
+(`$WURK/docs/two-tracker-pattern.md`).
+
 There is no project extension seam here. Extensions are read from
 `.claude/wurk/<skill>.md` in a project that has adopted wurk, and this
 skill runs before that project exists.
 
 ## Input
 
-`$ARGUMENTS`, both optional:
+`$ARGUMENTS`, all optional:
 
+- `--defaults` - answer every step 2 question with the default that step
+  names, ask nothing, and list every assumed value in the report. This is
+  the one-prompt adoption the wurk README describes. The step 0 installs
+  are still asked per tool; a default never changes the machine.
 - `--tracked` - the config is meant to be committed by the person
   afterwards, so step 8 writes no `.git/info/exclude` entries and step 3
   uses repo-relative paths only. Default is the pilot shape.
@@ -170,11 +180,14 @@ stop there and say so, since every later step assumes the kit is at
 
 2. **Ask the structural choices, explicitly.** These are expensive to
    reverse and the person makes them; a default is offered, never
-   assumed silently. One question each, in this order:
+   assumed silently - except under `--defaults`, where every question
+   below takes its named default and the report says which values were
+   assumed rather than chosen. One question each, in this order:
 
    - **Bead prefix.** Short, lowercase, will still make sense in a year;
      bead ids are cited from commit trailers and document filenames that
-     are never rewritten. Offer the repo name's initials.
+     are never rewritten. Offer the repo name's initials (default: the
+     initials of a multi-word name, else the name's first three letters).
    - **Parallelism model.** `worktree-per-issue` (one worktree per bead
      under `worktrees_dir`, with warm and repair commands and optionally a
      `tmux` section) or `branch-in-place` (one checkout, one bead at a
@@ -184,16 +197,25 @@ stop there and say so, since every later step assumes the kit is at
      `wrong_parallelism_model` (wu-7yd.13 in the wurk clone), so a
      project that picks it cannot work its first bead through
      `/wurk:work` until that lands. Say so if the person picks it anyway.
+     Default: `worktree-per-issue`, `worktrees_dir` of
+     `../<repo>-worktrees`, the warm, repair, and trust values the worked
+     example gives for the toolchain, and a `tmux` section naming the
+     repo as its session so seeded bead sessions have somewhere to run.
    - **Changelog mode.** `none` unless the project already keeps one
-     (`keep-a-changelog` or `fragments` with a `changelog.dir`).
+     (`keep-a-changelog` or `fragments` with a `changelog.dir`). Default:
+     `none`, or `keep-a-changelog` when the survey found a `CHANGELOG.md`.
    - **Tracker sync.** `local` in the pilot; say that the choice of a
      remote is made at graduation. Under `--tracked`, still `local` unless
-     the person names a mode.
+     the person names a mode. Default: `local`.
    - **Opt-ins**, skipped for any named in `--with`: decision records
      (`adr`), sabotage notes (`sabotage`), a coverage floor (`coverage`),
      a pre-request review round (`review`), an upstream tracker
      convention (`tracker`). Each is one sentence and the recipe path under
-     `$WURK/docs/recipes/` for the person to read later.
+     `$WURK/docs/recipes/` for the person to read later. Defaults: `adr`,
+     `sabotage`, and `review` on; `tracker` on only when the survey found
+     an upstream tracker signal; `coverage` off, since it needs a gate
+     stage the project may not have; `scan` off, since it installs a git
+     hook.
 
 3. **Draft the manifest** at `.claude/wurk.json` from the survey and the
    answers, with the required keys (`wurk`, `beads.prefix`, `forge.kind`,
