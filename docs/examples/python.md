@@ -7,10 +7,10 @@ equivalents are noted where they differ. Nothing here is a default the kit
 applies; every value is one this project decided (ADR-0004), and the
 reasoning beside each is what to re-check when the project differs.
 
-The closest existing template is wurk's own `.claude/wurk.json`: no mise,
-no warm step, `changelog.mode: none`, `release: null`, and a plain
-interpreter gate command. Swap Ruby for Python and it is most of the way
-there.
+The closest existing template is wurk's own `.claude/wurk.json`: no warm
+step, `changelog.mode: none`, `release: null`, and a plain gate command.
+Swap Ruby for Python, put the gate behind a mise task, and it is most of
+the way there.
 
 ## The manifest
 
@@ -31,11 +31,11 @@ there.
   "forge": {"kind": "github"},
 
   "gate": {
-    "full": ["make", "check"],          // ruff + mypy + pytest with the coverage floor
+    "full": ["mise", "run", "check"],   // ruff + mypy + pytest with the coverage floor
     "loop": ["uv", "run", "pytest", "-x", "-q"],
     "build_paths": ["src/", "tests/"],
     "moving_files": [
-      "Makefile",
+      "mise.toml",                      // holds the check task
       "pyproject.toml",                 // holds [tool.pytest], [tool.coverage], [tool.ruff]
       "uv.lock"
     ],
@@ -49,6 +49,7 @@ there.
   "parallelism": {
     "model": "worktree-per-issue",
     "worktrees_dir": "../acme-worktrees",
+    "trust": ["mise", "trust", "{path}"],
     "warm": [["uv", "sync"]],
     "repair_when": "uv.lock",
     "repair": [["uv", "sync"]]
@@ -76,20 +77,30 @@ the warm and repair keys then do nothing and can go.
 contract (`docs/gate-contract.md`) needs one argv that exits non-zero when
 anything the project trusts fails. A pytest project usually trusts three
 things: the linter, the type checker, and the tests with a coverage
-floor. Put them behind one target so the kit runs one command:
+floor. Put them behind one mise task so the kit runs one command
+(`docs/gate-contract.md` names mise tasks as the convention for new
+projects):
 
-```make
-check:
-	uv run ruff check src tests
-	uv run mypy src
-	uv run pytest --cov=src --cov-fail-under=85 -q
+```toml
+# mise.toml
+[tasks.lint]
+run = "uv run ruff check src tests"
+
+[tasks.typecheck]
+run = "uv run mypy src"
+
+[tasks.test]
+run = "uv run pytest --cov=src --cov-fail-under=85 -q"
+
+[tasks.check]
+depends = ["lint", "typecheck", "test"]
 ```
 
-`make` stops at the first failing recipe line and exits non-zero, which is
-the whole tier-0 requirement. A project that prefers `tox`, `nox`, or a
-`scripts/check.sh` writes that argv instead; the kit never learns what is
-inside. `mise run quality` is the convention the Elixir consumers use and
-is not required here.
+`mise run check` exits non-zero when any dependency fails, which is the
+whole tier-0 requirement. A project that prefers a `Makefile`, `tox`,
+`nox`, or a `scripts/check.sh` writes that argv instead; the kit never
+learns what is inside. The task names are the project's own; `quality` and
+`quality:loop` are what the Elixir consumers call theirs.
 
 **`gate.loop` is the fast subset.** `pytest -x -q` stops at the first
 failure and prints little; it is what `/wurk:implement` runs while
@@ -127,9 +138,12 @@ pip: `[["python", "-m", "venv", ".venv"], [".venv/bin/pip", "install",
 "-e", ".[dev]"]]` with `repair_when: "requirements.txt"` (or the pinned
 file the project regenerates).
 
-**`parallelism.trust` is omitted.** It exists for `mise trust`, which a
-project without mise has no need of. `{path}` substitution is available to
-no other field.
+**`parallelism.trust` runs `mise trust` on each new worktree.** mise
+refuses to run tasks from a `mise.toml` it has not been told to trust, and
+trust is per directory, so a fresh worktree needs it before `warm` or the
+gate can run there; `{path}` is substituted with the worktree, and is
+available to no other field. A project that gates through something other
+than mise omits the key.
 
 **`beads.areas.labels` are a collision prediction, not a topic tag.**
 Two beads with disjoint area labels may be worked in parallel; two that
@@ -158,7 +172,7 @@ extension.
     ]
   },
   "permissions": {
-    "deny": ["Edit(Makefile)", "Edit(pyproject.toml)", "Edit(uv.lock)"]
+    "deny": ["Edit(mise.toml)", "Edit(pyproject.toml)", "Edit(uv.lock)"]
   }
 }
 ```
