@@ -67,9 +67,11 @@ the way there.
 }
 ```
 
-A solo developer who does not need two beads open at once drops the
-`tmux` section and sets `parallelism` to `{"model": "branch-in-place"}`;
-the warm and repair keys then do nothing and can go.
+A solo developer who does not need two beads open at once can drop the
+`tmux` section; the worktrees still come and go per bead. Setting
+`parallelism` to `{"model": "branch-in-place"}` is the lighter shape the
+schema allows, but `/wurk:branch` does not implement it yet and refuses
+(wu-7yd.13), so it is not a working choice today.
 
 ## Why each value
 
