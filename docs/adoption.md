@@ -53,7 +53,8 @@ true before it goes in. Answer these by looking, not by assuming:
   `repo.default_branch`.
 - **The gate.** The one command that runs every check the project trusts
   and exits non-zero when any fails. If no such single command exists yet,
-  make one (a `Makefile` target, a `tox` env, a `mise` task, a script);
+  make one (a `mise` task is the convention, `docs/gate-contract.md`; a
+  `Makefile` target, a `tox` env, or a script works the same);
   the gate contract (`docs/gate-contract.md`, tier 0) needs nothing more
   than an argv array and an exit code. Also decide the quick form, the
   subset a developer runs in a loop; when there is no meaningful subset,
@@ -94,10 +95,10 @@ manifest that a solo developer on GitHub can start from:
   "beads": {"prefix": "acme", "sync": "local"},
   "forge": {"kind": "github"},
   "gate": {
-    "full": ["make", "check"],
-    "loop": ["make", "test"],
-    "build_paths": ["src/", "tests/", "Makefile", "pyproject.toml"],
-    "moving_files": ["Makefile"]
+    "full": ["mise", "run", "check"],
+    "loop": ["mise", "run", "test"],
+    "build_paths": ["src/", "tests/", "mise.toml", "pyproject.toml"],
+    "moving_files": ["mise.toml"]
   },
   "parallelism": {"model": "branch-in-place"},
   "artifacts": {"plans": "docs/plans", "research": "docs/research"},
@@ -195,7 +196,7 @@ never learns bead state:
     ]
   },
   "permissions": {
-    "deny": ["Edit(Makefile)"]
+    "deny": ["Edit(mise.toml)"]
   }
 }
 ```
