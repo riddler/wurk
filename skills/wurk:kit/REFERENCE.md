@@ -185,8 +185,10 @@ and nothing in the tracker, the three things a dry run exists to promise it
 will not touch. It has to run before the dry run's check phase because
 `/wurk:cleanup` selects candidates on the dry run and removes them by name
 afterwards; a dry run deciding against stale refs would refuse a candidate
-the real removal would have accepted. No other script gets this exception
-without the same argument.
+the real removal would have accepted. The carve-out and its bound are
+recorded in ADR-0006's "Amendment (2026-09-13)", which also lists what
+still violates the rule; no other script gets this exception without the
+same argument, recorded the same way.
 
 ## Step-scoping and the banned-operation list
 
@@ -644,7 +646,8 @@ the propose pass should look for.
    `Sh.run` when `options[:dry_run]` is false. The only exception is a call
    that writes solely to `refs/remotes/` (a `git fetch`) and that the check
    phase needs current before a dry run judges anything - see `--dry-run`
-   above; do not assume a new exception without that same argument.
+   above and ADR-0006's "Amendment (2026-09-13)"; do not assume a new
+   exception without that same argument, recorded the same way.
 5. Add `test/<name>_test.rb` using `test/support/fake_sh.rb` to fake every
    shelled-out command; a script that shells out to something the test did
    not register a fixture for fails loudly (`FakeSh::UnexpectedCommand`),

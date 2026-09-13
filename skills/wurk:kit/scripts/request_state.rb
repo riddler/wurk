@@ -42,6 +42,11 @@ require_relative "lib/forge"
 # So: ask the forge, never git. On a forge-CLI failure or an unauthenticated
 # call this script (and RequestState.query_merged/beads_for_pr) reports "not
 # available" - it must never fall back to ancestry as a substitute.
+#
+# worktree_cleanup.rb's patch-equivalence probe is not a counter-example to
+# that rule: it runs only after the forge has already said merged, and it can
+# only REFUSE a removal, never declare a merge. ADR-0017 states the
+# direction-and-power distinction that keeps the two apart.
 module RequestState
   QueryResult = Struct.new(:available, :merged, :number, :merged_at, :head_oid, :error, keyword_init: true)
   BeadsResult = Struct.new(:available, :beads, :error, keyword_init: true)

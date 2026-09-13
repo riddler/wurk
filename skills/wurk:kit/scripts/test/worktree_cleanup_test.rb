@@ -295,6 +295,31 @@ class WorktreeCleanupTest < Minitest::Test
     assert_operator fetch_index, :<, first_rev_parse_index
   end
 
+  # sabotage: drop the `unless fetch_res.success?` warn -> a sweep whose
+  # fetch failed reports its refusals as if the refs were current -> red.
+  # A stale-refs refusal is indistinguishable from a genuine divergence in
+  # the result string alone, which is the false skip wu-mya.9 removed.
+  def test_a_failed_fetch_warns_rather_than_deciding_silently
+    @fake.expect(%w[git fetch --prune], exitstatus: 1, err: "fatal: unable to access remote\n")
+    expect_survey
+    @fake.expect(%w[git status --porcelain], out: "")
+    @fake.expect(%w[git rev-parse HEAD], out: "deadbeef\n")
+    @fake.expect(
+      ["gh", "pr", "view", "42", "--json", "commits", "--jq", ".commits[].messageBody"],
+      out: "Fixes a thing.\n\nRefs: zz-abc\n"
+    )
+    @fake.expect(["git", "worktree", "remove", WT1], out: "")
+    @fake.expect(%w[git worktree prune], out: "")
+    @fake.expect(["git", "branch", "-D", "zz-abc-merged-thing"], out: "")
+
+    code, env = run_cleanup
+
+    assert_equal 0, code
+    warning = env["warnings"].find { |w| w["code"] == "refs_not_fetched" }
+    refute_nil warning, "a failed fetch must name itself in warnings"
+    assert_includes warning["message"], "stale refs"
+  end
+
   def test_a_failed_survey_fetches_nothing
     @fake.expect(%w[git worktree list --porcelain], out: porcelain)
     @fake.expect(%w[git status --porcelain], out: "")
