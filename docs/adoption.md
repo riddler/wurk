@@ -250,9 +250,9 @@ Fix the manifest, not the script.
   `docs/recipes/` each end with the extension file they need, if any.
 - **Disciplines.** Sabotage testing (`docs/recipes/sabotage-testing.md`),
   a coverage floor (`docs/recipes/coverage.md`), decision records
-  (`docs/recipes/adrs.md`, planned as wu-7yd.4), a pre-request review
-  round (`docs/recipes/review-agents.md`, planned as wu-7yd.6). Each is a
-  manifest section plus, at most, one extension file or agent.
+  (`docs/recipes/adrs.md`), a pre-request review round
+  (`docs/recipes/review-agents.md`). Each is a manifest section plus, at
+  most, one extension file or agent.
 - **Machine config.** `~/.claude/wurk.local.json` holds what the person at
   the machine decides, such as the permission mode of seeded sessions
   (`docs/machine-config.md`). Nothing project-level goes there.

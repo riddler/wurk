@@ -282,10 +282,11 @@ than restating when it escalates an item to Direction; a rewrite here should
 keep that coupling in mind. Tell the subagent to:
 
 - read the bead in full and the files it names;
-- read the project's existing architecture-decision records, and its
-  architecture documents where relevant, to see whether the bead asks for a
-  new record, an amendment to one already accepted, or a narrower call that
-  does not warrant its own record;
+- read the project's existing architecture-decision records (at the
+  manifest's `artifacts.adr` when it names one; by the project's convention
+  otherwise), and its architecture documents where relevant, to see whether
+  the bead asks for a new record, an amendment to one already accepted, or a
+  narrower call that does not warrant its own record;
 - write the decision as a new record at the next free number, in the same
   shape and status convention every other record in that project carries. A
   call too narrow for its own record goes to the research directory
