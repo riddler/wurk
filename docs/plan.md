@@ -1242,7 +1242,8 @@ noisier without making any of them likelier to happen.
   structural choices (parallelism model, changelog mode, topology). This
   is the "future projects" half of the original goal; nothing else in the
   plan owns it. Became a bead on 2026-09-13: wu-7yd.10, under the adoption
-  epic wu-7yd, after `docs/adoption.md` and the recipes it consumes.
+  epic wu-7yd, after `docs/adoption.md` and the recipes it consumes, and
+  shipped the same day as `skills/wurk:init/SKILL.md`.
 - Tier-1 gate report emitter for fixative (docs/gate-contract.md).
 - A one-line human summary on stderr from kit scripts (presentational;
   stdout contract unchanged).

@@ -20,9 +20,9 @@ and status convention every other record in that project carries". An
 empty directory gives it nothing to imitate and it will invent a format.
 So the first record is the one that states the practice, and it is
 written by a person, once, before any bead asks for a decision.
-`/wurk:init` (wu-7yd.10, not yet shipped) will write this file from the
-template below when a project opts into records; until then, copy it and
-fill in the three placeholders by hand.
+`/wurk:init` writes this file from the template below when a project
+opts into records; by hand, copy it and fill in the two placeholders,
+the project name and the date.
 
 `docs/adr/0001-record-architecture-decisions.md`:
 

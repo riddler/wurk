@@ -10,9 +10,9 @@ repo's history until the last step, graduation, which is a deliberate
 choice rather than a side effect of setup.
 
 Follow it by hand, or ask a Claude Code session in the repo to follow it.
-`/wurk:init` (planned, wu-7yd.10) automates the mechanical parts; until it
-exists, this document is the whole path, and afterwards it is what the
-skill is checked against.
+`/wurk:init` automates the mechanical parts and lands in the same pilot
+shape; this document is what the skill is checked against, and the path
+to follow when a step needs a person's judgment the skill defers.
 
 Every step names what it produces and what a wrong result looks like. If a
 step's check fails, stop there: every later step assumes the earlier ones.

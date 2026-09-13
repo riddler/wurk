@@ -17,7 +17,7 @@ land everywhere at once.
 ## Status
 
 Phase 2 (lifting the workflow into this repo) is underway and most of it is
-done: the kit's Ruby scripts layer, all 14 generic `wurk:*` skills, and the
+done: the kit's Ruby scripts layer, all 15 generic `wurk:*` skills, and the
 ten agents (eight read-only research agents plus the campaign pair) are
 ported and pass their test suite, and
 `install.rb` symlinks them into `~/.claude`. Phase 1 (parameterizing
