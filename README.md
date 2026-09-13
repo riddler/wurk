@@ -50,6 +50,33 @@ directory, a real file, a symlink pointing somewhere else - is refused by name
 and left untouched; the run exits 1 and you move it aside by hand. Skills and
 agents are linked, not copied, so an edit in this clone is live immediately.
 
+## Adopting wurk in a repo
+
+Once per machine, clone wurk and link it (macOS has the Ruby this needs;
+elsewhere install Ruby 2.6 or newer first):
+
+```bash
+git clone <wurk remote> ~/repos/github/wurk
+cd ~/repos/github/wurk && ruby install.rb
+```
+
+Then open a Claude Code session at the root of the repo to adopt and paste:
+
+> Read docs/adoption.md in the wurk clone, then run /wurk:init --defaults
+> in this repo. Pilot shape: nothing committed, nothing pushed, no bd
+> bootstrap, no bd dolt push. Install any missing tool after asking me.
+
+The skill installs what the machine lacks (Homebrew, mise, beads, tmux,
+the forge CLI, a current Ruby if the system one is too old), one tool at a
+time with your consent, then takes every structural default without
+asking: beads as the tracker (always, even with Jira or Linear upstream),
+worktree-per-issue with a tmux session, a local-only tracker, decision
+records, sabotage notes, and a pre-request review round. It ends with a
+linted manifest, a green gate through the kit, and nothing in the repo's
+history; `docs/adoption.md` is the same path by hand, and
+`docs/local-only-pilot.md` is what the pilot shape promises and forbids.
+Drop `--defaults` to be asked each choice instead.
+
 ## Reading order
 
 1. `docs/architecture.md` - the four layers and where project-specific
