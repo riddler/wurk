@@ -100,7 +100,7 @@ manifest that a solo developer on GitHub can start from:
     "build_paths": ["src/", "tests/", "mise.toml", "pyproject.toml"],
     "moving_files": ["mise.toml"]
   },
-  "parallelism": {"model": "branch-in-place"},
+  "parallelism": {"model": "worktree-per-issue", "worktrees_dir": "../acme-worktrees"},
   "artifacts": {"plans": "docs/plans", "research": "docs/research"},
   "changelog": {"mode": "none"},
   "release": null
@@ -113,11 +113,13 @@ later; make them on purpose:
 - **`beads.prefix`.** Bead ids are cited from commit trailers and document
   filenames that are never rewritten (ADR-0007). Choose a short prefix
   that will still make sense in a year.
-- **`parallelism.model`.** `branch-in-place` is the lighter start: one
-  checkout, one branch at a time, no worktrees, no tmux. Move to
-  `worktree-per-issue` when two beads genuinely need to be open at once;
-  it adds `worktrees_dir`, the warm and repair commands, and optionally a
-  `tmux` section.
+- **`parallelism.model`.** `worktree-per-issue` is the one that works
+  today: one worktree per bead under `worktrees_dir`, plus the warm and
+  repair commands and optionally a `tmux` section. `branch-in-place` (one
+  checkout, one branch at a time, no worktrees, no tmux) is the lighter
+  shape and is in the schema, but `/wurk:branch` does not implement it
+  yet and refuses with `wrong_parallelism_model`; wu-7yd.13 tracks it.
+  Until it lands, a solo developer picks `worktree-per-issue` too.
 - **`beads.sync`.** `local` during the pilot, declared explicitly so the
   loader stops warning. The choice of a real remote is made at
   graduation, not here.

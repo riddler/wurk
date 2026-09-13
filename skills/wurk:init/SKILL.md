@@ -150,10 +150,15 @@ stop there and say so, since every later step assumes the kit is at
    - **Bead prefix.** Short, lowercase, will still make sense in a year;
      bead ids are cited from commit trailers and document filenames that
      are never rewritten. Offer the repo name's initials.
-   - **Parallelism model.** `branch-in-place` (one checkout, one bead at a
-     time, no worktrees, no tmux) or `worktree-per-issue` (adds
-     `worktrees_dir`, warm and repair commands, optionally a `tmux`
-     section). Offer `branch-in-place` to a solo developer.
+   - **Parallelism model.** `worktree-per-issue` (one worktree per bead
+     under `worktrees_dir`, with warm and repair commands and optionally a
+     `tmux` section) or `branch-in-place` (one checkout, one bead at a
+     time, no worktrees, no tmux). Offer `worktree-per-issue`, to a solo
+     developer too: `branch-in-place` is in the manifest schema but
+     `/wurk:branch` does not implement it yet and refuses with
+     `wrong_parallelism_model` (wu-7yd.13 in the wurk clone), so a
+     project that picks it cannot work its first bead through
+     `/wurk:work` until that lands. Say so if the person picks it anyway.
    - **Changelog mode.** `none` unless the project already keeps one
      (`keep-a-changelog` or `fragments` with a `changelog.dir`).
    - **Tracker sync.** `local` in the pilot; say that the choice of a
