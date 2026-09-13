@@ -41,7 +41,11 @@ ls -la ~/.claude/skills | grep wurk:
 
 `install.rb` is idempotent and refuses to replace anything it did not
 create; if it exits 1, move the named entry aside and re-run. Updating wurk
-later is `git pull` in this clone; the symlinks pick it up.
+later is `git pull` in this clone followed by `ruby install.rb` again: an
+edit to an already-linked file is live at once through the symlink, but a
+skill or agent added since the last install has no link until the script
+runs, and `manifest.rb check` then reports `mr_review_agent_missing` for
+an agent that is in the clone.
 
 ## 1. Survey the repo before writing anything
 
