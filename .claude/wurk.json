@@ -48,7 +48,8 @@
 
   "artifacts": {
     "plans": "docs/plans",
-    "research": "docs/research"
+    "research": "docs/research",
+    "adr": "docs/adr"
   },
 
   "commits": {

@@ -19,8 +19,10 @@ in this order and stop at the first that answers:
    a research root, a plans root, and an ADR directory. This is the fast path
    and it is authoritative; use exactly what you are given.
 2. **The project manifest.** If no roots were given, read
-   `.claude/wurk.json` and use its `artifacts.*` keys - `artifacts.research`
-   and `artifacts.plans`, plus any ADR directory it names.
+   `.claude/wurk.json` and use its `artifacts.*` keys - `artifacts.research`,
+   `artifacts.plans`, and `artifacts.adr` for decision records. An absent
+   `artifacts.adr` means the project has not said where (or whether) it
+   keeps records; fall through to step 3 for that root only, and say so.
 3. **Conventional locations.** With no manifest either, glob the candidates:
    `docs/research/`, `docs/plans/`, `docs/adr/`, `docs/*.md`, and
    `thoughts/shared/{research,plans,issues}/`. **Say in your report which

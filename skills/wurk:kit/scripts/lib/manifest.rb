@@ -88,7 +88,7 @@ class Manifest
                         timeout_seconds],
     "tmux" => %w[session model layout editor],
     "models" => %w[direction],
-    "artifacts" => %w[plans research filename repository],
+    "artifacts" => %w[plans research adr filename repository],
     "commits" => %w[style package_map subject_under body_line_max total_lines_max trailer],
     "commits.trailer" => %w[key],
     "changelog" => %w[mode dir],
@@ -543,6 +543,14 @@ class Manifest
     fetch("artifacts.research")
   end
 
+  # Optional: where the project keeps its decision records. Absent means
+  # the docs agents fall back to their conventional candidates (docs/adr/
+  # and friends) rather than a manifest-named root; nil, never a default,
+  # so a skill can tell "the project said" from "the agent guessed".
+  def adr_dir
+    fetch("artifacts.adr")
+  end
+
   def artifact_dirs
     [plans_dir, research_dir].compact
   end
@@ -763,6 +771,7 @@ class Manifest
     validate_beads_sync
     validate_forge_host
     validate_sabotage
+    validate_artifacts_adr
     validate_judge
     validate_rebase
     validate_mr
@@ -1045,6 +1054,19 @@ class Manifest
   # error, not a silently-empty allowlist. See ADR-0010 for why every entry
   # is validated disjoint from the gate-guarded, lockfile, and manifest
   # surfaces rather than merely documented as such.
+  # Present-or-absent like the other optional sections: a declared value
+  # must be a non-empty relative path. Whether the directory exists is the
+  # lint's question (block_missing_adr_dir), not validate!'s, which reads
+  # no filesystem.
+  def validate_artifacts_adr
+    value = fetch("artifacts.adr")
+    return if value.nil?
+    return if value.is_a?(String) && !value.empty? && !value.start_with?("/")
+
+    errors << "#{path}: artifacts.adr must be a non-empty checkout-relative directory path " \
+              "(omit it to let the docs agents use their conventional candidates)"
+  end
+
   def validate_rebase
     section = fetch("rebase")
     return if section.nil?
@@ -1298,9 +1320,11 @@ module ManifestCli
       # The pre-request review round, read by /wurk:mr: the names to spawn,
       # and empty when the consumer declares none.
       env.data[:mr_review_agents] = manifest.mr_review_agents
+      env.data[:artifacts_adr] = manifest.adr_dir
 
       warn_local_mode_with_dolt_remote(env, manifest)
       block_unresolved_review_agents(env, manifest)
+      block_missing_adr_dir(env, manifest)
 
       manifest.warnings.each { |w| env.warn(code: "unknown_key", message: w) }
       manifest.errors.each { |e| env.block!(code: "invalid", message: e) }
@@ -1368,6 +1392,22 @@ module ManifestCli
                  "#{missing.one? ? 'does' : 'do'} not resolve to a file in any of " \
                  "#{manifest.mr_review_agent_roots.join(', ')}. Ship the agent, install " \
                  "wurk's roster (install.rb), or drop the name."
+      )
+    end
+
+    # A declared ADR directory that is not there has no legitimate reading,
+    # same as a review agent with no file: block in the lint rather than
+    # let /wurk:plan forward a root the docs agents will glob to nothing.
+    # Only declared values are checked; absent is the documented off state.
+    def block_missing_adr_dir(env, manifest)
+      dir = manifest.adr_dir
+      return if dir.nil? || !dir.is_a?(String)
+      return if File.directory?(File.join(manifest.checkout_root, dir))
+
+      env.block!(
+        code: "artifacts_adr_missing",
+        message: "#{manifest.path}: artifacts.adr names #{dir}, which is not a directory under " \
+                 "#{manifest.checkout_root}. Create it (with the project's first record), or drop the key."
       )
     end
 
