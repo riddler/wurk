@@ -166,13 +166,92 @@ grouping several of them, since `--external-ref` (or whatever field a future
 manifest scheme names) is not something any kit script reads today. The
 extension file's step performs that grouping and check.
 
+## Jira: the three stubs
+
+Jira is the upstream tracker of the second consumer to adopt wurk with
+this shape (wu-7yd, 2026-09-13, adoption in progress), so its stubs are
+written out here once. They
+are consumer extension files, copied and edited, not kit content; the
+script they call is the consumer's own, and the transition names are
+whatever that Jira project's workflow calls them.
+
+Two `bd` facts they rest on, both verified on bd 1.2.2: `bd create
+--external-ref "ACME-123"` stores the string verbatim in the bead's
+`external_ref` field, and `bd show <id> --json` and `bd list --json`
+return it under that key, so an extension can read it with no parsing
+beyond a JSON field. Nothing in the kit reads it.
+
+**Minting.** Each bead cut from a ticket carries the ticket id; the
+ticket's own bead, if the consumer wants one to hang the children on, is
+an epic with the same ref:
+
+```bash
+bd create --type=epic --external-ref ACME-123 --title="ACME-123: <ticket title>"
+bd create --parent=<epic> --external-ref ACME-123 --title="<engineering piece>"
+```
+
+**`.claude/wurk/next.md`** - the claim, at `/wurk:next`'s claim step
+("Claim every bead in the chosen batch"):
+
+```markdown
+## After the claim step
+
+For each bead just claimed whose `external_ref` matches `^[A-Z]+-\d+$`,
+run `scripts/ticket.sh transition <ref> "In Progress"`. The script is
+idempotent: a ticket already in progress is left alone. A failure to
+reach Jira is reported in the claim table and does not undo the claim;
+the bead is the lock, the ticket is a mirror.
+```
+
+**`.claude/wurk/mr.md`** - the request, at `/wurk:mr`'s push-and-open
+step ("Push, then open the request"), after the URL is known:
+
+```markdown
+## After the push-and-open step
+
+For each bead the branch's trailers name, with an `external_ref`:
+`scripts/ticket.sh transition <ref> "In Review" --link <request url>`.
+The request body also carries the ticket id on its first line, so a
+reader coming from Jira lands on the right request without the link.
+```
+
+**`.claude/wurk/cleanup.md`** - the close, at `/wurk:cleanup`'s
+close-the-beads-that-landed step ("Close the beads that just landed"):
+
+```markdown
+## After the close step
+
+Group the beads just closed by `external_ref`. For each ref, list every
+bead carrying it (`bd list --json` filtered on the field, all statuses);
+when none is still open or in progress, run
+`scripts/ticket.sh transition <ref> "Done"`. A ref with open siblings is
+reported as "ACME-123: 2 of 3 landed" and left alone.
+```
+
+`scripts/ticket.sh` is a thin wrapper over Jira's REST transitions
+endpoint or the `jira` CLI, holding the site URL and the workflow's
+transition ids; it lives in the consumer repo and is never a kit script
+(CLAUDE.md's hard rule keeps a tracker's identity, its API, and its state
+vocabulary out of generic code).
+
+**`bd jira sync` is not this pattern.** bd 1.2.2 ships `bd jira sync`
+with `--pull`, `--push`, and a default bidirectional mode that reconciles
+by newest timestamp. That default is the field-level bidirectional sync
+the section above rejects, for the reasons it gives. A consumer may find
+`bd jira sync --pull` useful for the minting step, if it imports a ticket
+as a bead with `external_ref` set (unverified here; check against the
+installed `bd` and a throwaway project first), but the three transitions
+still go through the extension stubs, and `--push` and the default mode
+stay unused. Whether the kit should know any of this is the open
+decision wu-7yd.12.
+
 ## What the kit does not do today
 
 There is no manifest field for the external-id scheme - which field on a
 bead holds the ticket id, what format it takes, which tracker it points at.
 Today `--external-ref` is a `bd` capability, read by nothing in this kit and
-named in no manifest field. If a second consumer adopts this pattern and the
-duplication of implicit convention becomes a real cost, the fix is a
+named in no manifest field. A second consumer is adopting it (the Jira section above), and whether
+that makes a manifest field worth its cost is decision bead wu-7yd.12. If it does, the fix is a
 manifest field (and `docs/manifest.md` updated in the same commit, per
 CLAUDE.md's hard rule and ADR-0004's "a consumer needing different generic
 behavior means the schema is missing a field") - not a fork of any skill and
