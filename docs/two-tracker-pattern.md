@@ -242,16 +242,18 @@ the section above rejects, for the reasons it gives. A consumer may find
 as a bead with `external_ref` set (unverified here; check against the
 installed `bd` and a throwaway project first), but the three transitions
 still go through the extension stubs, and `--push` and the default mode
-stay unused. Whether the kit should know any of this is the open
-decision wu-7yd.12.
+stay unused. Whether the kit should know any of this was decided in
+ADR-0018: it does not, but it reads the ref (see that record for the
+`external_tracker` section and the three kit paths it adds).
 
 ## What the kit does not do today
 
 There is no manifest field for the external-id scheme - which field on a
 bead holds the ticket id, what format it takes, which tracker it points at.
 Today `--external-ref` is a `bd` capability, read by nothing in this kit and
-named in no manifest field. A second consumer is adopting it (the Jira section above), and whether
-that makes a manifest field worth its cost is decision bead wu-7yd.12. If it does, the fix is a
+named in no manifest field. A second consumer is adopting it (the Jira section above), and ADR-0018
+(2026-09-13) decided the field: an `external_tracker` section. This
+section describes the state before that record lands in the kit. If it does, the fix is a
 manifest field (and `docs/manifest.md` updated in the same commit, per
 CLAUDE.md's hard rule and ADR-0004's "a consumer needing different generic
 behavior means the schema is missing a field") - not a fork of any skill and
