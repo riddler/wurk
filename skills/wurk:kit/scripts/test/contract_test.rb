@@ -779,6 +779,25 @@ class ContractTest < Minitest::Test
                  "provenance in REFERENCE.md or an ADR"
   end
 
+  # The agents wurk ships are instruction text end to end, like a SKILL.md,
+  # and a consumer may name any of them in mr.review_agents; a consumer
+  # constant in one would run against every repo that does. Same scan,
+  # same rule.
+  def test_no_consumer_vocabulary_in_shipped_agents
+    files = Dir.glob(File.join(REPO_ROOT, "agents", "*.md")).sort
+    refute_empty files, "no shipped agents found - this scan would be vacuous"
+    offenders = []
+    files.each do |file|
+      Contract.consumer_vocabulary_anywhere(File.read(file)).each do |(lineno, label)|
+        offenders << "#{file}:#{lineno} (#{label})"
+      end
+    end
+    assert_empty offenders,
+                 "consumer vocabulary found in a shipped agent: #{offenders.join(', ')} - " \
+                 "a shipped agent names no consumer constant; a domain agent belongs in " \
+                 "the consumer's own .claude/agents/"
+  end
+
   def test_no_consumer_vocabulary_in_kit_reference_command_blocks
     offenders = Contract.consumer_vocabulary_in_shell_fences(File.read(kit_reference_file))
                         .map { |(lineno, label)| "#{kit_reference_file}:#{lineno} (#{label})" }

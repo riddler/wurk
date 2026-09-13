@@ -1438,24 +1438,82 @@ end
 class ManifestMrReviewAgentsLintTest < Minitest::Test
   # A throwaway checkout: <root>/.claude/wurk.json, so checkout_root - and
   # therefore the .claude/agents lookup - lands where the fixture writes it.
-  def in_checkout(agents:, ships: [])
+  # `ships` are the consumer's own agents under <root>/.claude/agents/;
+  # `installed` are the roster under a throwaway HOME's .claude/agents/, the
+  # directory install.rb links wurk's shipped agents into. HOME is always
+  # pointed at the throwaway so the real machine's roster can never make a
+  # test pass by accident.
+  def in_checkout(agents:, ships: [], installed: [])
     Dir.mktmpdir do |root|
-      raw = JSON.parse(File.read(ManifestFixtures.path("valid")))
-      raw["mr"] = { "review_agents" => agents } unless agents.nil?
-      FileUtils.mkdir_p(File.join(root, ".claude"))
-      manifest = File.join(root, ".claude", "wurk.json")
-      File.write(manifest, JSON.pretty_generate(raw))
+      Dir.mktmpdir do |home|
+        raw = JSON.parse(File.read(ManifestFixtures.path("valid")))
+        raw["mr"] = { "review_agents" => agents } unless agents.nil?
+        FileUtils.mkdir_p(File.join(root, ".claude"))
+        manifest = File.join(root, ".claude", "wurk.json")
+        File.write(manifest, JSON.pretty_generate(raw))
 
-      unless ships.empty?
-        dir = File.join(root, ".claude", "agents")
-        FileUtils.mkdir_p(dir)
-        ships.each { |name| File.write(File.join(dir, "#{name}.md"), "---\nname: #{name}\n---\n") }
+        write_agents(File.join(root, ".claude", "agents"), ships)
+        write_agents(File.join(home, ".claude", "agents"), installed)
+
+        saved_home = ENV["HOME"]
+        ENV["HOME"] = home
+        begin
+          io = StringIO.new
+          code = ManifestCli.run(["check", "--file", manifest], io: io)
+          yield code, JSON.parse(io.string)
+        ensure
+          ENV["HOME"] = saved_home
+        end
       end
-
-      io = StringIO.new
-      code = ManifestCli.run(["check", "--file", manifest], io: io)
-      yield code, JSON.parse(io.string)
     end
+  end
+
+  def write_agents(dir, names)
+    return if names.empty?
+
+    FileUtils.mkdir_p(dir)
+    names.each { |name| File.write(File.join(dir, "#{name}.md"), "---\nname: #{name}\n---\n") }
+  end
+
+  # sabotage: drop the home root from mr_review_agent_roots -> red (the
+  # installed name is then unresolved and the check blocks).
+  def test_an_installed_agent_resolves_without_a_consumer_file
+    in_checkout(agents: %w[wurk-diff-critic], installed: %w[wurk-diff-critic]) do |code, env|
+      assert_equal 0, code
+      assert_equal true, env["ok"]
+      refute_includes blocked_codes(env), "mr_review_agent_missing"
+      assert_equal %w[wurk-diff-critic], env["data"]["mr_review_agents"]
+    end
+  end
+
+  # sabotage: resolve against the home root before the consumer root ->
+  # still green here, so this test pins precedence a different way: the
+  # consumer file is the only one that exists and must be enough.
+  def test_a_consumer_file_resolves_when_nothing_is_installed
+    in_checkout(agents: %w[wurk-diff-critic], ships: %w[wurk-diff-critic]) do |code, env|
+      assert_equal 0, code
+      refute_includes blocked_codes(env), "mr_review_agent_missing"
+    end
+  end
+
+  # sabotage: make mr_review_agent_path return the first candidate path
+  # without File.file? -> red (nothing exists, yet nothing is reported).
+  def test_a_name_in_neither_root_blocks_and_names_both_roots
+    in_checkout(agents: %w[wurk-diff-critic], ships: [], installed: %w[wurk-test-critic]) do |code, env|
+      assert_equal 1, code
+      assert_includes blocked_codes(env), "mr_review_agent_missing"
+      message = env["blocked"].map { |b| b["message"] }.join
+      assert_match(%r{\.claude/agents.*\.claude/agents}m, message)
+      assert_match(/install\.rb/, message)
+    end
+  end
+
+  # sabotage: read ENV["HOME"] at require time instead of call time -> red
+  # (the throwaway HOME set by in_checkout is never seen).
+  def test_home_is_read_when_the_check_runs
+    manifest = Manifest.new(path: "/x/.claude/wurk.json", raw: JSON.parse(File.read(ManifestFixtures.path("valid"))))
+    roots = manifest.mr_review_agent_roots(root: "/x", home: "/h")
+    assert_equal ["/x/.claude/agents", "/h/.claude/agents"], roots
   end
 
   def blocked_codes(env)
