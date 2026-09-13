@@ -81,22 +81,47 @@ stop there and say so, since every later step assumes the kit is at
    root produces a file the kit finds from some directories and not
    others.
 
-   Then check the machine, and stop on the first miss with the name of
-   what is missing and where `docs/adoption.md`'s prerequisites section
-   says to get it:
+   Then check the machine. A miss is not a stop: install what is missing,
+   one tool at a time, each after the person has said yes to that tool by
+   name. Never a batch "install everything", and never silently - these
+   are the one place this skill changes the machine rather than the repo.
+   The checks, in the order the installs below depend on each other:
 
    ```bash
+   brew --version                       # Homebrew, which everything below installs through
+   mise --version                       # toolchain manager; also the gate task runner
    ruby -v                              # 2.6 or newer; every kit script is stdlib Ruby
-   bd version
+   bd version                           # beads, the tracker
    gh auth status || glab auth status   # authenticated, not merely installed
-   claude --version
-   tmux -V                              # only if step 2 chooses worktree-per-issue
+   tmux -V                              # worktree-per-issue seeds each bead's session in tmux
+   claude --version                     # present, or this session would not be running
    ```
 
-   An installed but unauthenticated forge CLI passes a version check and
-   fails `/wurk:mr` later, which is why the auth form is the one run here.
-   `tmux` is checked after step 2 rather than here, since a
-   `branch-in-place` adoption never needs it.
+   What to run for each miss (`docs/adoption.md`'s prerequisites section
+   carries the same list for a person doing it by hand):
+
+   - **Homebrew** - the person runs the installer themselves in their own
+     terminal, since it asks for their password and this session cannot
+     answer it; wait, then re-check. macOS and Linux alike:
+     `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`.
+   - **mise** - `brew install mise`, then the activation line in the
+     person's shell rc (`eval "$(mise activate zsh)"` for zsh,
+     `mise activate fish | source` for fish), appended after asking. A new
+     shell picks it up; this session's does not, so anything mise manages
+     is run here through `mise exec -- <cmd>`.
+   - **Ruby** - only when `ruby -v` is absent or older than 2.6 (macOS
+     ships 2.6.10 and needs nothing): `mise use -g ruby@latest`. mise
+     compiles Ruby, which takes minutes and needs the compiler toolchain
+     the Homebrew installer already set up; say so before starting.
+   - **beads** - `brew install beads`.
+   - **tmux** - `brew install tmux`.
+   - **gh** or **glab** - `brew install gh` (or `glab`), then the person
+     runs `gh auth login` themselves; it opens a browser. An installed but
+     unauthenticated forge CLI passes a version check and fails `/wurk:mr`
+     later, which is why the auth form is the check run here.
+
+   Re-run the check block after the installs. Anything still missing ends
+   the run with its name; the report lists what was installed.
 
 1. **Survey the repo, read-only.** Every manifest value below has to be
    true, and the way to know is to look. Collect, and print as a table
@@ -393,6 +418,7 @@ stop there and say so, since every later step assumes the kit is at
     ```
     Adopted wurk in <repo> (<pilot | tracked>)
 
+    Installed:  <tools installed in step 0, or "nothing, all present">
     Manifest:   .claude/wurk.json - <n> keys, lint clean
     Tracker:    .beads/ (prefix <p>, local, no remote, stealth)
     Beside it:  .claude/settings.json <created | merged>, AGENTS.md <..>, CLAUDE.md <..>

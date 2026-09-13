@@ -25,10 +25,23 @@ step's check fails, stop there: every later step assumes the earlier ones.
 | `bd` (beads) | the issue tracker (ADR-0007); every skill starts from a bead | `bd version` |
 | `git`, and `gh` or `glab` for the forge | `/wurk:mr` and `/wurk:cleanup` read request state through the forge CLI | `gh auth status` or `glab auth status` |
 | Claude Code | the skills are Claude Code skills | `claude --version` |
-| `tmux` | optional; only `parallelism.model: worktree-per-issue` with a `tmux` section uses it | `tmux -V` |
+| `tmux` | `parallelism.model: worktree-per-issue` seeds each bead's session in a tmux window | `tmux -V` |
+| `mise` | the toolchain manager; the gate convention is a mise task (`docs/gate-contract.md`) and worktrees are trusted through it | `mise --version` |
 
 A machine without Ruby cannot run any kit script, and every skill's first
-step is a kit script. Install Ruby before anything else.
+step is a kit script. Install Ruby before anything else - on macOS it is
+already there.
+
+Installing what is missing, in dependency order (Homebrew works on macOS
+and Linux; `/wurk:init`'s first step runs the same list, asking per tool):
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+brew install mise && echo 'eval "$(mise activate zsh)"' >> ~/.zshrc   # fish: mise activate fish | source
+mise use -g ruby@latest      # only if ruby -v is absent or older than 2.6; compiles, takes minutes
+brew install beads tmux gh   # glab instead of gh on GitLab
+gh auth login
+```
 
 Then clone wurk and link it:
 
