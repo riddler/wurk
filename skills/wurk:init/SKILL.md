@@ -305,6 +305,16 @@ stop there and say so, since every later step assumes the kit is at
      shared across every repo on the machine, and a refusal is reported,
      never worked around. Hooks are untracked, so this fits the pilot.
 
+   Two of those opt-ins write extension files under `.claude/wurk/`, and
+   in the pilot shape those files are untracked, so under
+   `worktree-per-issue` they are absent from every worktree
+   (`$WURK/docs/local-only-pilot.md`, consequence 1): the sabotage refusal
+   condition and the tracker stubs apply to a session in the main checkout
+   only, and everywhere once graduation commits them. Say so in the
+   report under the opt-in they belong to, so a person who opts in is not
+   surprised that `/wurk:commit` in a worktree named a missing note and
+   committed anyway.
+
    Re-run the lint after this step; most opt-ins touched the manifest.
    Anything the person at this machine decides rather than the project -
    the permission mode of seeded sessions, for one - goes in
@@ -387,6 +397,8 @@ stop there and say so, since every later step assumes the kit is at
     Tracker:    .beads/ (prefix <p>, local, no remote, stealth)
     Beside it:  .claude/settings.json <created | merged>, AGENTS.md <..>, CLAUDE.md <..>
     Opt-ins:    adr (seeded docs/adr/0001), review (2 agents), ...
+                sabotage, tracker: extension files apply from the main
+                checkout only until graduation (pilot consequence 1)
                 skipped: coverage - gate has no coverage stage yet
     Gate:       full green (ran: all), loop green, tier 0
     Footprint:  <n> entries in .git/info/exclude; git status shows <..>
