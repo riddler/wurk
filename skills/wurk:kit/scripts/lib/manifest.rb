@@ -629,18 +629,30 @@ class Manifest
     !mr_review_agents.empty?
   end
 
-  # Where a declared name has to resolve. A name is a bare agent name and
-  # never a path, which is what validate_mr enforces - the file is always
-  # <checkout>/.claude/agents/<name>.md.
-  def mr_review_agent_path(name, root: checkout_root)
-    File.join(root, ".claude", "agents", "#{name}.md")
+  # Where a declared name may resolve, in precedence order: the consumer's
+  # own .claude/agents/<name>.md first, then the installed roster at
+  # ~/.claude/agents/<name>.md, which is where install.rb links the agents
+  # wurk ships (wurk-diff-critic, wurk-test-critic). A name is a bare agent
+  # name and never a path, which is what validate_mr enforces. The home
+  # anchor follows lib/user_config.rb: ENV["HOME"], else Dir.home.
+  def mr_review_agent_roots(root: checkout_root, home: ENV["HOME"] || Dir.home)
+    [File.join(root, ".claude", "agents"), File.join(home, ".claude", "agents")]
   end
 
-  # Declared names with no file behind them. Reads the filesystem, so the
-  # lint calls it and validate! does not - the same split as
-  # beads_dolt_remotes.
-  def mr_review_agents_missing(root: checkout_root)
-    mr_review_agents.reject { |name| File.file?(mr_review_agent_path(name, root: root)) }
+  # The first root that has a file for the name, or nil. A consumer file
+  # shadows an installed one of the same name, so a repo can ship its own
+  # variant under wurk's name without the lint noticing anything.
+  def mr_review_agent_path(name, root: checkout_root, home: ENV["HOME"] || Dir.home)
+    mr_review_agent_roots(root: root, home: home)
+      .map { |dir| File.join(dir, "#{name}.md") }
+      .find { |file| File.file?(file) }
+  end
+
+  # Declared names with no file behind them in either root. Reads the
+  # filesystem, so the lint calls it and validate! does not - the same
+  # split as beads_dolt_remotes.
+  def mr_review_agents_missing(root: checkout_root, home: ENV["HOME"] || Dir.home)
+    mr_review_agents.reject { |name| mr_review_agent_path(name, root: root, home: home) }
   end
 
   # The only paths a rebase conflict may be auto-resolved in. Empty - the
@@ -1353,8 +1365,9 @@ module ManifestCli
       env.block!(
         code: "mr_review_agent_missing",
         message: "#{manifest.path}: mr.review_agents names #{missing.join(', ')}, which " \
-                 "#{missing.one? ? 'does' : 'do'} not resolve to a file under .claude/agents/ " \
-                 "in #{manifest.checkout_root}. Ship the agent, or drop the name."
+                 "#{missing.one? ? 'does' : 'do'} not resolve to a file in any of " \
+                 "#{manifest.mr_review_agent_roots.join(', ')}. Ship the agent, install " \
+                 "wurk's roster (install.rb), or drop the name."
       )
     end
 

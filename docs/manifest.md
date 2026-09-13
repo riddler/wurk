@@ -162,9 +162,9 @@ defaults are listed under "Defaults" below.
 
   "mr": {                             // (opt) omit = no pre-request review round
     "review_agents": [                // required when mr is present; non-empty.
-      "diff-reviewer",                // Bare agent names the repo ships as
-      "convention-reviewer"           // .claude/agents/<name>.md; see
-    ]                                 // "mr.review_agents" below
+      "wurk-diff-critic",             // Bare agent names: the repo's own
+      "convention-reviewer"           // .claude/agents/<name>.md, or wurk's
+    ]                                 // installed roster; see "mr.review_agents"
   }
 }
 ```
@@ -467,10 +467,16 @@ by agents the consumer wrote, in the consumer's own terms. A repo can
 declare both, neither, or either one.
 
 - **review_agents** - required when `mr` is present, non-empty array of
-  bare agent names. Each name resolves to `.claude/agents/<name>.md`, so a
-  name is a filename segment and never a path: an entry containing `/`, a
-  `..` segment, a leading `-`, or an empty string blocks. A name repeated
-  in the list blocks too - the round is deliberately single, so a second
+  bare agent names. Each name resolves to the first of two files that
+  exists: the repo's own `.claude/agents/<name>.md`, then the installed
+  `~/.claude/agents/<name>.md`, which is where `install.rb` links the
+  agents wurk ships (`wurk-diff-critic`, `wurk-test-critic`; each ranks its
+  findings `must-fix` / `should-fix` / `note`, the vocabulary `/wurk:mr`
+  honors). A repo file shadows an installed one of the same name, so a
+  consumer can ship its own variant under wurk's name. A name is a
+  filename segment and never a path: an entry containing `/`, a `..`
+  segment, a leading `-`, or an empty string blocks. A name repeated in
+  the list blocks too - the round is deliberately single, so a second
   instance of the same agent is another run rather than another opinion.
 
 **Absent means no round, silently.** Present-or-absent, never
@@ -487,7 +493,10 @@ only by `manifest.rb check`**, because `validate!` reads no filesystem; that
 check **blocks** (code `mr_review_agent_missing`) rather than warning, since
 a name with nothing behind it has no legitimate reading, and the alternative
 to rejecting it in the lint is discovering it in `/wurk:mr` after the gate
-has run.
+has run. The installed root is anchored on `HOME` the same way the machine
+config is (`docs/machine-config.md`), so a machine that has not run
+`install.rb` fails this check for wurk's own names, which is the honest
+result: the round would have failed to spawn them.
 
 `manifest.rb check` reports the resolved list as `data.mr_review_agents`,
 which is how `/wurk:mr` and `wurk-repo-worker` read the round without
