@@ -15,8 +15,9 @@ mise task wrapping `mix quality` (or anything else) gives every project the
 same invocation surface.
 
 At tier 0 the kit's `gate.rb` reports `ok` from the exit code, marks
-`report: unavailable` and `attested: false`, and skill judgment that needs
-stage-level detail (skip taxonomy, coverage presence) simply does not fire.
+`data.tier: 0` and `attested: false` with an empty `stages` list, and
+skill judgment that needs stage-level detail (skip taxonomy, coverage
+presence) simply does not fire.
 Skills phrase their refusal conditions against what the report can prove, and
 say so: a tier-0 green is "the gate command passed", never "a full attested
 gate is green". Tiers are about what a gate command reports, not where it

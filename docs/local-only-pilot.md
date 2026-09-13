@@ -129,6 +129,17 @@ consumer never runs:
 
 and never sets `sync.remote` in `.beads/config.yaml`.
 
+The form of `bd init` that a pilot can run with an origin visible is the
+stealth one, verified on bd 1.2.2: `bd init --prefix <p> --stealth
+--skip-agents --skip-hooks --non-interactive` wires no remote, commits
+nothing, and writes the `.beads/` exclusion itself. `docs/adoption.md`
+step 3 lists the checks that prove it, and they are run every time,
+because this is a flag-level exception to the rule below that the
+prohibition is on commands rather than arguments: it holds for the bd
+version it was checked against, and the checks are what make it safe
+rather than the flags. The plain form both wires the remote and commits
+nineteen generated files to the current branch.
+
 **The incident.** A session ran `bd bootstrap` inside the pilot consumer.
 Bootstrap auto-wired the repo's git origin as the beads sync remote and
 pushed `refs/dolt/data` to the consumer's organization remote - publishing
@@ -165,8 +176,9 @@ the same fact on every lint.
 
 **Turn bd's metrics off.** `bd config` carries `metrics.disabled`; a fully
 local pilot sets it, so the tracker makes no network call of its own
-either. It is stored in `.beads/config.yaml`, which is already untracked
-here.
+either. On bd 1.2.2 it is stored machine-wide, in
+`~/.config/bd/config.yaml`, so it is set once per machine rather than per
+pilot; earlier versions kept it in `.beads/config.yaml`.
 
 One thing a pilot does *not* have to avoid: the outbound-scan hook
 (ADR-0014) is installed per repo by the operator from the target checkout,
@@ -180,7 +192,10 @@ footprint, since git hooks are not tracked content.
 A pilot that has earned its keep graduates in one step - **commit the
 config** - and the two consequences above disappear with it:
 
-1. Remove the four entries from `.git/info/exclude`.
+1. Remove the config entries from `.git/info/exclude`. `.beads/` goes
+   with them only if step 3 chooses a sync mode that tracks it; under a
+   stealth `bd init` (see above) it stays excluded while the tracker
+   stays local.
 2. Rewrite every absolute path in `.claude/wurk.json` as a repo-relative
    one, and commit the scripts they point at. This is the change
    consequence 1's machine-bound paths were always deferring.

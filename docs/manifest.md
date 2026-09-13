@@ -689,6 +689,10 @@ with the new worktree's absolute path. No other field templates.
 
 ## Per-repo starting values
 
+A Python consumer is worked through in `docs/examples/python.md` rather
+than as a column here; it is a starting recipe, not a repo that has
+adopted.
+
 This table is about downstream consumers of the kit, not wurk itself - wurk
 develops the kit rather than consuming it for a separate codebase, so it does
 not get a column here. Its own `models.direction` and `judge` values are

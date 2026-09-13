@@ -59,10 +59,13 @@ agents are linked, not copied, so an edit in this clone is live immediately.
 4. `docs/plan.md` - the migration, phase by phase
 5. `docs/adr/` - why it is shaped this way
 
-A repo evaluating wurk before committing anything to its own history reads
-`docs/local-only-pilot.md` - the zero-footprint adoption path and its
-prohibitions. It is adoption guidance rather than part of the reading order
-above.
+A repo adopting wurk from nothing follows `docs/adoption.md` - the ordered
+checklist from prerequisites to the first merged bead, landing in the
+zero-footprint pilot shape that `docs/local-only-pilot.md` describes and
+whose prohibitions it states. `docs/examples/` holds per-language worked
+manifests and `docs/recipes/` the optional disciplines (sabotage testing, a
+coverage floor, decision records, a pre-request review round). These are
+adoption guidance rather than part of the reading order above.
 
 ## Testing
 
