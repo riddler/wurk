@@ -42,8 +42,10 @@ triggers in the repo's CLAUDE.md authority table.
 **Auto mode refuses, reports, and stops** rather than committing when:
 
 - the quality gate is red (Step 0)
-- the gate was narrowed - a run the kit reports as `data.attested: false` is
-  not a green gate for commit purposes
+- the gate was narrowed - a loop-profile run (`data.ran: "loop"`) is not a
+  green gate for commit purposes. `data.attested: false` on its own is not
+  the signal: a project with no `gate.attest` reports it on every run, and
+  `data.attestation_message` says so (`docs/gate-contract.md`, tier 0)
 - the gate-guard stage is red (Step 0): the diff changes what the gate
   checks, and the ledger the manifest names as `gate.guard_ledger` has no
   entry for it. Auto mode never writes that entry - it is a human's call
@@ -87,8 +89,11 @@ before proceeding.** While fixing, iterate with the `gate.loop` command
 directly - `gate.rb --profile loop` also works and sets `data.attested:
 false`, so an iteration run cannot be mistaken for the pre-commit bar.
 
-Do not proceed until `data.attested` is `true`, or `data.applicable` is
-`false`.
+Do not proceed until the run is a full green - `data.attested: true` where
+the manifest names `gate.attest`; otherwise `ok: true` with `data.ran:
+"all"`, which is all a tier-0 or unattested gate can prove
+(`docs/gate-contract.md`) - or `data.applicable` is `false`. A loop run
+is never the bar: `data.ran: "loop"` always carries `attested: false`.
 
 Read the result:
 
@@ -407,8 +412,9 @@ that is worth knowing.
    ingests the complete output and returns the failing stages, the root cause
    per failure, which failures share a cause, and what to look at first.
 2. Ask whether to fix the issues or leave them to the user.
-3. Do not commit until `gate.rb` reports `data.attested: true` (or
-   `data.applicable: false`).
+3. Do not commit until `gate.rb` reports a full green as Step 0 defines
+   it: `data.attested: true` with a `gate.attest`, otherwise `ok: true`
+   with `data.ran: "all"` (or `data.applicable: false`).
 
 A red **gate-guard** stage is not a failure to fix. It says the diff changes
 what the gate checks, which is a human's call: report the finding, name the
@@ -417,9 +423,12 @@ grants you the permission the check exists to withhold. No kit script has a
 code path that writes that file, on purpose - do not work around that by
 writing it by hand either.
 
-A run where `data.attested` is `false` for reasons other than an explicit
-loop profile is a different thing again: the gate was not red, it was narrow.
-Re-run `gate.rb` with no profile rather than reporting the green.
+A loop-profile run (`data.ran: "loop"`) is a different thing again: the
+gate was not red, it was narrow. Re-run `gate.rb` with no profile rather
+than reporting the green. `attested: false` beside `ran: "all"` and an
+`attestation_message` naming no `gate.attest` is the tier-0 shape, not a
+narrow run; the Step 4 report says "gate command passed" for it rather
+than "attested green".
 
 In auto mode, do not fix failures unasked. A red gate on unattended work
 means the change is not finished, and quietly repairing it turns one
