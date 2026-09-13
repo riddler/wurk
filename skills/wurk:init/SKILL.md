@@ -226,14 +226,17 @@ stop there and say so, since every later step assumes the kit is at
    the person's history:
 
    ```bash
-   git status --short                      # empty
+   git status --short                      # only "?? .claude/wurk.json", the step 3 draft
    git log --oneline -1                    # the person's last commit, not bd's
    grep -A1 '^sync' .beads/config.yaml     # no output
    bd dolt remote list                     # "No remotes configured."
    grep -v '^#' .git/info/exclude          # .beads/ and .claude/settings.local.json listed
    ```
 
-   Any check failing is reported verbatim and ends the run with the
+   The status line is one untracked file, the manifest this skill wrote in
+   step 3; step 8 excludes it. Anything else there, or a `bd init:` commit
+   at the top of the log, is bd having written to the repo.
+   Any other check failing is reported verbatim and ends the run with the
    tracker left as is - never "fixed" by a further `bd` command. The
    person decides what to do with a tracker that wired a remote.
 

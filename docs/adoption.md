@@ -167,7 +167,7 @@ After it, all of the following must hold, and each is worth checking once
 because the failure mode is a published tracker:
 
 ```bash
-git status --short                      # empty: nothing staged, nothing untracked
+git status --short                      # only "?? .claude/wurk.json" from step 2; nothing staged
 git log --oneline -1                    # your last commit, not "bd init: ..."
 grep -A1 '^sync' .beads/config.yaml     # no output
 bd dolt remote list                     # "No remotes configured."
