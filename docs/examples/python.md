@@ -55,7 +55,7 @@ the way there.
     "repair": [["uv", "sync"]]
   },
 
-  "tmux": {"session": "acme"},
+  "tmux": {"session": "acme", "model": "opus"},
 
   "artifacts": {
     "plans": "docs/plans",

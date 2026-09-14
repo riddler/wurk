@@ -815,6 +815,59 @@ class ManifestValidationTest < Minitest::Test
     refute m.valid?
     assert_match(/tmux\.session is required under tmux\.layout window-per-issue/, m.errors.join("\n"))
   end
+
+  # wu-a6r: a tmux section with no tmux.model key must block, not degrade to
+  # a bare `--model` that swallows the seeded prompt. The key is genuinely
+  # absent here (not merely blank), matching the shape reported in
+  # ciq-errata-management's manifest.
+  # sabotage: drop validate_tmux_model's call from validate_tmux -> red
+  def test_tmux_model_missing_key_blocks_under_window_per_issue
+    raw = JSON.parse(File.read(ManifestFixtures.path("tmux")))
+    raw["tmux"].delete("model")
+    m = Manifest.new(path: ManifestFixtures.path("tmux"), raw: raw)
+    refute m.valid?
+    assert_match(/tmux\.model is required whenever a tmux section is present \(both layouts\)/, m.errors.join("\n"))
+  end
+
+  # sabotage: gate validate_tmux_model behind the window-per-issue layout
+  # check the way validate_tmux gates tmux.session -> red, since
+  # tmux_session_per_issue's own layout is session-per-issue
+  def test_tmux_model_missing_key_blocks_under_session_per_issue
+    raw = JSON.parse(File.read(ManifestFixtures.path("tmux_session_per_issue")))
+    raw["tmux"].delete("model")
+    m = Manifest.new(path: ManifestFixtures.path("tmux_session_per_issue"), raw: raw)
+    refute m.valid?
+    assert_match(/tmux\.model is required whenever a tmux section is present \(both layouts\)/, m.errors.join("\n"))
+  end
+
+  # sabotage: treat an empty string the same as a present model -> red
+  def test_tmux_model_empty_string_blocks
+    m = ManifestFixtures.load_with("tmux", "tmux" => { "model" => "" })
+    refute m.valid?
+    assert_match(/tmux\.model is required whenever a tmux section is present \(both layouts\)/, m.errors.join("\n"))
+  end
+
+  # sabotage: require tmux.model unconditionally, even with no tmux section
+  # at all -> red, since "valid" carries no tmux key
+  def test_tmux_model_present_stays_valid_under_window_per_issue
+    m = ManifestFixtures.load("tmux")
+    assert m.valid?, "expected the tmux fixture (model present) to validate: #{m.errors.inspect}"
+  end
+
+  def test_tmux_model_present_stays_valid_under_session_per_issue
+    m = ManifestFixtures.load("tmux_session_per_issue")
+    assert m.valid?, "expected the tmux_session_per_issue fixture (model present) to validate: #{m.errors.inspect}"
+  end
+
+  # The important regression guard: omitting tmux entirely means no tmux
+  # integration and must never become an error on its own.
+  # sabotage: call validate_tmux_model unconditionally instead of behind
+  # `return unless tmux?` -> red, since "valid" has no tmux section
+  def test_no_tmux_section_at_all_remains_valid
+    m = ManifestFixtures.load("valid")
+    assert m.valid?, "expected a manifest with no tmux section to validate: #{m.errors.inspect}"
+    refute m.tmux?
+  end
 end
 
 class ManifestAccessorTest < Minitest::Test
