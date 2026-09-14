@@ -1086,9 +1086,13 @@ class Manifest
   # tmux.session is required under window-per-issue because ensure-session
   # and open address the session by name; under session-per-issue the
   # per-issue session name comes from the workspace name, so session may be
-  # absent.
+  # absent. The session check stays layout-gated below; tmux.model does not,
+  # since validate_tmux_model applies under both layouts.
   def validate_tmux
     return unless tmux?
+
+    validate_tmux_model
+
     return unless fetch("tmux.layout") == "window-per-issue"
 
     session = fetch("tmux.session")
@@ -1096,6 +1100,22 @@ class Manifest
 
     errors << "#{path}: tmux.session is required under tmux.layout " \
               "window-per-issue, got #{session.inspect}"
+  end
+
+  # tmux.model is required whenever a tmux section is present, under both
+  # layouts: claude_command interpolates it unguarded into the seeded
+  # session's command line, and a missing value does not degrade to "no
+  # --model flag" - the shell collapses the double space around the empty
+  # interpolation and --model swallows the seed prompt as its own argument
+  # instead, so the session launches with a garbage model name and no
+  # prompt at all (wu-a6r). There is no default to fall back to, so absence
+  # blocks rather than silently omitting the flag.
+  def validate_tmux_model
+    model = fetch("tmux.model")
+    return if model.is_a?(String) && !model.empty?
+
+    errors << "#{path}: tmux.model is required whenever a tmux section is present " \
+              "(both layouts), got #{model.inspect}"
   end
 
   # A retired key still present in the raw manifest warns with a message

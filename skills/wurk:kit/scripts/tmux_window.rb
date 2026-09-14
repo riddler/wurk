@@ -177,6 +177,16 @@ module TmuxWindow
     # govern the CLI session itself being launched here. The value is
     # `tmux.model` from the manifest; the flag must not be "simplified" away.
     #
+    # A nil or blank model is now a manifest error (Manifest#validate_tmux_model,
+    # wu-a6r) rather than an unhandled case here, so callers should never reach
+    # this with one. The raise below is a second line of defense, not the
+    # primary guard: a bare `--model` swallows the seed prompt as its own
+    # argument (the shell collapses the double space around the empty
+    # interpolation), launching the session with a garbage model name and no
+    # prompt at all - silently omitting the flag would be just as wrong, since
+    # it would contradict the explicit-model invariant above. Either way the
+    # nil must never reach the string interpolation below.
+    #
     # `permission_mode` comes from `UserConfig#tmux_permission_mode` (the
     # machine-level `~/.claude/wurk.local.json`, wu-jhb) rather than the
     # manifest - already validated against UserConfig::ENUMS so it can only
@@ -186,6 +196,11 @@ module TmuxWindow
     # `--permission-mode` alongside it; every other value is passed through
     # as `--permission-mode <value>`.
     def claude_command(model, seed, id, trailer_key, permission_mode, no_finish: false)
+      unless model.is_a?(String) && !model.empty?
+        raise ArgumentError,
+              "claude_command: model must be a non-empty string, got #{model.inspect}"
+      end
+
       body = no_finish ? seed : "#{seed}.#{format(FINISH_TEMPLATE, id: id, trailer: trailer_key)}"
       flag = permission_mode == "skip-permissions" ? "--dangerously-skip-permissions" : "--permission-mode #{permission_mode}"
       "#{caffeinate_prefix}claude #{flag} --model #{model} '#{body}'"

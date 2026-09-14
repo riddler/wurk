@@ -108,7 +108,7 @@ defaults are listed under "Defaults" below.
   "tmux": {                           // (opt) omit = no tmux integration
     "layout": "window-per-issue",     // (opt) or "session-per-issue"; see ## tmux
     "session": "statifier-ex",        // required under window-per-issue
-    "model": "opus",                  // model for seeded worktree sessions
+    "model": "opus",                  // required under both layouts; see ## tmux
     "editor": ["nvim"]                // (opt) session-per-issue only; omit = no editor window
   },
 
@@ -701,6 +701,15 @@ Absent means `window-per-issue`, today's behavior.
 worktree running the argv as the window's command, named after the argv's
 first element's basename (`["nvim"]` names the window `nvim`). Omitting
 `tmux.editor` skips the editor window entirely.
+
+`tmux.model` is required whenever a `tmux` section is present, under both
+layouts: the seeded session is launched with an explicit `--model`, and
+there is no default to fall back to. A missing or empty value is a
+validation error naming `tmux.model`, not an omitted flag - `claude_command`
+interpolates the model into the session's command line unguarded, so a nil
+there would collapse the `--model` flag's argument away and leave the shell
+to hand the seed prompt to `--model` instead, launching the session with a
+garbage model name and no prompt at all.
 
 ## `parallelism.preflight`
 
