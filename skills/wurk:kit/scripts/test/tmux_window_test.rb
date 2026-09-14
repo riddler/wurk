@@ -161,6 +161,31 @@ class TmuxWindowTest < Minitest::Test
     @fake.expect(%w[git rev-parse --git-common-dir], out: "#{MAIN}/.git\n")
   end
 
+  # wu-a6r: a nil model must never reach the string interpolation inside
+  # claude_command, even if manifest validation (lib/manifest.rb's
+  # validate_tmux_model, the primary guard) were somehow bypassed. Left
+  # unguarded, a nil model collapses the double space around it and
+  # "--model" consumes the seed prompt as its own argument, launching the
+  # session with a garbage model name and no prompt at all - so the only
+  # acceptable behavior here is to refuse before a command line is ever
+  # built, not to produce one with a bare "--model" followed by the seed.
+  # sabotage: drop the `unless model.is_a?(String) && !model.empty?` guard
+  # in claude_command -> red, no error is raised and the command line
+  # produced instead is exactly the swallowed-seed shape this guards against
+  def test_claude_command_raises_rather_than_interpolating_a_nil_model
+    error = assert_raises(ArgumentError) do
+      TmuxWindow.send(:claude_command, nil, "/wurk:work zz-abc --auto", "zz-abc", "Refs", "auto")
+    end
+    assert_match(/model must be a non-empty string/, error.message)
+  end
+
+  # sabotage: only guard against nil, not an empty string -> red
+  def test_claude_command_raises_on_an_empty_model
+    assert_raises(ArgumentError) do
+      TmuxWindow.send(:claude_command, "", "/wurk:work zz-abc --auto", "zz-abc", "Refs", "auto")
+    end
+  end
+
   # sabotage: default a missing tmux section to some session name instead of
   # blocking -> red. A guessed name creates a second, parallel session
   # nothing else in the kit can find.
