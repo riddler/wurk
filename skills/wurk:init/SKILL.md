@@ -199,8 +199,12 @@ stop there and say so, since every later step assumes the kit is at
      `/wurk:work` until that lands. Say so if the person picks it anyway.
      Default: `worktree-per-issue`, `worktrees_dir` of
      `../<repo>-worktrees`, the warm, repair, and trust values the worked
-     example gives for the toolchain, and a `tmux` section naming the
-     repo as its session so seeded bead sessions have somewhere to run.
+     example gives for the toolchain, and a `tmux` section with `session`
+     naming the repo and `model` set to the value the worked example uses,
+     so seeded bead sessions have somewhere to run and a model to run on.
+     `tmux.model` is required whenever a `tmux` section exists (the lint
+     blocks without it, since a missing model would swallow the seed
+     prompt as the `--model` argument); it is never left for a default.
    - **Changelog mode.** `none` unless the project already keeps one
      (`keep-a-changelog` or `fragments` with a `changelog.dir`). Default:
      `none`, or `keep-a-changelog` when the survey found a `CHANGELOG.md`.
