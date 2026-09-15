@@ -581,6 +581,22 @@ Standard kit exit codes. `status` always exits 0 (a read-only probe, never
 a judgment); `acquire`, `release`, and `clear` exit 1 when they report
 `blocked` (contention, a foreign owner, or an unprovable staleness claim).
 
+## `campaign_state.rb`: which campaign may a scheduler start
+
+Reads a campaign directory (`--dir`, repeatable; default
+`.claude/campaigns`) and reports, per campaign plan, its Status line,
+whether a consent file exists and is ADOPTED, and whether the campaign
+mutex (`--locks-dir`, a `lock.rb` directory named `campaign-<id>`) is
+live-held. `list` and `show ID` are read-only; `arm ID` and `disarm ID`
+rewrite exactly one line of one plan file and honor `--dry-run`. Like
+`lock.rb` it takes no manifest and runs no `Sh`: every path is an
+argument. The file schema, the campaign record's keys, and every
+`blocked`/`warnings` code are documented where the conductor reads them:
+`skills/wurk:conductor/REFERENCE.md`, "Campaign files and
+`campaign_state.rb`". The one rule worth restating here: `arm` refuses
+without an ADOPTED consent file and never writes one, because consent is
+a human artifact and this script only ever edits the plan's Status line.
+
 ## `judge.rb`: the merge-time prose judge
 
 The mechanism ADR-0008 decided on: a merge-time model judge over
