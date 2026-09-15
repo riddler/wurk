@@ -228,6 +228,26 @@ dispatch names, short or long; and whether this campaign runs a gate
 semaphore at all. A repo whose gate cannot be run here is a repo that
 is not ready to be dispatched into.
 
+**Read the forge's merge policy, once, per repo, in MR mode.** Ask the
+forge - not the campaign file, not memory of an earlier campaign - two
+facts: which merge methods the repo allows, and whether it deletes a
+request's branch when it merges. On GitHub, `gh api repos/<owner>/<repo>`
+returns `allow_merge_commit`, `allow_squash_merge`, `allow_rebase_merge`,
+and `delete_branch_on_merge`; on GitLab the project record carries
+`merge_method` and `remove_source_branch_after_merge`. Journal both
+facts, and journal the ONE method every landing in this campaign will
+use. When the forge allows more than one, the pick is the conductor's
+call, made here and journaled with its reason (a reasonable default
+reason: the method the default branch's own history already shows),
+never guessed at landing time. Everything downstream that says "the
+journaled merge method" means this read. A campaign that skips this
+learns the policy from the forge's refusal one request too late - one
+campaign's first merge failed with "not allowed on this repository"
+after every bead in the wave was green, and every landing in it then
+errored on a branch delete because the forge had already deleted the
+branch. A repo that allows no method the conductor can use is
+journaled and its landings are queued for the operator, not improvised.
+
 ## Phase 1 - Ground truth
 
 Verify the campaign's ground-truth claims against live state (the
@@ -658,9 +678,14 @@ conductor double-dispatched the same problem).
 
 ## Phase L - Landing
 
-MR mode: verify merge via the forge, pull, close bead (queue the close
-if the tracker links it to work elsewhere), remove worktree,
-force-delete branch, run the manifest's outbound scan over the full
+MR mode: where the operator's consent quotes a carve-out letting the
+conductor merge this campaign's requests, merge with the journaled
+merge method from Phase 0 and never with one the forge disallows;
+without such a carve-out the operator merges (the mode's default) and
+the conductor only verifies. Either way: verify merge via the forge,
+pull, close bead (queue the close if the tracker links it to work
+elsewhere), remove worktree, delete the remote branch only where the
+forge left one, run the manifest's outbound scan over the full
 tracker export (see Outbound content - the push unit is the whole db,
 not the beads this campaign touched), push tracker with confirmed
 output - but only where the repo's `beads.sync` is `git` or
@@ -668,6 +693,12 @@ output - but only where the repo's `beads.sync` is `git` or
 `local`) there is no tracker push at all: journal "tracker is local-only,
 nothing pushed" and land the rest. The conductor owning tracker pushes
 never means it may make one the repo's manifest forbids.
+
+When Phase 0 journaled that the forge deletes merged branches, "remote
+ref does not exist" against a request the forge reports merged is the
+expected outcome - journal it as success, not as an error to retry or
+investigate. The local branch goes with the worktree (the kit's
+worktree_cleanup.rb removes it on the forge's merged signal).
 
 LOCAL-ONLY mode, per green bead: merge the bead branch into the
 integration branch (ff when possible; compose textual conflicts
