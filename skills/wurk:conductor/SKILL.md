@@ -1,6 +1,6 @@
 ---
 name: wurk:conductor
-description: Run a multi-hour autonomous campaign over one repo or a fleet - build the ready-graph from the beads db(s), dispatch per-bead work through the normal wurk pipeline via wurk-repo-worker agents, manage dependency linkage, journal everything, and end with a morning report + retro. Supports MR mode and LOCAL-ONLY mode (integration branch, no pushes). Reads .claude/wurk-fleet.json when the project has one; a consumer may ship its own fleet-specific variant under another name.
+description: Run a multi-hour autonomous campaign over one repo or a fleet - build the ready-graph from the beads db(s), dispatch per-bead work through the normal wurk pipeline via wurk-repo-worker agents, manage dependency linkage, journal everything, and end with a morning report + retro. Supports MR mode and LOCAL-ONLY mode (integration branch, no pushes), and an --armed invocation a non-interactive caller can use to run the single armed campaign. Reads .claude/wurk-fleet.json when the project has one; a consumer may ship its own fleet-specific variant under another name.
 ---
 
 # wurk:conductor - campaign orchestration in front of wurk
@@ -85,6 +85,127 @@ fork NOT named is stop-and-queue, always.
   carve-outs (e.g. "push this one branch and open the PR") are executed
   exactly as quoted, with the standard outbound scans, and journaled as
   [operator] with the carve-out quote.
+
+### `--armed` - the unattended invocation
+
+`/wurk:conductor --armed` is the shape a scheduler or any other
+non-interactive caller invokes when no human is at the keyboard to name
+a campaign. It names nothing: the campaign is whichever one the
+operator armed, read from disk, and everything a human would otherwise
+answer at invocation time is answered by a refusal instead. The skill
+picks; it never widens. The consent it runs under is the campaign's
+consent file, already ADOPTED by the operator, and nothing in this mode
+manufactures, infers, or extends that.
+
+**The exact command.** Two equivalent forms, both pinning the model from
+the manifest's `tmux.model` - never from this skill, which carries no
+`model:` frontmatter on purpose - and both run from the project root:
+
+```bash
+# tmux-seeded: the kit reads tmux.model and the machine config's
+# permission mode itself. <id> is the campaign id the caller expects
+# (from `campaign_state.rb list`'s data.runnable); with --no-finish it
+# only names the window, and the arity check still wants it.
+ruby ~/.claude/skills/wurk:kit/scripts/tmux_window.rb ensure-session
+ruby ~/.claude/skills/wurk:kit/scripts/tmux_window.rb open --no-finish \
+  conductor-<id> <project root> <id> '/wurk:conductor --armed'
+
+# bare, for a caller without tmux: the same flags the kit would have
+# passed, with <tmux.model> read from .claude/wurk.json by the caller.
+claude -p --dangerously-skip-permissions --model <tmux.model> \
+  '/wurk:conductor --armed'
+```
+
+`--no-finish` is required: the conductor never commits bead work, so
+the appended `/wurk:commit` clause would be wrong here. No script
+invokes the conductor, and none ever will (the kit's contract test
+forbids it); the caller runs one of the lines above, and the skill does
+the rest.
+
+**Pick, with three refusals.** Run
+`ruby ~/.claude/skills/wurk:kit/scripts/campaign_state.rb list`
+(`--dir` and `--locks-dir` from the fleet manifest's `campaignState` /
+`multiCampaign.locksDir` when the project has one; the defaults
+otherwise) and read `data.campaigns[]`. In this order:
+
+1. **Nothing armed, or more than one.** Count the records with
+   `armed: true`. Zero (including a `campaigns_dir_missing` warning) is
+   the refusal `nothing_armed`; two or more is `ambiguous_armed`, listing
+   the ids - the operator dispatches one explicitly with
+   `/wurk:conductor campaign <id>`, exactly as "Ambiguous invocation
+   stops" says above, and this mode never picks between them. Neither
+   refusal has a campaign to journal into, so it goes to the session's
+   output, which is the caller's transcript.
+2. **Consent missing or not adopted.** The one armed record's
+   `consent.adopted` is false (the `consent_missing` warning, or a
+   consent Status other than ADOPTED): refuse `consent_not_adopted`.
+   Arming without adopted consent is a hand-edited Status line, and a
+   scheduler is the wrong reader to ratify it.
+3. **Mutex held.** `running: true` (the campaign mutex at
+   `mutex.dir`, `<campaigns dir>/locks/campaign-<id>/` by default, has
+   a live holder): refuse `campaign_running` and leave that session
+   alone - a second conductor on one campaign is the collision Phase 3's
+   probe exists to prevent. A `stale_mutex` warning (`mutex.stale` true)
+   is not running: run `lock.rb clear --dir <mutex.dir>`, which itself
+   refuses anything not provably stale, journal the clear as
+   [cleanup] with the probe's evidence, and continue only if it
+   cleared; if it refused, the refusal is `campaign_running` too.
+
+After the three, the id is the single member of `data.runnable`; if it
+is not, stop and report the discrepancy rather than proceed - the script
+and this prose disagree, and the caller cannot arbitrate. Refusals 2 and
+3 name a campaign, so they are ALSO journaled `[refusal]` in that
+campaign's journal, with the envelope field that decided it. Every
+refusal ends the session with a single final line the caller can
+deliver verbatim: `REFUSAL: <code> <ids or reason>`.
+
+**Take the mutex, then run the campaign as `campaign <id>`.** Before
+Phase 0:
+
+```bash
+ruby ~/.claude/skills/wurk:kit/scripts/lock.rb acquire \
+  --campaign-mutex <mutex.dir> --campaign <id> --bead conductor \
+  --pid <session pid> --purpose "unattended conductor" --wait-seconds 0
+```
+
+`<session pid>` is this session's own process - from a shell inside the
+session, `$PPID`, confirmed with `ps -o comm= -p $PPID` before use. It
+is what lets the NEXT scheduled run tell a crashed session (a provably
+dead pid, which `lock.rb clear` will clear) from a live one (which it
+refuses to touch); a mutex taken without a pid can only ever be cleared
+by a human. A `lock_contended` block here is refusal 3 arriving late -
+refuse `campaign_running`, do not wait. Holding the mutex is what
+`campaign_state.rb` reports as `running`; an interactive
+`campaign <id>` invocation takes the same mutex at Phase 0 for the same
+reason, so an unattended run that arrives while a human is conducting
+refuses instead of colliding. Release it (`lock.rb release`) as the last
+act after the morning report, never earlier: a released mutex is a
+runnable campaign, and the scheduler's next tick will start it.
+
+Then journal, as the first entry of this run:
+
+    [operator] started by scheduler <stamp>: /wurk:conductor --armed picked
+    <id> (campaign_state.rb list: armed [<ids>], runnable [<ids>]); consent
+    ADOPTED <consent.status_stamp>; mutex <mutex.dir> pid <pid>
+
+and proceed from Phase 0 exactly as `/wurk:conductor campaign <id>`
+would, under the campaign file's Mode and the consent file's quote. The
+stamp is the session's start time; "scheduler" is the caller's role, not
+a name - no scheduler product, machine, or persona is ever named here or
+in the journal.
+
+**End with the report at a path the caller can deliver.** The morning
+report (Journal and morning report, below) is written where the
+campaign's convention puts it - `<campaigns dir>/<id>-report.md` beside
+the plan, or the journal-dir name the multi-campaign protocol
+prescribes - and its absolute path is the session's final output line,
+`MORNING REPORT: <absolute path>`, printed after the mutex is released.
+A `claude -p` caller receives the transcript on stdout, and a tmux
+caller reads the pane; either way the last line is the one thing the
+caller needs to deliver the report, and it is the same line whether the
+campaign finished, aborted, or was refused above (then it reads
+`REFUSAL:`). The daemon side - what schedules the tick, where the report
+is delivered, presence - is the caller's, not this skill's.
 
 ## Phase 0 - Sync
 
@@ -243,7 +364,11 @@ worktree isolation when parallel workers share directories.
     campaign id;
   - the **machine-wide cap** - how many gates run at once across ALL
     campaigns, yours and anyone else's - enforced by the shared
-    **machine gate slots** (`--slots-dir` + `--slots N`).
+    **machine gate slots** (`--slots-dir` + `--slots N`). The machine
+    slot count comes from the machine config's `machine.gate_slots`
+    when set; `--slots N` relayed from a fleet manifest is only the
+    fallback, and a `slots_overridden` warning in the acquire envelope
+    means the relayed number was not the one used.
   Distinct from both is the **repo lock**: the project's shared
   resource-keyed gate lock, keyed to a repo, which serializes heavy
   runs against the same checkout no matter whose campaign they belong
@@ -617,7 +742,14 @@ overrides for THIS dispatch (each cites its source):
   merges your branch", or MR authorization>
 - Never push the tracker (conductor-owned).
 - <worktree override: "wurk:branch SKIPPED - worktree exists at <path>,
-  branch <name>, verify via git branch --show-current", or "none">
+  branch <name>, verify via git branch --show-current", or "none". When
+  the worker cuts its own: /wurk:branch's create-and-warm step runs the
+  base preflight (`parallelism.preflight`, default true, docs/manifest.md)
+  on every cut, and a `blocked preflight_refused` with
+  data.preflight.reason in {local_default_diverged,
+  default_checked_out_elsewhere, fast_forward_failed} is
+  stop-and-report - never a reset of the default branch, never a
+  manifest opt-out.>
 - <per-repo hazard slot, or "none">
 
 <Moved-files slot - fill exactly one, and never leave it empty. The

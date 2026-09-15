@@ -72,11 +72,16 @@ wait on the same lock:
   Serializes cross-campaign tracker writes.
 - `locks/machine-gate-slots/slot-1/`, `slot-2/`, ... - at most
   `multiCampaign.machineGateSlots` concurrent full gates/warms
-  machine-wide (warms at 4x on one machine produced DB-sandbox
-  failures). A heavy run acquires the repo gate lock FIRST, then any
-  free slot; release in reverse order. Fixed acquisition order
-  prevents deadlock. A campaign that caps its own concurrency below the
-  machine cap takes its campaign mutex before the slot.
+  machine-wide - the preferred source for that count is the machine
+  config's `machine.gate_slots` (`~/.claude/wurk.local.json`), which
+  `lock.rb acquire` takes over a relayed `--slots N` and flags with a
+  `slots_overridden` warning when the two differ; the manifest number
+  is the fallback for a box that sets none. (Warms at 4x on one machine
+  produced DB-sandbox failures.) A heavy run acquires the repo gate
+  lock FIRST, then any free slot; release in reverse order. Fixed
+  acquisition order prevents deadlock. A campaign that caps its own
+  concurrency below the machine cap takes its campaign mutex before the
+  slot.
 - `locks/registry/` - rule 1.
 
 Owner-file discipline: the owner file carries `campaign=<id> bead=<id>
@@ -226,6 +231,22 @@ Warnings a caller should surface: `consent_missing` (ARMED with no
 consent file), `stale_mutex` (held but provably stale - not counted as
 running; `lock.rb clear` is the tool for that, never this script),
 `unknown_status`.
+
+### The unattended invocation reads this record
+
+`/wurk:conductor --armed` (SKILL.md, "`--armed` - the unattended
+invocation") is the consumer of `list`: it counts the records with
+`armed: true` (zero refuses `nothing_armed`, more than one refuses
+`ambiguous_armed` - the bare-invocation rule in rule 1 above, applied
+without a human to ask), then reads the one record's `consent.adopted`
+(false refuses `consent_not_adopted`) and `running` (true refuses
+`campaign_running`; a `stale_mutex` warning is handed to `lock.rb clear`
+first). The survivor is `data.runnable`'s single member. The session then
+takes the campaign mutex at `mutex.dir` for its whole life, which is what
+turns `running` true for the next `list`, and releases it after the
+morning report. A mutation this mode never performs: `arm`, `disarm`, or
+writing a consent file - it reads what the operator set and refuses when
+that is not enough.
 
 ## Linkage-ledger schema
 
