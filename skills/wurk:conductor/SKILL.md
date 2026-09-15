@@ -226,7 +226,9 @@ run. One measurement settles two decisions, both of them yours and
 both made before the first dispatch (Phase 3): which gate PATH every
 dispatch names, short or long; and whether this campaign runs a gate
 semaphore at all. A repo whose gate cannot be run here is a repo that
-is not ready to be dispatched into.
+is not ready to be dispatched into. This one run is a budget
+measurement, not proof the suite is deterministic - Phase L's
+post-landing repeat is what actually tests that.
 
 **Read the forge's merge policy, once, per repo, in MR mode.** Ask the
 forge - not the campaign file, not memory of an earlier campaign - two
@@ -737,6 +739,19 @@ found two worktrees later - always run it. Close the bead with a landing
 note, remove worktree, force-delete branch (non-ff delete expected).
 Merged-tree behavior is otherwise verified by the next bead's full gate;
 journal that risk when a landing composes anything non-trivial.
+
+**Repeat the gate after landing, both modes.** One post-landing gate
+run only proves the merged tree passed once; an order-dependent flake
+can sit below that. For a short gate, run it again 3-5 times right
+after the landing (seconds, on the repo's own measured budget) and
+capture each run's FULL output, not a truncated tail - a red run with
+its output lost is worse than a gate never repeated, because it leaves
+a known flake unattributed. A differing "N runs, M assertions" line
+between two green runs is itself a finding to journal, never something
+to retry past silently. Journal what else was running at the same
+time (other worker gates, another campaign's landing) alongside the
+result, since a concurrency-shaped flake only shows up under load a
+single clean run never sees.
 
 ## Outbound content
 
