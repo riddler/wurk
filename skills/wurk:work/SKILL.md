@@ -66,7 +66,8 @@ workspace exists, so it must run before the step 0.5 handoff to
   work happens in a sibling repository and this bead exists to track and
   coordinate it (ADR-0009).** Then:
   1. Claim it as usual (`bead.rb claim <id>`) - the claim still marks
-     coordination in progress - and `bead.rb sync push`, best-effort.
+     coordination in progress - then `bead.rb sync scan` and `bead.rb sync
+     push`, best-effort; read the scan result before pushing.
   2. **Do not invoke `/wurk:branch`. Do not create a branch or a workspace.
      Do not size the job.** There is nothing here for a workspace to do, and
      an upstream bead opens no request, so `/wurk:cleanup` would never reap
@@ -162,15 +163,18 @@ picker will refuse to touch. Intake owes the label at creation. An
 it: the bead's blast radius must be decided at creation either way, and "no
 files change here" is a decided blast radius, not a missing one.
 
-Then claim and publish:
+Then claim and publish, through the kit's gated pair:
 
 ```bash
 ruby ~/.claude/skills/wurk:kit/scripts/bead.rb claim <id>
+ruby ~/.claude/skills/wurk:kit/scripts/bead.rb sync scan   # read the result first
 ruby ~/.claude/skills/wurk:kit/scripts/bead.rb sync push
 ```
 
 The push is best-effort and never gates the claim - sessions in this
 checkout's worktrees share the database directly and see the claim regardless.
+Read the scan result before pushing, same as `/wurk:next`'s claim-publish
+step: a `blocked` `outbound_scan_hit` is a stop, never a rephrase-and-retry.
 
 Now that the bead exists, apply step 0's upstream check to it and take step
 0's exit if it fires.

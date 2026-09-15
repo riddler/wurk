@@ -186,8 +186,10 @@ scans everything a push would publish to that remote - the full post-image
 content of every added or modified file in every newly published commit
 (a rename included, so a move cannot carry content past the gate
 invisibly), every one of those commits' messages, and the ref names
-themselves. `bead.rb sync push` scans every string in the full tracker
-export before it shells the tracker's own push.
+themselves. `bead.rb sync scan` scans every string field of the full
+tracker export before `bead.rb sync push` shells the tracker's own push;
+which fields an outbound-scan hit refuses on is the manifest's
+`beads.scan_refusal` (`all` or `titles`).
 
 Not covered: anything that leaves the machine by a route the kit never
 touches - a push run from another tool or another checkout that has no hook

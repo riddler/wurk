@@ -268,8 +268,8 @@ fact.
 
 4. **Claim every bead in the chosen batch (manual mode) - all of them, before
    any workspace exists.** Under `--auto`, this claim already happened inside
-   selection (ADR-0012): skip straight to this step's `bead.rb sync push` and
-   run nothing else here.
+   selection (ADR-0012): skip straight to this step's `bead.rb sync scan` and
+   `bead.rb sync push` and run nothing else here.
 
    ```bash
    ruby ~/.claude/skills/wurk:kit/scripts/bead.rb claim <id>   # once per bead
@@ -294,14 +294,18 @@ fact.
    lets a later refresh or selection run see that the collision was accepted on
    purpose rather than missed.
 
-   Then publish the claims, once for the batch:
+   Then publish the claims, once for the batch, through the kit's gated pair:
 
    ```bash
+   ruby ~/.claude/skills/wurk:kit/scripts/bead.rb sync scan   # read the result first
    ruby ~/.claude/skills/wurk:kit/scripts/bead.rb sync push
    ```
 
-   Best-effort: sessions in this checkout's workspaces share the database
-   directly and see the claims regardless.
+   Read the scan result before pushing: a `blocked` `outbound_scan_hit` is a
+   stop, reporting the issue ids and field names it names, never a
+   rephrase-and-retry; `data.informational_hits` do not refuse but are worth
+   naming in the same report. Best-effort: sessions in this checkout's
+   workspaces share the database directly and see the claims regardless.
 
 5. **Read each chosen bead.**
 

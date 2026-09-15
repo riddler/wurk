@@ -715,14 +715,18 @@ the conductor only verifies. Either way: verify merge via the forge,
 pull, close bead (queue the close if the tracker links it to work
 elsewhere; a pre-decided supersede/absorb lands as supersede-then-close,
 below), remove worktree, delete the remote branch only where the
-forge left one, run the manifest's outbound scan over the full
-tracker export (see Outbound content - the push unit is the whole db,
-not the beads this campaign touched), push tracker with confirmed
-output - but only where the repo's `beads.sync` is `git` or
-`dolthub`. Under `local` (including an unset key, which defaults to
-`local`) there is no tracker push at all: journal "tracker is local-only,
-nothing pushed" and land the rest. The conductor owning tracker pushes
-never means it may make one the repo's manifest forbids.
+forge left one, run the kit's gated pair over the full tracker export
+(see Outbound content - the push unit is the whole db, not the beads
+this campaign touched): `bead.rb sync scan`, then read its result - a
+`blocked` `outbound_scan_hit` is the refusal, from the Outbound content
+section's rule, never a rephrase-and-retry; `data.informational_hits`
+go into the journal by id and fields - and only then `bead.rb sync
+push`, journaling `data.confirmed`. This runs in place of a hand-run
+scan and a bare `bd dolt push`, and only where the repo's `beads.sync`
+is `git` or `dolthub`. Under `local` (including an unset key, which
+defaults to `local`) there is no tracker push at all: journal "tracker
+is local-only, nothing pushed" and land the rest. The conductor owning
+tracker pushes never means it may make one the repo's manifest forbids.
 
 Supersede-then-close, both modes: the tracker enforces its edges at
 close time - `bd close` on a bead with an open blocker is refused
@@ -836,8 +840,8 @@ actually sends:
   correct here, which is why the habit forms.
 - A whole-database tracker push publishes every record in the db, not the
   records the campaign touched. Scan the full export - pipe
-  `bd export --all` through the scan - never a loop over the beads you
-  worked.
+  `bd export --all` through the scan (the kit's form of this is
+  `bead.rb sync scan`) - never a loop over the beads you worked.
 - Same shape elsewhere: a squashed or force push, a mirror, a release
   bundle. Any channel whose push unit is larger than the artifact you
   edited gets scanned at the unit it publishes.
