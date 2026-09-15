@@ -17,7 +17,7 @@ conductor work, not implementation.)
 
 If the invoking project has a fleet manifest (e.g. `.claude/wurk-fleet.json`),
 read it first: repo roster, dependency edges, ownership map, policy
-block, outbound-content scan command, stacking rules. Policy is
+block, stacking rules. Policy is
 non-negotiable at runtime; a situation that seems to require violating
 it goes to the morning queue instead.
 
@@ -124,7 +124,7 @@ the rest.
 
 **Pick, with three refusals.** Run
 `ruby ~/.claude/skills/wurk:kit/scripts/campaign_state.rb list`
-(`--dir` and `--locks-dir` from the fleet manifest's `campaignState` /
+(`--dir` and `--locks-dir` from the fleet manifest's `campaignState.dir` /
 `multiCampaign.locksDir` when the project has one; the defaults
 otherwise) and read `data.campaigns[]`. In this order:
 
@@ -468,7 +468,12 @@ worktree isolation when parallel workers share directories.
   never green. Hold the same line yourself before accepting a worker's
   result: a green claim with no sentinel behind it is not-run.
 - **Pivot on block**: queue the ruling, journal [ruling-queued], keep
-  dispatching everything the block does not touch.
+  dispatching everything the block does not touch. When `manifest.rb
+  check` reports a non-null `data.external_tracker` whose lifecycle
+  carries a `needs_attention` entry, the hand-off writes the decision
+  context on the ticket body first and then performs that entry's
+  status and assignee transition together (docs/manifest.md,
+  `external_tracker` > "The lifecycle").
 - **Correction broadcast**: when a dispatch-time assumption dies,
   SendMessage every affected in-flight worker with a [correction] and
   journal it. Consent changes reach workers ONLY this way.
