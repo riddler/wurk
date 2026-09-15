@@ -5,6 +5,7 @@
     "prefix": "wu",
     "topology": "beads",
     "sync": "dolthub",
+    "scan_refusal": "titles",
     "areas": {
       "labels": [
         "area:kit",
