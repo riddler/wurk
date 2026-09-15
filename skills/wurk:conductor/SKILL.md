@@ -432,7 +432,7 @@ worktree isolation when parallel workers share directories.
   SendMessage every affected in-flight worker with a [correction] and
   journal it. Consent changes reach workers ONLY this way.
 - **Name a report file in every dispatch.** Fill the appendix's REPORT
-  slot with an absolute per-bead path `<reports dir>/<bead-id>-report.md`.
+  slot with an absolute per-bead path `<reports dir>/<bead-id>-report.json`.
   The reports dir sits inside the campaign state dir (Journal and
   morning report, above) - excluded, never committed - defaulting to
   `.claude/campaigns/reports/<campaign-id>/` when the project's fleet
