@@ -7,6 +7,7 @@ require "tmpdir"
 require "fileutils"
 require_relative "../lib/lock"
 require_relative "../lock"
+require_relative "support/user_config_helper"
 
 # A no-op sleeper that just counts calls, so a bounded-wait test never
 # sleeps for real. Paired with FakeClock below, this is the seam the plan's
@@ -241,6 +242,29 @@ class LockLibTest < Minitest::Test
     assert_operator waiter.sleeper.calls.length, :>=, 1
   end
 
+  # --- resolve_slot_count: the one precedence rule -------------------------
+
+  # sabotage: prefer the flag over the machine value -> red. The fleet
+  # manifest (which the flag relays) is shared by every machine that runs
+  # the fleet; the machine config describes this box.
+  def test_resolve_slot_count_prefers_the_machine_config_and_flags_the_override
+    result = Lock.resolve_slot_count(machine: 2, flag: 3)
+    assert_equal({ count: 2, source: "machine_config", overridden: true }, result)
+  end
+
+  # sabotage: report overridden when both agree -> red (a warning for a
+  # non-event trains callers to ignore the warning)
+  def test_resolve_slot_count_does_not_flag_an_agreeing_flag
+    assert_equal({ count: 2, source: "machine_config", overridden: false }, Lock.resolve_slot_count(machine: 2, flag: 2))
+    assert_equal({ count: 2, source: "machine_config", overridden: false }, Lock.resolve_slot_count(machine: 2, flag: nil))
+  end
+
+  # sabotage: return nil when only the flag is given -> red
+  def test_resolve_slot_count_falls_back_to_the_flag
+    assert_equal({ count: 3, source: "flag", overridden: false }, Lock.resolve_slot_count(machine: nil, flag: 3))
+    assert_equal({ count: nil, source: nil, overridden: false }, Lock.resolve_slot_count(machine: nil, flag: nil))
+  end
+
   # --- probe: pid liveness ----------------------------------------------------
 
   def test_probe_on_a_lock_owned_by_a_reaped_forked_pid_reports_dead_and_stale
@@ -378,6 +402,8 @@ end
 # LockCli - the envelope-wrapped subcommands, driven through the CLI
 # dispatcher exactly the way plan_state_test.rb drives PlanStateCli.
 class LockCliTest < Minitest::Test
+  include UserConfigHelper
+
   def setup
     @dir = Dir.mktmpdir
   end
@@ -462,6 +488,86 @@ class LockCliTest < Minitest::Test
     assert_equal "other", env["data"]["contended"]["probe"]["owner"]["campaign"]
   end
 
+  # --- acquire: slot count from the machine config ---------------------------
+
+  def slots_dir
+    File.join(@dir, "slots")
+  end
+
+  # sabotage: read the count from --slots instead of machine.gate_slots when
+  # both are present -> red (slot-3 would be created; the pool on this
+  # machine is capped at 2)
+  def test_acquire_prefers_machine_gate_slots_over_the_slots_flag_and_warns
+    with_user_config("machine" => { "gate_slots" => 2 }) do
+      Lock.try_acquire(File.join(slots_dir, "slot-1"), { "campaign" => "other", "bead" => "zz-9" })
+      Lock.try_acquire(File.join(slots_dir, "slot-2"), { "campaign" => "other", "bead" => "zz-9" })
+
+      code, env = run_cli(%W[acquire --slots-dir #{slots_dir} --slots 3 --campaign c1 --bead zz-1
+                             --wait-seconds 0 --poll-seconds 1])
+
+      assert_equal 1, code
+      assert_equal "lock_contended", env["blocked"].first["code"]
+      refute Dir.exist?(File.join(slots_dir, "slot-3")), "the flag's third slot must not be taken"
+      assert_equal 2, env["data"]["slots"]
+      assert_equal "machine_config", env["data"]["slots_source"]
+      assert_equal ["slots_overridden"], env["warnings"].map { |w| w["code"] }
+    end
+  end
+
+  # sabotage: require --slots even when the machine config has gate_slots
+  # -> red. The whole point of the machine seam is that the conductor no
+  # longer has to relay a number the machine already knows.
+  def test_acquire_takes_a_slot_from_the_machine_config_without_a_slots_flag
+    with_user_config("machine" => { "gate_slots" => 1 }) do
+      code, env = run_cli(%W[acquire --slots-dir #{slots_dir} --campaign c1 --bead zz-1 --wait-seconds 0])
+
+      assert_equal 0, code
+      assert Dir.exist?(File.join(slots_dir, "slot-1"))
+      assert_equal 1, env["data"]["slots"]
+      assert_equal "machine_config", env["data"]["slots_source"]
+      assert_empty env["warnings"]
+    end
+  end
+
+  # sabotage: ignore --slots when the machine config is silent -> red
+  def test_acquire_falls_back_to_the_slots_flag_when_the_machine_config_is_silent
+    with_user_config(nil) do
+      code, env = run_cli(%W[acquire --slots-dir #{slots_dir} --slots 2 --campaign c1 --bead zz-1 --wait-seconds 0])
+
+      assert_equal 0, code
+      assert_equal 2, env["data"]["slots"]
+      assert_equal "flag", env["data"]["slots_source"]
+      assert_empty env["warnings"]
+    end
+  end
+
+  # sabotage: default the count to 1 when neither source names one -> red.
+  # A silent default would let a slot acquire succeed on a machine nobody
+  # sized.
+  def test_acquire_slots_dir_with_no_count_anywhere_is_a_usage_error_naming_both_sources
+    with_user_config(nil) do
+      io = StringIO.new
+      err = capture_stderr do
+        _, status = capture_exit { LockCli.run(%W[acquire --slots-dir #{slots_dir} --campaign c1 --bead zz-1], io: io) }
+        assert_equal 2, status
+      end
+      assert_match(/machine\.gate_slots/, err)
+      assert_match(/--slots N/, err)
+    end
+  end
+
+  # sabotage: let acquire run on an invalid machine config -> red. A
+  # gate_slots the validator rejected must not silently become "absent".
+  def test_acquire_blocks_on_an_invalid_machine_config
+    with_user_config("machine" => { "gate_slots" => 0 }) do
+      code, env = run_cli(%W[acquire --slots-dir #{slots_dir} --slots 2 --campaign c1 --bead zz-1 --wait-seconds 0])
+
+      assert_equal 1, code
+      assert_equal ["user_config_invalid"], env["blocked"].map { |b| b["code"] }
+      refute Dir.exist?(slots_dir)
+    end
+  end
+
   # --- release ----------------------------------------------------------------
 
   def test_release_succeeds_for_the_owner_that_holds_it
@@ -538,5 +644,14 @@ class LockCliTest < Minitest::Test
     [nil, 0]
   rescue SystemExit => e
     [nil, e.status]
+  end
+
+  def capture_stderr
+    original = $stderr
+    $stderr = StringIO.new
+    yield
+    $stderr.string
+  ensure
+    $stderr = original
   end
 end

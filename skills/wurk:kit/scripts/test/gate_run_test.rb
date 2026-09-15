@@ -10,6 +10,7 @@ require_relative "../gate_run"
 require_relative "../lib/lock"
 require_relative "support/manifest_helper"
 require_relative "support/fake_sh"
+require_relative "support/user_config_helper"
 
 # GateRun: `start` (detached launch, optional lock acquisition), `supervise`
 # (the detached child - never exercised via a real spawn here, since FakeSh
@@ -19,6 +20,7 @@ require_relative "support/fake_sh"
 # 260902-wu-4x9-long-gate-runner-and-lock-helper.md Phase 4.
 class GateRunTest < Minitest::Test
   include ManifestHelper
+  include UserConfigHelper
 
   def setup
     @fake = FakeSh.new
@@ -191,10 +193,48 @@ end
 
   def test_start_usage_error_on_slots_dir_without_slots_count
     in_tmp_repo("gate_tier1") do |dir|
-      err = capture_io_stderr do
-        assert_raises(SystemExit) { GateRun.run(%W[start --run-dir #{dir}/run --slots-dir #{dir}/slots]) }
+      with_user_config(nil) do
+        err = capture_io_stderr do
+          assert_raises(SystemExit) { GateRun.run(%W[start --run-dir #{dir}/run --slots-dir #{dir}/slots]) }
+        end
+        assert_match(/usage/, err)
+        assert_match(/machine\.gate_slots/, err)
       end
-      assert_match(/usage/, err)
+    end
+  end
+
+  # sabotage: resolve the count from --slots alone in gate_run.rb -> red.
+  # lock.rb and gate_run.rb are the two entry points to one slot pool; if
+  # only one honored the machine cap, the other could take a slot the
+  # machine does not have. --dry-run so nothing is spawned; the intended
+  # mkdir names the pool size.
+  def test_start_prefers_machine_gate_slots_over_the_slots_flag
+    in_tmp_repo("gate_tier1") do |dir|
+      with_user_config("machine" => { "gate_slots" => 2 }) do
+        code, env = run_gr(%W[start --run-dir #{dir}/run --slots-dir #{dir}/slots --slots 3
+                              --campaign c1 --bead zz-1 --dry-run])
+
+        assert_equal 0, code
+        assert_equal 2, env["data"]["slots"]
+        assert_equal "machine_config", env["data"]["slots_source"]
+        assert_equal ["slots_overridden"], env["warnings"].map { |w| w["code"] }
+        assert env["commands"].any? { |c| c.include?("slot-1..2") }, env["commands"].inspect
+      end
+    end
+  end
+
+  # sabotage: require --slots even when the machine config has gate_slots
+  # -> red
+  def test_start_takes_the_slot_count_from_the_machine_config_alone
+    in_tmp_repo("gate_tier1") do |dir|
+      with_user_config("machine" => { "gate_slots" => 1 }) do
+        code, env = run_gr(%W[start --run-dir #{dir}/run --slots-dir #{dir}/slots --campaign c1 --bead zz-1 --dry-run])
+
+        assert_equal 0, code
+        assert_equal 1, env["data"]["slots"]
+        assert_equal "machine_config", env["data"]["slots_source"]
+        assert_empty env["warnings"]
+      end
     end
   end
 

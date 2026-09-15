@@ -39,6 +39,31 @@ module Lock
   DEFAULT_SLEEPER = ->(seconds) { Kernel.sleep(seconds) }
 
   class << self
+    # The one precedence rule for the machine gate-slot count, shared by
+    # lock.rb acquire and gate_run.rb start so the two entry points to the
+    # slot pool can never disagree about its size. `machine` is the
+    # machine config's `machine.gate_slots` (nil when unset); `flag` is the
+    # `--slots N` value the caller passed (nil when absent), which today is
+    # the fleet manifest's number relayed by the conductor.
+    #
+    # The machine wins. A fleet manifest is checked in and shared by every
+    # machine that runs the fleet, so its number can only ever be right for
+    # one of them; the machine config describes the box the acquire is
+    # actually happening on (ADR-0013). The flag is the fallback for a
+    # machine that has not said. Returns {count:, source:} with source one
+    # of "machine_config", "flag", or nil (neither given, count nil), plus
+    # `overridden: true` when both were given and disagree, so the CLI can
+    # warn that the flag it was handed was not the number it used.
+    def resolve_slot_count(machine:, flag:)
+      if machine
+        { count: machine, source: "machine_config", overridden: !flag.nil? && flag != machine }
+      elsif flag
+        { count: flag, source: "flag", overridden: false }
+      else
+        { count: nil, source: nil, overridden: false }
+      end
+    end
+
     # Attempts to create dir as a new, empty directory and, on success,
     # writes the owner file into it. Returns true/false; never raises for
     # the ordinary contention case (Errno::EEXIST).
