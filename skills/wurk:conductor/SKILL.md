@@ -306,6 +306,17 @@ worktree isolation when parallel workers share directories.
 - **Correction broadcast**: when a dispatch-time assumption dies,
   SendMessage every affected in-flight worker with a [correction] and
   journal it. Consent changes reach workers ONLY this way.
+- **Name a report file in every dispatch.** Fill the appendix's REPORT
+  slot with an absolute per-bead path `<reports dir>/<bead-id>-report.md`.
+  The reports dir sits inside the campaign state dir (Journal and
+  morning report, above) - excluded, never committed - defaulting to
+  `.claude/campaigns/reports/<campaign-id>/` when the project's fleet
+  manifest names no `campaignState.reports`; mkdir it before the first
+  dispatch. The file is the record; the worker's returned message,
+  task-notifications, SendMessage replies and Monitor events are hints.
+  Reason: another harness measured dropped notifications in production,
+  and a conductor that treats a notification as the record learns about
+  a finished worker only when it happens to look.
 
 ### Worker stalls, resumes, takeovers
 
@@ -336,6 +347,93 @@ Escalation ladder:
 
 After any mixed-writer episode: full gate against HEAD; provenance
 listed in the result/PR body.
+
+### Sweep on every wake, and a heartbeat so wakes happen
+
+Every wake - a task-notification, a SendMessage reply, a Monitor event,
+a Monitor expiry, a resume, an operator message - triggers a sweep of
+the WHOLE running set, not just the bead the wake names. Sweep = for
+each running bead read three things: the report file (exists? then read
+it and land the bead as a [complete] or [state] entry exactly as if the
+notification had arrived), the report dir's mtimes (`ls -lt <reports
+dir>`), and the newest commit / mtime in the bead's worktree (`git -C
+<worktree> log -1 --format='%ci %h %s'`, plus `git status --porcelain`
+for uncommitted movement). Journal the sweep briefly as [state] when it
+changes anything.
+
+The heartbeat: notifications are hints, so do not wait for one. Arm a
+Monitor whose only job is to wake you on a clock, and re-arm it at
+every expiry (the expiry notice is itself a wake):
+
+    Monitor({
+      command: "while true; do sleep 600; echo \"heartbeat $(date -u +%H:%M)\"; done",
+      description: "campaign <id> heartbeat - sweep report files and worktrees",
+      timeout_ms: 1800000
+    })
+
+The harness caps a Monitor at 30 minutes, so re-arm on expiry; a
+heartbeat interval of 10 minutes keeps sweeps well inside the staleness
+threshold below. This Monitor is the conductor's clock, NOT a gate
+wait: the worker's rule that a Monitor is never the wait mechanism for
+a gate stands unchanged; this one waits on nothing and merely
+guarantees the sweep runs.
+
+### Staleness
+
+The threshold is a campaign-file field, `staleness_minutes`, default
+50; a fleet manifest may set `policy.stalenessMinutes` as the
+fleet-wide default (REFERENCE.md documents the key), and the campaign
+file wins when both are set. Journal the value in force at Phase 0
+alongside the gate measurement.
+
+A running bead with NO report file, NO commit or worktree mtime fresher
+than the threshold, and NO fresh journal event of its own is
+stale-by-evidence. That is a trigger to LOOK, never a verdict: check
+directly - ListAgents (or the harness equivalent) for the worker's
+liveness, `git -C <worktree> log -1` and `git status --porcelain` for
+movement, `ps` for a live gate process rooted in that worktree - before
+assuming the worker alive OR dead. Journal the check as [stale] with
+what each probe returned.
+
+Both silent (no live agent, no movement) -> the worker is dead; take
+the escalation ladder above from rung 3 (retire, inspect, fresh worker
+with a takeover brief). One alive -> journal [stale] with the evidence
+and keep waiting; a slow gate or a long implement phase is not a dead
+worker. Resist the pull to redispatch on a stale mtime alone: a
+duplicate worker on a live bead is the collision Phase 3's probe exists
+to prevent, and this time you would be the peer.
+
+Why 50: another harness settled on the same order of magnitude (45-60
+minutes) after measuring the gap between a worker's last visible
+movement and its completion; shorter thresholds redispatch onto live
+workers during long gates, longer ones leave a dead worker's bead idle
+for an hour.
+
+### Resume from state, never re-triage
+
+1. State before graph. On any resume (a new session picking the
+   campaign up, or your own continuation after a context loss) read the
+   campaign state FIRST - the journal's last render and every event
+   since it, the campaign file, the registry row when there is one -
+   and reconstruct the running set from it. Do not re-run Phase 1 and
+   Phase 2 from scratch: a re-triage re-dispatches beads that are
+   mid-flight, because the graph does not know a worker exists. The
+   journal is what "resumable from the journal alone" (Journal and
+   morning report) is for.
+2. Report files before ListAgents. For every bead the state says is
+   running, read its report file first - a finished worker whose
+   notification was dropped is fully described there and lands
+   normally - then the worktree, then ListAgents. A live agent listing
+   tells you a process exists; it does not tell you what it finished.
+3. Redispatch only when both are silent. A bead with no report file AND
+   no live worker (per the Staleness checks above) is the only bead a
+   resume redispatches, and it goes through the takeover brief (rung
+   3), never a fresh Phase 3 dispatch that ignores the worktree's
+   uncommitted edits. Everything else keeps its worker and waits for
+   the next sweep.
+
+A resume's first journal entry is a [state] render saying what was
+reconstructed and from which files, so the next resume can verify it.
 
 ## Phase 4 - Linkage (fleets only)
 
@@ -451,12 +549,15 @@ campaigns) - the campaign must be resumable from the journal alone. Closed event
 
     [dispatch] [complete] [state] [discovery] [scope] [operator]
     [refusal] [conductor-error] [cleanup] [correction] [incident]
-    [ruling-queued]
+    [ruling-queued] [stale]
 
 `[complete]` carries (bead, PR-or-merge, base, sha, gate, scan,
-bead-status). `[operator]` records mid-campaign operator instructions
-with the scope you gave them; when it is a consent carve-out, quote it.
-An event fitting no type: nearest type + a retro schema-gap entry.
+bead-status). `[stale]` carries (bead, minutes since last
+report/commit/journal movement, each liveness probe and what it
+returned, decision). `[operator]` records mid-campaign operator
+instructions with the scope you gave them; when it is a consent
+carve-out, quote it. An event fitting no type: nearest type + a retro
+schema-gap entry.
 
 **Campaign state lives outside what the campaign publishes.** The
 journal, the morning report, scratch files and any status doc the
@@ -566,9 +667,16 @@ detached background work. Halt if foreign commits appear on your branch.
 
 RETURN: the wurk-repo-worker structured JSON result exactly, including
 repos_touched (audited against this dispatch's scope).
+
+REPORT: write that same JSON result to <absolute report file path> as
+your literal last action - after the commit, the MR when authorized,
+and the bead notes, and after killing your own children by PID. The
+file is the record; your returned message is a hint. Never create or
+touch it early.
 ```
 
 Slots filled per dispatch: repo dir, bead id, ground-truth delta,
 linkage entries (fleets), policy block, mode/MR authorization, stacking
 base, moved files (or the explicit "unchanged"), gate path (short or
-long, from the measured budget), gate-semaphore details, known flakes.
+long, from the measured budget), gate-semaphore details, known flakes,
+report file path.
