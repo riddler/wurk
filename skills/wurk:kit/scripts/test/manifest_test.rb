@@ -555,6 +555,53 @@ class ManifestValidationTest < Minitest::Test
                  m.warnings.join("\n"))
   end
 
+  # --- parallelism.preflight (wu-yi7.3) --------------------------------------
+
+  # sabotage: drop "parallelism.preflight" from DEFAULTS -> red. Absent must
+  # mean ON: the preflight guards against a stale base, and a consumer that
+  # never heard of the key gets the guard, not the incident.
+  def test_parallelism_preflight_defaults_to_true
+    m = ManifestFixtures.load("valid")
+    assert_nil m.dig_raw("parallelism.preflight")
+    assert_equal true, m.preflight?
+  end
+
+  # sabotage: read the key with `fetch(...)` truthiness instead of `== true`
+  # -> still green here, but the "false" string test below is what then
+  # closes the hole; together they pin the accessor to a real boolean.
+  def test_parallelism_preflight_false_turns_it_off_and_validates
+    m = ManifestFixtures.load_with("valid", "parallelism" => { "preflight" => false })
+    assert m.valid?, "an explicit false is the opt-out: #{m.errors.inspect}"
+    assert_equal false, m.preflight?
+  end
+
+  def test_parallelism_preflight_explicit_true_validates
+    m = ManifestFixtures.load_with("valid", "parallelism" => { "preflight" => true })
+    assert m.valid?
+    assert_equal true, m.preflight?
+  end
+
+  # sabotage: forget to add "preflight" to KNOWN["parallelism"] -> red
+  def test_parallelism_preflight_is_not_an_unknown_key
+    m = ManifestFixtures.load_with("valid", "parallelism" => { "preflight" => false })
+    refute_match(/unknown key parallelism\.preflight/, m.warnings.join("\n"))
+  end
+
+  # sabotage: drop validate_parallelism_preflight -> red. A string "false"
+  # is truthy in Ruby: without the check a consumer who wrote it to opt out
+  # would get the preflight anyway and read its refusal as a kit bug.
+  def test_parallelism_preflight_string_false_blocks
+    m = ManifestFixtures.load_with("valid", "parallelism" => { "preflight" => "false" })
+    refute m.valid?
+    assert_match(/parallelism\.preflight must be true or false, got "false"/, m.errors.join("\n"))
+  end
+
+  def test_parallelism_preflight_integer_blocks
+    m = ManifestFixtures.load_with("valid", "parallelism" => { "preflight" => 1 })
+    refute m.valid?
+    assert_match(/parallelism\.preflight must be true or false, got 1/, m.errors.join("\n"))
+  end
+
   def test_parallelism_timeout_seconds_explicit_valid_value_validates
     m = ManifestFixtures.load_with("valid", "parallelism" => { "timeout_seconds" => 1200 })
     assert m.valid?, "expected an explicit positive integer timeout to validate: #{m.errors.inspect}"

@@ -41,6 +41,23 @@ class WorktreeCreateTest < Minitest::Test
     @fake.expect(%w[git rev-parse --show-toplevel], out: "#{root}\n")
   end
 
+  LOCAL_SHA = "a" * 40
+  REMOTE_SHA = "b" * 40
+
+  # The preflight's two reads, answered with the local and remote default at
+  # the same sha - the clean case, in which the preflight changes nothing.
+  # Tests for the other cases register the reads themselves.
+  def expect_preflight_in_sync(default: "main")
+    expect_preflight_shas(default: default, local: REMOTE_SHA, remote: REMOTE_SHA)
+  end
+
+  def expect_preflight_shas(default: "main", local:, remote:)
+    @fake.expect(["git", "rev-parse", "--verify", "--quiet", "refs/heads/#{default}"],
+                 out: local ? "#{local}\n" : "", exitstatus: local ? 0 : 1)
+    @fake.expect(["git", "rev-parse", "--verify", "--quiet", "refs/remotes/origin/#{default}"],
+                 out: remote ? "#{remote}\n" : "", exitstatus: remote ? 0 : 1)
+  end
+
   # A scratch main checkout plus the sibling worktrees dir the fixture's
   # "../zz-worktrees" resolves to.
   def with_scratch_repo
@@ -248,6 +265,7 @@ class WorktreeCreateTest < Minitest::Test
       expect_location(root)
       @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
       @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_in_sync
 
       _code, env = run_create(["zz-abc-new-thing", "--dry-run"])
 
@@ -326,6 +344,7 @@ class WorktreeCreateTest < Minitest::Test
       expect_location(root)
       @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
       @fake.expect(%w[git fetch origin], exitstatus: 1, err: "fatal: unable to access\n")
+      expect_preflight_in_sync
 
       code, env = run_create(["zz-abc-new-thing", "--dry-run"])
 
@@ -340,6 +359,7 @@ class WorktreeCreateTest < Minitest::Test
       expect_location(root)
       @fake.expect(["git", "branch", "--list", "zz-abc.2-child"], out: "")
       @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_in_sync
       @fake.expect(["git", "rev-parse", "--verify", "--quiet", "zz-abc.1-parent^{commit}"], out: "deadbeef\n")
 
       code, env = run_create(["zz-abc.2-child", "--base", "zz-abc.1-parent", "--dry-run"])
@@ -356,6 +376,7 @@ class WorktreeCreateTest < Minitest::Test
       expect_location(root)
       @fake.expect(["git", "branch", "--list", "zz-abc.2-child"], out: "")
       @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_in_sync
       @fake.expect(["git", "rev-parse", "--verify", "--quiet", "zz-abc.1-typo^{commit}"], exitstatus: 1)
 
       # No expectations for mkdir or git worktree add: reaching them would
@@ -373,6 +394,7 @@ class WorktreeCreateTest < Minitest::Test
       expect_location(root)
       @fake.expect(["git", "branch", "--list", "zz-abc.2-child"], out: "")
       @fake.expect(%w[git fetch origin], exitstatus: 1, err: "fatal: unable to access\n")
+      expect_preflight_in_sync
       @fake.expect(["git", "rev-parse", "--verify", "--quiet", "zz-abc.1-parent^{commit}"], out: "deadbeef\n")
 
       code, env = run_create(["zz-abc.2-child", "--base", "zz-abc.1-parent", "--dry-run"])
@@ -388,6 +410,7 @@ class WorktreeCreateTest < Minitest::Test
       expect_location(root)
       @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
       @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_in_sync
 
       # No expectations registered for mkdir, git worktree add, the trust
       # step, cp, the warm commands, or the gate - if the script called
@@ -413,6 +436,7 @@ class WorktreeCreateTest < Minitest::Test
       expect_location(root)
       @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
       @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_in_sync
 
       _code, env = run_create(["zz-abc-new-thing", "--dry-run"])
 
@@ -428,6 +452,7 @@ class WorktreeCreateTest < Minitest::Test
       expect_location(root)
       @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
       @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_in_sync
 
       _code, env = run_create(["zz-abc-new-thing", "--dry-run"])
 
@@ -462,6 +487,7 @@ class WorktreeCreateTest < Minitest::Test
         expect_location(root)
         @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
         @fake.expect(%w[git fetch origin], out: "")
+        expect_preflight_in_sync
 
         _code, env = run_create(["zz-abc-new-thing", "--dry-run"])
 
@@ -493,6 +519,7 @@ class WorktreeCreateTest < Minitest::Test
       expect_location(root)
       @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
       @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_in_sync
       @fake.expect(["mkdir", "-p", worktrees_root], out: "")
       @fake.expect(["git", "worktree", "add", path, "-b", "zz-abc-new-thing", "--no-track", "origin/main"], out: "")
       @fake.expect(["faketool", "trust", path], out: "")
@@ -527,6 +554,7 @@ class WorktreeCreateTest < Minitest::Test
       expect_location(root)
       @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
       @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_in_sync
       @fake.expect(["mkdir", "-p", worktrees_root], out: "")
       @fake.expect(["git", "worktree", "add", path, "-b", "zz-abc-new-thing", "--no-track", "origin/main"], out: "")
       @fake.expect(["faketool", "trust", path], out: "")
@@ -564,6 +592,7 @@ class WorktreeCreateTest < Minitest::Test
         expect_location(root)
         @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
         @fake.expect(%w[git fetch origin], out: "")
+        expect_preflight_in_sync
         @fake.expect(["mkdir", "-p", worktrees_root], out: "")
         @fake.expect(["git", "worktree", "add", path, "-b", "zz-abc-new-thing", "--no-track", "origin/main"], out: "")
         @fake.expect(["faketool", "trust", path], out: "")
@@ -599,6 +628,7 @@ class WorktreeCreateTest < Minitest::Test
         expect_location(root)
         @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
         @fake.expect(%w[git fetch origin], out: "")
+        expect_preflight_in_sync
         @fake.expect(["mkdir", "-p", worktrees_root], out: "")
         @fake.expect(["git", "worktree", "add", path, "-b", "zz-abc-new-thing", "--no-track", "origin/main"], out: "")
         @fake.expect(["faketool", "trust", path], out: "")
@@ -633,6 +663,7 @@ class WorktreeCreateTest < Minitest::Test
         expect_location(root)
         @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
         @fake.expect(%w[git fetch origin], out: "")
+        expect_preflight_in_sync
         @fake.expect(["mkdir", "-p", worktrees_root], out: "")
         @fake.expect(["git", "worktree", "add", path, "-b", "zz-abc-new-thing", "--no-track", "origin/main"], out: "")
         @fake.expect(["faketool", "trust", path], out: "")
@@ -662,6 +693,7 @@ class WorktreeCreateTest < Minitest::Test
       expect_location(root)
       @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
       @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_in_sync
       @fake.expect(["mkdir", "-p", worktrees_root], out: "")
       @fake.expect(["git", "worktree", "add", path, "-b", "zz-abc-new-thing", "--no-track", "origin/main"], out: "")
       @fake.expect(["faketool", "trust", path], out: "")
@@ -700,6 +732,7 @@ class WorktreeCreateTest < Minitest::Test
         expect_location(root)
         @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
         @fake.expect(%w[git fetch origin], out: "")
+        expect_preflight_in_sync
         @fake.expect(["mkdir", "-p", worktrees_root], out: "")
         @fake.expect(["git", "worktree", "add", path, "-b", "zz-abc-new-thing", "--no-track", "origin/main"], out: "")
         @fake.expect(%w[make quick], out: "loop green\n")
@@ -731,6 +764,7 @@ class WorktreeCreateTest < Minitest::Test
         expect_location(root)
         @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
         @fake.expect(%w[git fetch origin], out: "")
+        expect_preflight_in_sync(default: "trunk")
         @fake.expect(["mkdir", "-p", worktrees_root], out: "")
         @fake.expect(["git", "worktree", "add", path, "-b", "zz-abc-new-thing", "--no-track", "origin/trunk"], out: "")
         @fake.expect(["faketool", "trust", path], out: "")
@@ -760,6 +794,7 @@ class WorktreeCreateTest < Minitest::Test
         expect_location(root)
         @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
         @fake.expect(%w[git fetch origin], exitstatus: 1, err: "fatal: unable to access\n")
+        expect_preflight_in_sync(default: "trunk")
 
         code, env = run_create(["zz-abc-new-thing", "--dry-run"])
 
@@ -788,6 +823,7 @@ class WorktreeCreateTest < Minitest::Test
         expect_location(root)
         @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
         @fake.expect(%w[git fetch origin], out: "")
+        expect_preflight_in_sync
         @fake.expect(["mkdir", "-p", worktrees_root], out: "")
         @fake.expect(["git", "worktree", "add", path, "-b", "zz-abc-new-thing", "--no-track", "origin/main"], out: "")
         @fake.expect(["faketool", "trust", path], out: "")
@@ -821,6 +857,7 @@ class WorktreeCreateTest < Minitest::Test
         expect_location(root)
         @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
         @fake.expect(%w[git fetch origin], out: "")
+        expect_preflight_in_sync
 
         _code, env = run_create(["zz-abc-new-thing", "--dry-run"])
 
@@ -839,6 +876,7 @@ class WorktreeCreateTest < Minitest::Test
       expect_location(root)
       @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
       @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_in_sync
       @fake.expect(["mkdir", "-p", worktrees_root], out: "")
       @fake.expect(["git", "worktree", "add", path, "-b", "zz-abc-new-thing", "--no-track", "origin/main"], out: "")
       @fake.expect(["faketool", "trust", path], out: "")
@@ -851,6 +889,307 @@ class WorktreeCreateTest < Minitest::Test
       assert_equal 0, code
       gate_call = @fake.calls.find { |c| c.argv == %w[make quick] }
       assert_equal path, gate_call.chdir
+    end
+  end
+
+  # --- parallelism.preflight: the base preflight (wu-yi7.3) -----------------
+  #
+  # A worktree cut while the local default branch is stale has forked behind
+  # the remote and rebuilt already-merged work. The preflight asserts local
+  # default == origin/default by sha after the fetch, fast-forwards a
+  # zero-commit stale local default, and refuses a diverged one. Every
+  # refusal is `blocked` preflight_refused with `data.preflight.reason`
+  # naming the condition, and none of them reach `git worktree add`.
+
+  # The clean case: the shas match, the preflight records in_sync, and the
+  # cut proceeds exactly as before the preflight existed.
+  def test_preflight_in_sync_records_the_shas_and_proceeds
+    with_scratch_repo do |root, _worktrees_root|
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+      @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_in_sync
+
+      code, env = run_create(["zz-abc-new-thing", "--dry-run"])
+
+      assert_equal 0, code
+      assert_equal "in_sync", env["data"]["preflight"]["status"]
+      assert_equal REMOTE_SHA, env["data"]["preflight"]["local_sha"]
+      assert_equal REMOTE_SHA, env["data"]["preflight"]["remote_sha"]
+      assert_equal true, env["data"]["preflight"]["remote_fresh"]
+      assert env["commands"].any? { |c| c.include?("git worktree add") }
+      refute env["commands"].any? { |c| c.include?("--ff-only") }
+    end
+  end
+
+  # The stale-main case: local main is strictly behind (its sha is an
+  # ancestor of the remote's) and checked out in the main checkout, so the
+  # preflight fast-forwards it with `git merge --ff-only` and the cut goes on.
+  #
+  # sabotage: skip the merge-base check and fast-forward unconditionally ->
+  # this stays green but test_preflight_refuses_a_diverged_local_default
+  # goes red (FakeSh::UnexpectedCommand on the merge). The two tests are a
+  # pair.
+  def test_preflight_fast_forwards_a_zero_commit_stale_local_default
+    with_scratch_repo do |root, worktrees_root|
+      path = File.join(worktrees_root, "zz-abc-new-thing")
+
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+      @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_shas(local: LOCAL_SHA, remote: REMOTE_SHA)
+      @fake.expect(["git", "merge-base", "--is-ancestor", LOCAL_SHA, REMOTE_SHA], out: "")
+      @fake.expect(%w[git worktree list --porcelain], out: worktree_list(root, []))
+      @fake.expect(["git", "merge", "--ff-only", REMOTE_SHA], out: "Fast-forward\n")
+      @fake.expect(["mkdir", "-p", worktrees_root], out: "")
+      @fake.expect(["git", "worktree", "add", path, "-b", "zz-abc-new-thing", "--no-track", "origin/main"], out: "")
+      @fake.expect(["faketool", "trust", path], out: "")
+      @fake.expect(["cp", "-Rfc", "vendor", "build", "#{path}/"], out: "")
+      @fake.expect(%w[faketool fetch], out: "")
+      @fake.expect(%w[make quick], out: "loop green\n")
+
+      code, env = run_create(["zz-abc-new-thing"])
+
+      assert_equal 0, code
+      assert_equal true, env["ok"]
+      assert_equal "fast_forwarded", env["data"]["preflight"]["status"]
+      merge_call = @fake.calls.find { |c| c.argv[0, 3] == %w[git merge --ff-only] }
+      assert_equal root, merge_call.chdir
+    end
+  end
+
+  # The same stale-main case when nothing has the default branch checked
+  # out: the ref moves by update-ref with the old-value guard, since there
+  # is no working tree to merge into.
+  def test_preflight_moves_an_unchecked_out_stale_default_with_update_ref
+    with_scratch_repo do |root, _worktrees_root|
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+      @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_shas(local: LOCAL_SHA, remote: REMOTE_SHA)
+      @fake.expect(["git", "merge-base", "--is-ancestor", LOCAL_SHA, REMOTE_SHA], out: "")
+      detached = "worktree #{root}\nHEAD 1111111\ndetached\n\n"
+      @fake.expect(%w[git worktree list --porcelain], out: detached)
+
+      # --dry-run records the repair rather than running it (no update-ref
+      # is registered); the real-run half of this branch is the same code
+      # path the merge test above exercises.
+      code, env = run_create(["zz-abc-new-thing", "--dry-run"])
+
+      assert_equal 0, code
+      assert_equal "stale", env["data"]["preflight"]["status"]
+      assert_includes env["data"]["preflight"]["repair"], "git update-ref refs/heads/main #{REMOTE_SHA} #{LOCAL_SHA}"
+      refute @fake.calls.any? { |c| c.argv[0, 2] == %w[git update-ref] }
+    end
+  end
+
+  # sabotage: record the fast-forward in `commands` AND run it on --dry-run
+  # -> red (the merge is not registered, so FakeSh raises). --dry-run is the
+  # contract for what a real run will do, and the repair is a mutation of
+  # the local default branch.
+  def test_preflight_dry_run_records_the_fast_forward_without_running_it
+    with_scratch_repo do |root, _worktrees_root|
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+      @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_shas(local: LOCAL_SHA, remote: REMOTE_SHA)
+      @fake.expect(["git", "merge-base", "--is-ancestor", LOCAL_SHA, REMOTE_SHA], out: "")
+      @fake.expect(%w[git worktree list --porcelain], out: worktree_list(root, []))
+
+      code, env = run_create(["zz-abc-new-thing", "--dry-run"])
+
+      assert_equal 0, code
+      assert_equal "stale", env["data"]["preflight"]["status"]
+      assert env["commands"].any? { |c| c.include?("git merge --ff-only #{REMOTE_SHA}") }
+      assert env["commands"].any? { |c| c.include?("git worktree add") }
+    end
+  end
+
+  # The diverged-branch case: local main has commits the remote lacks, so
+  # merge-base --is-ancestor says no. That is a merge-forward for a human;
+  # the preflight refuses before anything is cut, and the refusal is
+  # machine-readable twice over.
+  #
+  # sabotage: reset local main to the remote instead of refusing -> red
+  # (no reset/update-ref is registered, and blocked would be empty)
+  def test_preflight_refuses_a_diverged_local_default
+    with_scratch_repo do |root, _worktrees_root|
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+      @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_shas(local: LOCAL_SHA, remote: REMOTE_SHA)
+      @fake.expect(["git", "merge-base", "--is-ancestor", LOCAL_SHA, REMOTE_SHA], exitstatus: 1)
+
+      # No expectations for mkdir or git worktree add: reaching them would
+      # raise UnexpectedCommand. This is a real run, not --dry-run.
+      code, env = run_create(["zz-abc-new-thing"])
+
+      assert_equal 1, code
+      assert_equal false, env["ok"]
+      assert_equal 1, env["blocked"].length
+      assert_equal "preflight_refused", env["blocked"].first["code"]
+      assert_equal "human", env["blocked"].first["needs"]
+      assert_match(/merge it forward/, env["blocked"].first["message"])
+      assert_equal "refused", env["data"]["preflight"]["status"]
+      assert_equal "local_default_diverged", env["data"]["preflight"]["reason"]
+      assert_equal LOCAL_SHA, env["data"]["preflight"]["local_sha"]
+      assert_equal REMOTE_SHA, env["data"]["preflight"]["remote_sha"]
+      refute env["commands"].any? { |c| c.include?("git worktree add") }
+    end
+  end
+
+  # A stale default checked out in some OTHER worktree is that worktree's
+  # tree to move, not this script's: refuse and name where it is.
+  def test_preflight_refuses_when_the_stale_default_is_checked_out_elsewhere
+    with_scratch_repo do |root, worktrees_root|
+      elsewhere = File.join(worktrees_root, "main-lives-here")
+
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+      @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_shas(local: LOCAL_SHA, remote: REMOTE_SHA)
+      @fake.expect(["git", "merge-base", "--is-ancestor", LOCAL_SHA, REMOTE_SHA], out: "")
+      listing = "worktree #{root}\nHEAD 1111111\ndetached\n\nworktree #{elsewhere}\nHEAD 2222222\nbranch refs/heads/main\n\n"
+      @fake.expect(%w[git worktree list --porcelain], out: listing)
+
+      code, env = run_create(["zz-abc-new-thing"])
+
+      assert_equal 1, code
+      assert_equal "preflight_refused", env["blocked"].first["code"]
+      assert_equal "default_checked_out_elsewhere", env["data"]["preflight"]["reason"]
+      assert_includes env["blocked"].first["message"], elsewhere
+    end
+  end
+
+  # A fast-forward that fails (a dirty file in its way) leaves local main
+  # where it was and refuses rather than cutting from a base the preflight
+  # could not bring up to date.
+  def test_preflight_refuses_when_the_fast_forward_fails
+    with_scratch_repo do |root, _worktrees_root|
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+      @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_shas(local: LOCAL_SHA, remote: REMOTE_SHA)
+      @fake.expect(["git", "merge-base", "--is-ancestor", LOCAL_SHA, REMOTE_SHA], out: "")
+      @fake.expect(%w[git worktree list --porcelain], out: worktree_list(root, []))
+      @fake.expect(["git", "merge", "--ff-only", REMOTE_SHA], exitstatus: 1,
+                                                              err: "error: Your local changes would be overwritten\n")
+
+      code, env = run_create(["zz-abc-new-thing"])
+
+      assert_equal 1, code
+      assert_equal "preflight_refused", env["blocked"].first["code"]
+      assert_equal "fast_forward_failed", env["data"]["preflight"]["reason"]
+      assert_match(/local changes would be overwritten/, env["blocked"].first["message"])
+    end
+  end
+
+  # Offline, the comparison is against the last-fetched remote ref and says
+  # so: a warning beside the existing fetch_failed one, never a refusal on
+  # its own.
+  def test_preflight_offline_compares_against_the_last_fetched_remote_and_warns
+    with_scratch_repo do |root, _worktrees_root|
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+      @fake.expect(%w[git fetch origin], exitstatus: 1, err: "fatal: unable to access\n")
+      expect_preflight_in_sync
+
+      code, env = run_create(["zz-abc-new-thing", "--dry-run"])
+
+      assert_equal 0, code
+      assert_equal "main", env["data"]["base_ref"]
+      assert_equal "in_sync", env["data"]["preflight"]["status"]
+      assert_equal false, env["data"]["preflight"]["remote_fresh"]
+      assert_equal %w[fetch_failed preflight_stale_remote], env["warnings"].map { |w| w["code"] }
+    end
+  end
+
+  # A remote ref that does not resolve (a repo that has never fetched) is
+  # nothing to compare against, not a stale base: skip with a warning.
+  def test_preflight_skips_with_a_warning_when_the_remote_ref_is_missing
+    with_scratch_repo do |root, _worktrees_root|
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+      @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_shas(local: LOCAL_SHA, remote: nil)
+
+      code, env = run_create(["zz-abc-new-thing", "--dry-run"])
+
+      assert_equal 0, code
+      assert_equal "skipped", env["data"]["preflight"]["status"]
+      assert_equal "ref_missing", env["data"]["preflight"]["reason"]
+      assert_equal "preflight_skipped", env["warnings"].first["code"]
+      assert_includes env["warnings"].first["message"], "origin/main"
+    end
+  end
+
+  # sabotage: read `parallelism.preflight` with a truthiness test instead of
+  # `== true` -> this test still passes, but a written "false" string is a
+  # manifest validation error (manifest_test), so the two together close it.
+  # Here: an explicit false turns the preflight off and says so, and no
+  # rev-parse is registered - reaching one would raise UnexpectedCommand.
+  def test_preflight_false_in_the_manifest_disables_it
+    manifest = manifest_with(FIXTURE, "parallelism" => { "preflight" => false })
+
+    with_manifest(manifest) do
+      Dir.mktmpdir do |tmp|
+        root = File.join(tmp, "myrepo")
+        FileUtils.mkdir_p(root)
+
+        expect_location(root)
+        @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+        @fake.expect(%w[git fetch origin], out: "")
+
+        code, env = run_create(["zz-abc-new-thing", "--dry-run"])
+
+        assert_equal 0, code
+        assert_equal "disabled", env["data"]["preflight"]["status"]
+        assert env["commands"].any? { |c| c.include?("git worktree add") }
+      end
+    end
+  end
+
+  # sabotage: hardcode "main" in the preflight's ref names instead of
+  # manifest.default_branch -> red (FakeSh::UnexpectedCommand: only the
+  # trunk refs are registered)
+  def test_preflight_compares_the_manifests_default_branch
+    other = manifest_with(FIXTURE, "repo" => { "default_branch" => "trunk" })
+
+    with_manifest(other) do
+      Dir.mktmpdir do |tmp|
+        root = File.join(tmp, "myrepo")
+        FileUtils.mkdir_p(root)
+
+        expect_location(root)
+        @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+        @fake.expect(%w[git fetch origin], out: "")
+        expect_preflight_shas(default: "trunk", local: LOCAL_SHA, remote: REMOTE_SHA)
+        @fake.expect(["git", "merge-base", "--is-ancestor", LOCAL_SHA, REMOTE_SHA], exitstatus: 1)
+
+        code, env = run_create(["zz-abc-new-thing"])
+
+        assert_equal 1, code
+        assert_equal "local_default_diverged", env["data"]["preflight"]["reason"]
+        assert_includes env["blocked"].first["message"], "origin/trunk"
+      end
+    end
+  end
+
+  # The preflight runs on a --base cut too: it is about the local default
+  # branch's hygiene, not about which ref the branch is cut from.
+  def test_preflight_runs_on_a_base_cut
+    with_scratch_repo do |root, _worktrees_root|
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc.2-child"], out: "")
+      @fake.expect(%w[git fetch origin], out: "")
+      @fake.expect(["git", "rev-parse", "--verify", "--quiet", "zz-abc.1-parent^{commit}"], out: "deadbeef\n")
+      expect_preflight_shas(local: LOCAL_SHA, remote: REMOTE_SHA)
+      @fake.expect(["git", "merge-base", "--is-ancestor", LOCAL_SHA, REMOTE_SHA], exitstatus: 1)
+
+      code, env = run_create(["zz-abc.2-child", "--base", "zz-abc.1-parent"])
+
+      assert_equal 1, code
+      assert_equal "preflight_refused", env["blocked"].first["code"]
     end
   end
 

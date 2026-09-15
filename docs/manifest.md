@@ -93,12 +93,16 @@ defaults are listed under "Defaults" below.
     "repair_when": "mix.lock",        // (opt) lockfile that triggers post-rebase repair
     "repair": [["mix", "deps.get"]],  // (opt)
     "post_branch": [],                // (opt) e.g. fixative's xcodegen/icon chain
-    "timeout_seconds": 600            // (opt) default 600; seconds Sh.run allows
+    "timeout_seconds": 600,           // (opt) default 600; seconds Sh.run allows
                                       // the mise-trust hook and each `warm` command
                                       // before killing them - raise it for a warm
                                       // step that builds container images or fetches
                                       // deps. The post-warm verify runs gate.loop and
                                       // uses gate.timeout_seconds instead.
+    "preflight": true                 // (opt) default true; assert local default ==
+                                      // origin/default before cutting a worktree,
+                                      // fast-forward a stale one, refuse a diverged
+                                      // one. See ## `parallelism.preflight`.
   },
 
   "tmux": {                           // (opt) omit = no tmux integration
@@ -612,6 +616,58 @@ worktree running the argv as the window's command, named after the argv's
 first element's basename (`["nvim"]` names the window `nvim`). Omitting
 `tmux.editor` skips the editor window entirely.
 
+## `parallelism.preflight`
+
+`worktree_create.rb` cuts a new branch from the default branch on the
+remote, but the *local* default branch is what the next refresh, the next
+merge-base, and a human's own `git log main..` all read. A measured
+incident on an upstream harness had worktrees cut while that branch was
+stale: they forked two and three merges behind, one rebuilt a sibling's
+just-merged work, and an infrastructure plan read newer resources as
+phantom destroys. The preflight is that harness's guard in this kit's
+shape, and it is **on by default**: absent means `true`, and `false` is the
+only way off - a consumer that never heard of the key gets the guard, not
+the incident.
+
+When on, after its `git fetch origin` and before any mutation, the script:
+
+- resolves `refs/heads/<default>` and `refs/remotes/origin/<default>` and
+  compares them by sha (`data.preflight.local_sha` / `remote_sha`);
+- proceeds when they match (`data.preflight.status: "in_sync"`);
+- **fast-forwards** a local default that is strictly behind - zero commits
+  of its own, its sha an ancestor of the remote's - with `git merge
+  --ff-only` when the main checkout has it checked out, or `git update-ref`
+  with the old-value guard when nothing does (`status: "fast_forwarded"`;
+  on `--dry-run` the repair is rendered into `commands` and reported as
+  `status: "stale"` with `data.preflight.repair`, not run);
+- **refuses** everything else, before the worktree exists. A refusal is
+  `blocked` `preflight_refused` with `needs: "human"` (exit code 1, the
+  contract's blocked code; 2 stays the envelope-less usage error) and
+  `data.preflight.status: "refused"` with `data.preflight.reason` naming
+  the condition:
+  - `local_default_diverged` - the local default has commits the remote
+    lacks. That is a merge-forward for a human; the script never resets a
+    branch.
+  - `default_checked_out_elsewhere` - the local default is behind and
+    checked out in another worktree, whose tree this script must not move.
+  - `fast_forward_failed` - the fast-forward itself failed (a dirty file in
+    its way); the local default is where it was.
+
+Two conditions warn rather than refuse: `preflight_skipped` when either ref
+does not resolve (a clone that never fetched, or a default branch nobody
+has locally - nothing to compare, `status: "skipped"`, `reason:
+"ref_missing"`), and `preflight_stale_remote` when the fetch itself failed,
+in which case the comparison is against the remote ref as last fetched and
+`data.preflight.remote_fresh` is `false`.
+
+The preflight runs on every cut, `--base` included: it is about the local
+default branch, not about which ref the new branch is cut from, so a
+stacked parent that is merely behind the default branch is not a preflight
+concern (`/wurk:refresh` and `/wurk:mr`'s rebase handle that). It does not
+run on the adopt path, where nothing is cut. With `"preflight": false` the
+script reports `data.preflight.status: "disabled"` and behaves as before
+the field existed.
+
 ## Two path lists, not one
 
 `gate.build_paths` and `gate.also_gated_paths` answer different questions,
@@ -814,7 +870,9 @@ common one),
 `artifacts.filename` = `YYMMDD-[id-]kebab`, `judge.model` = `sonnet`,
 `rebase.auto_resolve_paths` = `[]`, `gate.timeout_seconds` = `600`,
 `gate.long_timeout_seconds` = `3600`,
-`parallelism.timeout_seconds` = `600`, `tmux.layout` = `window-per-issue`.
+`parallelism.timeout_seconds` = `600`, `parallelism.preflight` = `true`
+(see "`parallelism.preflight`" above for why on is the safe default),
+`tmux.layout` = `window-per-issue`.
 
 One default is not in that list because it cannot be: `forge.host` defaults to
 the host of the declared `forge.kind`, which a flat dotted-key table cannot
@@ -885,6 +943,10 @@ gated.
   short one, not the other way around.
 - **`parallelism.timeout_seconds` must be a positive integer.** Same rule,
   same validation, as `gate.timeout_seconds` above.
+- **`parallelism.preflight` must be a JSON boolean.** Absent is legal and
+  means `true`. The string `"false"`, a number, and anything else block:
+  `"false"` is truthy in Ruby, and a consumer who wrote it to opt out would
+  otherwise get the preflight anyway and read its refusal as a kit bug.
 - **`gate.cwd` must be a relative subdirectory path.** An absolute path,
   `.`, `""`, a non-string, or any `..` segment blocks. Existence is
   deliberately not checked; see "`gate.cwd`" above. A `gate.cwd` that does

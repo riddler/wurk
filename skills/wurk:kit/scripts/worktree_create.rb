@@ -17,6 +17,11 @@ require_relative "lib/manifest"
 # script has no path that deletes a branch or a directory to make room for a
 # new one. The single exception is ADOPTION (wu-mya.3), and it is narrow
 # because it loosens that safety default: see #adopt_refusal_reason.
+#
+# The one branch this script ever moves is the local default branch, and
+# only forward: the base preflight (#preflight, parallelism.preflight)
+# fast-forwards a local default that is strictly behind the remote and
+# refuses one that has commits of its own.
 module WorktreeCreate
   class << self
     def run(argv, io: $stdout)
@@ -155,6 +160,16 @@ module WorktreeCreate
         end
       end
 
+      # The base preflight runs on every cut, --base included: it is about
+      # the local default branch's hygiene, which the next worktree, the
+      # next refresh, and every merge-base a human runs by hand all read.
+      if manifest.preflight?
+        passed = preflight(env, manifest, root: root, dry_run: dry_run, fetched: fetch_res.success?)
+        return env.emit(io) unless passed
+      else
+        env.data[:preflight] = { "status" => "disabled" }
+      end
+
       env.data[:name] = name
       env.data[:path] = path
       env.data[:base_ref] = base_ref
@@ -174,6 +189,129 @@ module WorktreeCreate
     def branch_exists?(env, root:, name:)
       res = Sh.run(["git", "branch", "--list", name], chdir: root, envelope: env)
       res.success? && !res.out.to_s.strip.empty?
+    end
+
+    # The base preflight (parallelism.preflight, default true). A measured
+    # incident on an upstream harness: worktrees cut from a stale local
+    # default branch forked two and three merges behind the remote, one
+    # rebuilt a sibling's just-merged work, and an infrastructure plan read
+    # newer resources as phantom destroys. This is that harness's preflight
+    # in this script's shape:
+    #
+    # - asserts local default == origin/default by sha, after the fetch above;
+    # - self-repairs ONLY a zero-commit stale local default, by fast-forward
+    #   (`git merge --ff-only` when the main checkout has it checked out,
+    #   `git update-ref` with the old-value guard when nothing does);
+    # - refuses when the local default has commits the remote lacks - that
+    #   is a merge-forward for a human, never something to reset here - and
+    #   when it is checked out in some other worktree, whose tree this script
+    #   must not touch.
+    #
+    # The upstream harness also asserted `merge-base --is-ancestor
+    # origin/default HEAD` after creating the worktree. Here that assertion
+    # is made BEFORE the cut, on the sha comparison itself: a base that
+    # passed it is origin/default or equal to it, so the post-create check
+    # would be a tautology on the default-branch cut, and on a --base cut it
+    # would refuse every stacked parent that is merely behind main - which
+    # /wurk:refresh and /wurk:mr's rebase already handle. Checking before the
+    # cut also keeps the never-delete rule intact: a refusal leaves no
+    # half-made worktree behind.
+    #
+    # Returns true when the cut may proceed. On refusal the envelope carries
+    # the machine-readable reason twice: `blocked[].code` is preflight_refused
+    # and `data.preflight.reason` names which condition (see docs/manifest.md
+    # for the vocabulary). Exit code is the contract's 1 (blocked), never 2 -
+    # 2 is a usage error with no envelope (skills/wurk:kit/REFERENCE.md).
+    def preflight(env, manifest, root:, dry_run:, fetched:)
+      default = manifest.default_branch
+      remote = manifest.remote_default_branch
+      local_sha = rev_parse(env, root, "refs/heads/#{default}")
+      remote_sha = rev_parse(env, root, "refs/remotes/#{remote}")
+
+      report = { "local_sha" => local_sha, "remote_sha" => remote_sha, "remote_fresh" => fetched }
+      env.data[:preflight] = report
+
+      unless fetched
+        env.warn(
+          code: "preflight_stale_remote",
+          message: "git fetch origin failed; the preflight compared #{default} against #{remote} as last fetched"
+        )
+      end
+
+      # Nothing to compare: a fresh clone that never fetched, or a default
+      # branch nobody has checked out locally. Neither is the incident's
+      # shape, so this reports rather than refuses.
+      if local_sha.nil? || remote_sha.nil?
+        missing = local_sha.nil? ? default : remote
+        report["status"] = "skipped"
+        report["reason"] = "ref_missing"
+        env.warn(code: "preflight_skipped", message: "#{missing} does not resolve; nothing to compare the base against")
+        return true
+      end
+
+      if local_sha == remote_sha
+        report["status"] = "in_sync"
+        return true
+      end
+
+      behind = Sh.run(["git", "merge-base", "--is-ancestor", local_sha, remote_sha], chdir: root, envelope: env)
+      unless behind.success?
+        return refuse_preflight(
+          env, report, "local_default_diverged",
+          "local #{default} (#{local_sha[0, 12]}) has commits #{remote} (#{remote_sha[0, 12]}) does not; " \
+          "merge it forward before cutting a worktree from it"
+        )
+      end
+
+      # Zero own commits, strictly behind: the one repair this preflight
+      # makes itself.
+      checkout = worktree_path_for_branch(env, root: root, name: default)
+      if checkout && File.expand_path(checkout) != File.expand_path(root)
+        return refuse_preflight(
+          env, report, "default_checked_out_elsewhere",
+          "local #{default} is behind #{remote} and checked out at #{checkout}; fast-forward it there first"
+        )
+      end
+
+      ff = if checkout
+             ["git", "merge", "--ff-only", remote_sha]
+           else
+             ["git", "update-ref", "refs/heads/#{default}", remote_sha, local_sha]
+           end
+
+      if dry_run
+        report["status"] = "stale"
+        report["repair"] = Sh.render(ff, chdir: root)
+        env.commands << report["repair"]
+        return true
+      end
+
+      ff_res = Sh.run(ff, chdir: root, envelope: env)
+      unless ff_res.success?
+        return refuse_preflight(
+          env, report, "fast_forward_failed",
+          err_or(ff_res, "#{Sh.render(ff)} failed") + "; local #{default} is still behind #{remote}"
+        )
+      end
+
+      report["status"] = "fast_forwarded"
+      true
+    end
+
+    def refuse_preflight(env, report, reason, message)
+      report["status"] = "refused"
+      report["reason"] = reason
+      env.block!(code: "preflight_refused", message: message, needs: "human")
+      false
+    end
+
+    # The full sha of a ref, or nil when it does not resolve.
+    def rev_parse(env, root, ref)
+      res = Sh.run(["git", "rev-parse", "--verify", "--quiet", ref], chdir: root, envelope: env)
+      return nil unless res.success?
+
+      sha = res.out.to_s.strip
+      sha.empty? ? nil : sha
     end
 
     # The adoption gate, and the only loosening of the never-force default
