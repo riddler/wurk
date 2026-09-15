@@ -4,6 +4,7 @@ require "minitest/autorun"
 require "json"
 require "stringio"
 require "tmpdir"
+require "fileutils"
 require_relative "../lib/beads"
 require_relative "../bead"
 require_relative "support/manifest_helper"
@@ -222,10 +223,14 @@ class BeadCliTest < Minitest::Test
     UserConfig.reset!
   end
 
+  # Runs under the `valid` fixture unless the test has already installed a
+  # manifest with with_manifest (the sync tests do, to run a verb under
+  # `local` or under a `titles` refusal set) - that one is kept.
   def run_bead(argv)
     io = StringIO.new
     code = nil
-    with_manifest(FIXTURE) { code = Bead.run(argv, io: io) }
+    installed = Manifest.instance_variable_get(:@current)
+    with_manifest(installed || FIXTURE) { code = Bead.run(argv, io: io) }
     [code, JSON.parse(io.string)]
   end
 
@@ -483,60 +488,6 @@ class BeadCliTest < Minitest::Test
     assert_equal true, env["data"]["succeeded"]
   end
 
-  def test_sync_push_failure_is_a_warning_never_a_block
-    expect_clean_tracker_export
-    @fake.expect(%w[bd dolt push], exitstatus: 1, err: "no remote\n")
-
-    code, env = run_bead(%w[sync push])
-
-    assert_equal 0, code
-    assert env["ok"]
-    assert_equal [], env["blocked"]
-    assert_equal false, env["data"]["succeeded"]
-    assert env["warnings"].any? { |w| w["code"] == "dolt_push_failed" }
-  end
-
-  def test_sync_push_with_output_is_confirmed_first_try
-    expect_clean_tracker_export
-    @fake.expect(%w[bd dolt push], out: "Push complete.\n")
-
-    code, env = run_bead(%w[sync push])
-
-    assert_equal 0, code
-    assert_equal true, env["data"]["succeeded"]
-    assert_equal true, env["data"]["confirmed"]
-    # No outbound_scan section is configured (see setup) - one
-    # outbound_scan_disarmed warning is the only new thing here, per
-    # Phase 5's success criteria: with no outbound_scan section, sync push
-    # behaves exactly as today plus this one warning.
-    assert_equal ["outbound_scan_disarmed"], env["warnings"].map { |w| w["code"] }
-  end
-
-  def test_sync_push_silent_success_reruns_and_confirms_on_retry
-    expect_clean_tracker_export
-    @fake.expect(%w[bd dolt push], out: "")
-    @fake.expect(%w[bd dolt push], out: "Push complete.\n")
-
-    code, env = run_bead(%w[sync push])
-
-    assert_equal 0, code
-    assert_equal true, env["data"]["succeeded"]
-    assert_equal true, env["data"]["confirmed"]
-  end
-
-  def test_sync_push_silent_twice_warns_unconfirmed
-    expect_clean_tracker_export
-    @fake.expect(%w[bd dolt push], out: "")
-    @fake.expect(%w[bd dolt push], out: "")
-
-    code, env = run_bead(%w[sync push])
-
-    assert_equal 0, code
-    assert_equal true, env["data"]["succeeded"]
-    assert_equal false, env["data"]["confirmed"]
-    assert env["warnings"].any? { |w| w["code"] == "dolt_push_unconfirmed" }
-  end
-
   def test_sync_pull_reports_no_confirmed_field
     @fake.expect(%w[bd dolt pull], out: "")
 
@@ -546,10 +497,43 @@ class BeadCliTest < Minitest::Test
     refute env["data"].key?("confirmed")
   end
 
-  # --- sync push: the outbound-scan gate (Phase 5, ADR-0014) ----------------
+  def test_sync_rejects_an_unknown_verb_with_usage
+    err = capture_stderr do
+      exc = assert_raises(SystemExit) { Bead.run(%w[sync fetch], io: StringIO.new) }
+      assert_equal 2, exc.status
+    end
 
-  def expect_clean_tracker_export(issues: [])
+    assert_includes err, "pull|scan|push"
+  end
+
+  # --- sync scan / sync push: the gated tracker push (wu-b4i, ADR-0014) --------
+  #
+  # Every test below runs inside a scratch git common dir (a tmpdir the fake
+  # `git rev-parse --git-common-dir` answers with) so the marker never lands
+  # in this checkout's .git. `bd list --all --json` and `bd dolt push` are
+  # faked; nothing here reads a real tracker or touches a network.
+
+  CLEAN_EXPORT = [{ "id" => "zz-abc", "title" => "nothing guarded here", "description" => "plain" }].freeze
+
+  def with_common_dir
+    Dir.mktmpdir do |dir|
+      @common_dir = dir
+      yield dir
+    end
+  ensure
+    @common_dir = nil
+  end
+
+  def expect_common_dir
+    @fake.expect(%w[git rev-parse --path-format=absolute --git-common-dir], out: "#{@common_dir}\n")
+  end
+
+  def expect_tracker_export(issues = CLEAN_EXPORT)
     @fake.expect(%w[bd list --all --json], out: JSON.generate(issues))
+  end
+
+  def marker_path
+    TrackerScan.marker_path(@common_dir)
   end
 
   def armed_config(patterns_path, control_term)
@@ -562,139 +546,596 @@ class BeadCliTest < Minitest::Test
     path
   end
 
-  def test_sync_push_armed_and_clean_export_still_pushes
-    Dir.mktmpdir do |dir|
-      path = write_patterns(dir, "zqiblorf-control-1\nzqiblorf-secret")
-      expect_clean_tracker_export(issues: [{ "id" => "zz-abc", "title" => "nothing guarded here" }])
+  # A scan followed by a push, each with its own export read: the sequence
+  # every caller runs, packaged so the push tests do not restate the scan.
+  def scan_clean!(issues = CLEAN_EXPORT, argv: %w[sync scan])
+    expect_common_dir
+    expect_tracker_export(issues)
+    code, env = run_bead(argv)
+    assert_equal 0, code, "scan expected clean: #{env['blocked'].inspect}"
+    env
+  end
+
+  def dolt_push_called?
+    @fake.calls.any? { |c| c.argv == %w[bd dolt push] }
+  end
+
+  # --- the scan verb ---
+
+  def test_sync_scan_clean_export_writes_a_marker_with_the_fingerprint
+    with_common_dir do
+      env = scan_clean!
+
+      assert_equal true, env["data"]["marker_written"]
+      assert_equal true, env["data"]["clean"]
+      assert_equal "all", env["data"]["refusal"]
+      assert_equal 1, env["data"]["issues"]
+      assert File.file?(marker_path)
+
+      marker = JSON.parse(File.read(marker_path))
+      assert_equal TrackerScan::MARKER_VERSION, marker["version"]
+      assert_equal TrackerScan.fingerprint(JSON.generate(CLEAN_EXPORT)), marker["fingerprint"]
+      assert_equal env["data"]["fingerprint"], marker["fingerprint"]
+      assert_equal "all", marker["refusal"]
+      assert_equal false, marker["armed"]
+      assert_equal [], marker["informational"]
+      refute dolt_push_called?
+    end
+  end
+
+  def test_sync_scan_disarmed_warns_but_still_marks_clean
+    with_common_dir do
+      env = scan_clean!
+
+      # No outbound_scan section is configured (see setup): the scan ran
+      # over nothing and says so, and the push verb re-warns from the marker.
+      assert_equal ["outbound_scan_disarmed"], env["warnings"].map { |w| w["code"] }
+      assert_equal false, env["data"]["outbound_scan"]["armed"]
+    end
+  end
+
+  def test_sync_scan_never_shells_dolt_push
+    with_common_dir do
+      scan_clean!
+      refute dolt_push_called?
+      assert_equal %w[git bd], @fake.calls.map { |c| c.argv.first }
+    end
+  end
+
+  def test_sync_scan_dry_run_scans_for_real_and_withholds_only_the_marker
+    with_common_dir do
+      env = scan_clean!(argv: %w[sync scan --dry-run])
+
+      assert_nil env["data"]["marker_written"]
+      assert_equal true, env["data"]["clean"]
+      assert_equal env["data"]["fingerprint"], TrackerScan.fingerprint(JSON.generate(CLEAN_EXPORT))
+      assert_includes env["commands"].join("\n"), marker_path
+      refute File.exist?(marker_path)
+    end
+  end
+
+  def test_sync_scan_under_local_reads_nothing_and_reports_skipped
+    with_manifest(manifest_with("valid", "beads" => { "sync" => "local" })) do
+      code, env = run_bead(%w[sync scan])
+
+      assert_equal 0, code
+      assert env["ok"]
+      assert_equal "tracker_local_only", env["data"]["skipped"]
+      assert_equal "local", env["data"]["beads_sync"]
+      assert_equal true, env["data"]["beads_sync_declared"]
+      assert_equal false, env["data"]["marker_written"]
+      assert_equal [], env["warnings"]
+    end
+
+    assert_empty @fake.calls
+  end
+
+  def test_sync_scan_armed_and_clean_writes_an_armed_marker
+    with_common_dir do
+      Dir.mktmpdir do |dir|
+        path = write_patterns(dir, "zqiblorf-control-1\nzqiblorf-secret")
+
+        with_user_config(armed_config(path, "zqiblorf-control-1")) do
+          env = scan_clean!
+
+          assert_equal true, env["data"]["outbound_scan"]["armed"]
+          assert_equal true, env["data"]["outbound_scan"]["probe_ok"]
+          assert_empty env["data"]["outbound_scan"]["hits"]
+          assert_equal [], env["warnings"]
+          assert_equal true, JSON.parse(File.read(marker_path))["armed"]
+        end
+      end
+    end
+  end
+
+  def test_sync_scan_a_title_hit_blocks_and_writes_no_marker_under_all
+    with_common_dir do
+      Dir.mktmpdir do |dir|
+        token = "zqiblorf-secret-fixture-1"
+        path = write_patterns(dir, "zqiblorf-control-1\n#{token}")
+        expect_common_dir
+        expect_tracker_export([{ "id" => "zz-abc", "title" => "leading #{token} trailing" }])
+
+        with_user_config(armed_config(path, "zqiblorf-control-1")) do
+          code, env = run_bead(%w[sync scan])
+
+          assert_equal 1, code
+          refute env["ok"]
+          assert_equal ["outbound_scan_hit"], env["blocked"].map { |b| b["code"] }
+          assert_equal false, env["data"]["clean"]
+          assert_equal false, env["data"]["marker_written"]
+          assert_equal [{ "id" => "zz-abc", "count" => 1, "fields" => ["title"] }], env["data"]["refusing_hits"]
+          assert_equal [], env["data"]["informational_hits"]
+        end
+
+        refute File.exist?(marker_path)
+      end
+    end
+  end
+
+  def test_sync_scan_a_description_hit_blocks_under_all
+    with_common_dir do
+      Dir.mktmpdir do |dir|
+        token = "zqiblorf-secret-fixture-1"
+        path = write_patterns(dir, "zqiblorf-control-1\n#{token}")
+        expect_common_dir
+        expect_tracker_export([{ "id" => "zz-abc", "title" => "clean", "description" => "leading #{token} trailing" }])
+
+        with_user_config(armed_config(path, "zqiblorf-control-1")) do
+          code, env = run_bead(%w[sync scan])
+
+          assert_equal 1, code
+          assert_equal ["outbound_scan_hit"], env["blocked"].map { |b| b["code"] }
+          assert_equal [{ "id" => "zz-abc", "count" => 1, "fields" => ["description"] }], env["data"]["refusing_hits"]
+        end
+      end
+    end
+  end
+
+  def test_sync_scan_under_titles_reports_description_hits_per_bead_and_stays_clean
+    with_common_dir do
+      Dir.mktmpdir do |dir|
+        token = "zqiblorf-secret-fixture-1"
+        path = write_patterns(dir, "zqiblorf-control-1\n#{token}")
+        issues = [
+          { "id" => "zz-abc", "title" => "clean", "description" => "#{token} and #{token}", "notes" => "#{token}" },
+          { "id" => "zz-aaa", "title" => "also clean", "notes" => "one #{token}" },
+          { "id" => "zz-zzz", "title" => "untouched" }
+        ]
+        expect_common_dir
+        expect_tracker_export(issues)
+
+        with_manifest(manifest_with("valid", "beads" => { "scan_refusal" => "titles" })) do
+          with_user_config(armed_config(path, "zqiblorf-control-1")) do
+            code, env = run_bead(%w[sync scan])
+
+            assert_equal 0, code, env["blocked"].inspect
+            assert env["ok"]
+            assert_equal "titles", env["data"]["refusal"]
+            assert_equal true, env["data"]["clean"]
+            assert_equal [], env["data"]["refusing_hits"]
+            # Attributed per issue id, sorted, with field NAMES only.
+            assert_equal(
+              [
+                { "id" => "zz-aaa", "count" => 1, "fields" => ["notes"] },
+                { "id" => "zz-abc", "count" => 3, "fields" => %w[description notes] }
+              ],
+              env["data"]["informational_hits"]
+            )
+            assert_equal ["outbound_scan_informational"], env["warnings"].map { |w| w["code"] }
+            assert_includes env["warnings"].first["message"], "4 outbound scan hit(s) in 2 issue(s)"
+            assert_equal true, env["data"]["marker_written"]
+
+            marker = JSON.parse(File.read(marker_path))
+            assert_equal "titles", marker["refusal"]
+            assert_equal env["data"]["informational_hits"], marker["informational"]
+
+            serialized = env.to_json + File.read(marker_path)
+            refute_includes serialized, token
+            refute_includes serialized, "zqiblorf-control-1"
+          end
+        end
+      end
+    end
+  end
+
+  def test_sync_scan_under_titles_a_title_hit_still_refuses
+    with_common_dir do
+      Dir.mktmpdir do |dir|
+        token = "zqiblorf-secret-fixture-1"
+        path = write_patterns(dir, "zqiblorf-control-1\n#{token}")
+        expect_common_dir
+        expect_tracker_export([{ "id" => "zz-abc", "title" => "#{token} in the title", "description" => token }])
+
+        with_manifest(manifest_with("valid", "beads" => { "scan_refusal" => "titles" })) do
+          with_user_config(armed_config(path, "zqiblorf-control-1")) do
+            code, env = run_bead(%w[sync scan])
+
+            assert_equal 1, code
+            assert_equal ["outbound_scan_hit"], env["blocked"].map { |b| b["code"] }
+            assert_equal [{ "id" => "zz-abc", "count" => 1, "fields" => ["title"] }], env["data"]["refusing_hits"]
+            assert_equal [{ "id" => "zz-abc", "count" => 1, "fields" => ["description"] }], env["data"]["informational_hits"]
+            assert_equal false, env["data"]["marker_written"]
+          end
+        end
+
+        refute File.exist?(marker_path)
+      end
+    end
+  end
+
+  def test_sync_scan_a_broken_probe_refuses_and_writes_no_marker
+    with_common_dir do
+      Dir.mktmpdir do |dir|
+        path = write_patterns(dir, "zqiblorf-secret-only")
+        expect_common_dir
+        expect_tracker_export
+
+        with_user_config(armed_config(path, "zqiblorf-control-that-no-pattern-matches")) do
+          code, env = run_bead(%w[sync scan])
+
+          assert_equal 1, code
+          assert_equal ["scan_pipeline_broken"], env["blocked"].map { |b| b["code"] }
+          assert_equal false, env["data"]["marker_written"]
+        end
+
+        refute File.exist?(marker_path)
+      end
+    end
+  end
+
+  def test_sync_scan_failing_tracker_export_blocks
+    with_common_dir do
+      expect_common_dir
+      @fake.expect(%w[bd list --all --json], exitstatus: 1, err: "bd: no such database\n")
+
+      code, env = run_bead(%w[sync scan])
+
+      assert_equal 1, code
+      assert_equal ["tracker_export_unavailable"], env["blocked"].map { |b| b["code"] }
+      refute File.exist?(marker_path)
+    end
+  end
+
+  def test_sync_scan_empty_output_is_no_export
+    with_common_dir do
+      expect_common_dir
+      @fake.expect(%w[bd list --all --json], out: "")
+
+      code, env = run_bead(%w[sync scan])
+
+      assert_equal 1, code
+      assert_equal ["tracker_export_unavailable"], env["blocked"].map { |b| b["code"] }
+    end
+  end
+
+  def test_sync_scan_an_empty_tracker_warns_and_marks
+    with_common_dir do
+      env = scan_clean!([])
+
+      assert_includes env["warnings"].map { |w| w["code"] }, "tracker_export_empty"
+      assert_equal 0, env["data"]["issues"]
+      assert_equal true, env["data"]["marker_written"]
+    end
+  end
+
+  def test_sync_scan_a_stale_marker_is_replaced_by_a_clean_scan
+    with_common_dir do
+      FileUtils.mkdir_p(File.dirname(marker_path))
+      File.write(marker_path, "not a marker")
+
+      scan_clean!
+
+      assert_equal TrackerScan::MARKER_VERSION, JSON.parse(File.read(marker_path))["version"]
+    end
+  end
+
+  # --- the push verb ---
+
+  def test_sync_push_with_a_fresh_marker_pushes_and_confirms
+    with_common_dir do
+      scan_clean!
+      expect_common_dir
+      expect_tracker_export
       @fake.expect(%w[bd dolt push], out: "Push complete.\n")
 
-      with_user_config(armed_config(path, "zqiblorf-control-1")) do
-        code, env = run_bead(%w[sync push])
+      code, env = run_bead(%w[sync push])
 
-        assert_equal 0, code
-        assert_equal true, env["data"]["succeeded"]
-        assert_equal true, env["data"]["pushed"]
-        assert_equal true, env["data"]["outbound_scan"]["armed"]
-        assert_empty env["data"]["outbound_scan"]["hits"]
+      assert_equal 0, code
+      assert env["ok"]
+      assert_equal "fresh", env["data"]["marker_state"]
+      assert_equal true, env["data"]["pushed"]
+      assert_equal true, env["data"]["succeeded"]
+      assert_equal true, env["data"]["confirmed"]
+      assert_equal [], env["data"]["informational_hits"]
+      # The disarmed warning travels from the marker: the push itself
+      # never scanned, and says so the same way the scan did.
+      assert_equal ["outbound_scan_disarmed"], env["warnings"].map { |w| w["code"] }
+    end
+  end
+
+  def test_sync_push_without_a_marker_refuses_and_never_shells_dolt_push
+    with_common_dir do
+      expect_common_dir
+      expect_tracker_export
+      # deliberately no "bd dolt push" expectation: if bead.rb shells it
+      # anyway, FakeSh raises UnexpectedCommand and this fails loudly.
+
+      code, env = run_bead(%w[sync push])
+
+      assert_equal 1, code
+      refute env["ok"]
+      assert_equal ["scan_marker_missing"], env["blocked"].map { |b| b["code"] }
+      assert_includes env["blocked"].first["message"], "bead.rb sync scan"
+      assert_equal "missing", env["data"]["marker_state"]
+      assert_equal false, env["data"]["pushed"]
+      assert_nil env["data"]["succeeded"]
+      refute dolt_push_called?
+    end
+  end
+
+  def test_sync_push_never_scans
+    with_common_dir do
+      Dir.mktmpdir do |dir|
+        token = "zqiblorf-secret-fixture-1"
+        path = write_patterns(dir, "zqiblorf-control-1\n#{token}")
+        expect_common_dir
+        expect_tracker_export([{ "id" => "zz-abc", "title" => token }])
+
+        with_user_config(armed_config(path, "zqiblorf-control-1")) do
+          code, env = run_bead(%w[sync push])
+
+          # A push with no marker refuses for the MISSING MARKER, not for
+          # the hit it would have found had it scanned - it did not scan.
+          assert_equal 1, code
+          assert_equal ["scan_marker_missing"], env["blocked"].map { |b| b["code"] }
+          refute env["data"].key?("outbound_scan")
+        end
       end
     end
   end
 
-  def test_sync_push_a_tracker_hit_blocks_and_never_shells_dolt_push
-    Dir.mktmpdir do |dir|
-      token = "zqiblorf-secret-fixture-1"
-      path = write_patterns(dir, "zqiblorf-control-1\n#{token}")
-      @fake.expect(
-        %w[bd list --all --json],
-        out: JSON.generate([{ "id" => "zz-abc", "title" => "clean", "description" => "leading #{token} trailing" }])
-      )
-      # deliberately no "bd dolt push" expectation registered: if bead.rb
-      # shells it anyway, FakeSh raises UnexpectedCommand and this test
-      # fails loudly rather than silently passing.
+  def test_sync_push_refuses_when_the_tracker_changed_since_the_scan
+    with_common_dir do
+      scan_clean!
+      expect_common_dir
+      expect_tracker_export(CLEAN_EXPORT + [{ "id" => "zz-new", "title" => "filed after the scan" }])
 
-      with_user_config(armed_config(path, "zqiblorf-control-1")) do
-        code, env = run_bead(%w[sync push])
+      code, env = run_bead(%w[sync push])
 
-        assert_equal 1, code
-        refute env["ok"]
-        assert_equal ["outbound_scan_hit"], env["blocked"].map { |b| b["code"] }
-        assert_equal false, env["data"]["pushed"]
-        assert_nil env["data"]["succeeded"]
-      end
-
-      refute(@fake.calls.any? { |c| c.argv == %w[bd dolt push] })
+      assert_equal 1, code
+      assert_equal ["scan_marker_stale"], env["blocked"].map { |b| b["code"] }
+      assert_equal "stale", env["data"]["marker_state"]
+      refute dolt_push_called?
     end
   end
 
-  def test_sync_push_tracker_hit_redacts_the_fixture_token_from_the_envelope
-    Dir.mktmpdir do |dir|
-      token = "zqiblorf-secret-fixture-2"
-      path = write_patterns(dir, "zqiblorf-control-1\n#{token}")
-      @fake.expect(
-        %w[bd list --all --json],
-        out: JSON.generate([{ "id" => "zz-abc", "notes" => "leading #{token} trailing" }])
-      )
+  def test_sync_push_refuses_when_the_refusal_set_changed_since_the_scan
+    with_common_dir do
+      scan_clean!
+      expect_common_dir
+      expect_tracker_export
 
-      with_user_config(armed_config(path, "zqiblorf-control-1")) do
+      with_manifest(manifest_with("valid", "beads" => { "scan_refusal" => "titles" })) do
         code, env = run_bead(%w[sync push])
 
         assert_equal 1, code
-        assert_equal ["outbound_scan_hit"], env["blocked"].map { |b| b["code"] }
-        serialized = env.to_json
-        refute_includes serialized, token
-        refute_includes serialized, "zqiblorf-control-1"
+        assert_equal ["scan_marker_stale"], env["blocked"].map { |b| b["code"] }
       end
+
+      refute dolt_push_called?
+    end
+  end
+
+  def test_sync_push_refuses_an_expired_marker
+    with_common_dir do
+      scan_clean!
+      marker = JSON.parse(File.read(marker_path))
+      marker["scanned_at"] = (Time.now.utc - TrackerScan::MARKER_TTL_SECONDS - 1).iso8601
+      File.write(marker_path, JSON.generate(marker))
+      expect_common_dir
+      expect_tracker_export
+
+      code, env = run_bead(%w[sync push])
+
+      assert_equal 1, code
+      assert_equal ["scan_marker_expired"], env["blocked"].map { |b| b["code"] }
+      assert_operator env["data"]["marker_age_seconds"], :>, TrackerScan::MARKER_TTL_SECONDS
+      refute dolt_push_called?
+    end
+  end
+
+  def test_sync_push_refuses_a_marker_it_did_not_write
+    with_common_dir do
+      FileUtils.mkdir_p(File.dirname(marker_path))
+      File.write(marker_path, JSON.generate("version" => 99, "scanned_at" => Time.now.utc.iso8601))
+      expect_common_dir
+      expect_tracker_export
+
+      code, env = run_bead(%w[sync push])
+
+      assert_equal 1, code
+      assert_equal ["scan_marker_unreadable"], env["blocked"].map { |b| b["code"] }
+      refute dolt_push_called?
+    end
+  end
+
+  def test_sync_push_carries_the_scan_informational_hits_into_its_own_result
+    with_common_dir do
+      Dir.mktmpdir do |dir|
+        token = "zqiblorf-secret-fixture-1"
+        path = write_patterns(dir, "zqiblorf-control-1\n#{token}")
+        issues = [{ "id" => "zz-abc", "title" => "clean", "description" => token }]
+
+        with_manifest(manifest_with("valid", "beads" => { "scan_refusal" => "titles" })) do
+          with_user_config(armed_config(path, "zqiblorf-control-1")) do
+            scan_clean!(issues)
+          end
+
+          expect_common_dir
+          expect_tracker_export(issues)
+          @fake.expect(%w[bd dolt push], out: "Push complete.\n")
+          code, env = run_bead(%w[sync push])
+
+          assert_equal 0, code
+          assert_equal true, env["data"]["confirmed"]
+          assert_equal [{ "id" => "zz-abc", "count" => 1, "fields" => ["description"] }], env["data"]["informational_hits"]
+          assert_equal [], env["warnings"]
+          refute_includes env.to_json, token
+        end
+      end
+    end
+  end
+
+  def test_sync_push_failure_is_a_warning_never_a_block
+    with_common_dir do
+      scan_clean!
+      expect_common_dir
+      expect_tracker_export
+      @fake.expect(%w[bd dolt push], exitstatus: 1, err: "no remote\n")
+
+      code, env = run_bead(%w[sync push])
+
+      assert_equal 0, code
+      assert env["ok"]
+      assert_equal [], env["blocked"]
+      assert_equal true, env["data"]["pushed"]
+      assert_equal false, env["data"]["succeeded"]
+      assert_equal false, env["data"]["confirmed"]
+      assert env["warnings"].any? { |w| w["code"] == "dolt_push_failed" }
+    end
+  end
+
+  def test_sync_push_silent_success_reruns_and_confirms_on_retry
+    with_common_dir do
+      scan_clean!
+      expect_common_dir
+      expect_tracker_export
+      @fake.expect(%w[bd dolt push], out: "")
+      @fake.expect(%w[bd dolt push], out: "Push complete.\n")
+
+      code, env = run_bead(%w[sync push])
+
+      assert_equal 0, code
+      assert_equal true, env["data"]["succeeded"]
+      assert_equal true, env["data"]["confirmed"]
+    end
+  end
+
+  def test_sync_push_silent_twice_warns_unconfirmed
+    with_common_dir do
+      scan_clean!
+      expect_common_dir
+      expect_tracker_export
+      @fake.expect(%w[bd dolt push], out: "")
+      @fake.expect(%w[bd dolt push], out: "")
+
+      code, env = run_bead(%w[sync push])
+
+      assert_equal 0, code
+      assert_equal true, env["data"]["succeeded"]
+      assert_equal false, env["data"]["confirmed"]
+      assert env["warnings"].any? { |w| w["code"] == "dolt_push_unconfirmed" }
     end
   end
 
   def test_sync_push_failing_tracker_export_blocks_and_never_shells_dolt_push
-    @fake.expect(%w[bd list --all --json], exitstatus: 1, err: "bd: no such database\n")
+    with_common_dir do
+      scan_clean!
+      expect_common_dir
+      @fake.expect(%w[bd list --all --json], exitstatus: 1, err: "bd: no such database\n")
 
-    code, env = run_bead(%w[sync push])
+      code, env = run_bead(%w[sync push])
 
-    assert_equal 1, code
-    refute env["ok"]
-    assert_equal ["tracker_export_unavailable"], env["blocked"].map { |b| b["code"] }
-    assert_equal false, env["data"]["pushed"]
-    assert_nil env["data"]["succeeded"]
-    refute(@fake.calls.any? { |c| c.argv == %w[bd dolt push] })
+      assert_equal 1, code
+      assert_equal ["tracker_export_unavailable"], env["blocked"].map { |b| b["code"] }
+      assert_equal false, env["data"]["pushed"]
+      refute dolt_push_called?
+    end
   end
 
   def test_sync_push_unparseable_tracker_export_blocks
-    @fake.expect(%w[bd list --all --json], out: "not json at all")
+    with_common_dir do
+      expect_common_dir
+      @fake.expect(%w[bd list --all --json], out: "not json at all")
 
-    code, env = run_bead(%w[sync push])
+      code, env = run_bead(%w[sync push])
 
-    assert_equal 1, code
-    assert_equal ["tracker_export_unavailable"], env["blocked"].map { |b| b["code"] }
-    refute(@fake.calls.any? { |c| c.argv == %w[bd dolt push] })
-  end
-
-  def test_sync_push_dolt_push_failure_is_still_a_warning_not_a_block_when_armed
-    Dir.mktmpdir do |dir|
-      path = write_patterns(dir, "zqiblorf-control-1\nzqiblorf-secret")
-      expect_clean_tracker_export(issues: [{ "id" => "zz-abc", "title" => "clean" }])
-      @fake.expect(%w[bd dolt push], exitstatus: 1, err: "no remote\n")
-
-      with_user_config(armed_config(path, "zqiblorf-control-1")) do
-        code, env = run_bead(%w[sync push])
-
-        assert_equal 0, code
-        assert env["ok"]
-        assert_equal [], env["blocked"]
-        assert_equal false, env["data"]["succeeded"]
-        assert env["warnings"].any? { |w| w["code"] == "dolt_push_failed" }
-      end
+      assert_equal 1, code
+      assert_equal ["tracker_export_unavailable"], env["blocked"].map { |b| b["code"] }
+      refute dolt_push_called?
     end
   end
 
-  def test_sync_push_dry_run_reports_scan_would_run_and_shells_nothing
-    with_user_config(nil) do
+  def test_sync_push_under_local_pushes_nothing_and_reports_skipped
+    with_manifest(manifest_with("valid", "beads" => { "sync" => "local" })) do
+      code, env = run_bead(%w[sync push])
+
+      assert_equal 0, code
+      assert env["ok"]
+      assert_equal "tracker_local_only", env["data"]["skipped"]
+      assert_equal false, env["data"]["pushed"]
+      assert_equal [], env["warnings"]
+    end
+
+    assert_empty @fake.calls
+  end
+
+  def test_sync_push_under_a_defaulted_local_says_so
+    with_manifest(manifest_with("valid", "beads" => { "sync" => nil })) do
+      code, env = run_bead(%w[sync push])
+
+      assert_equal 0, code
+      assert_equal "tracker_local_only", env["data"]["skipped"]
+      assert_equal false, env["data"]["beads_sync_declared"]
+    end
+
+    assert_empty @fake.calls
+  end
+
+  def test_sync_push_dry_run_reads_the_marker_and_shells_no_push
+    with_common_dir do
+      scan_clean!
+      expect_common_dir
+      expect_tracker_export
+
       code, env = run_bead(%w[sync push --dry-run])
 
       assert_equal 0, code
+      assert_equal "fresh", env["data"]["marker_state"]
       assert_nil env["data"]["succeeded"]
-      assert_equal false, env["data"]["scan_would_run"]
-      assert_includes env["commands"].join("\n"), "bd list --all --json"
+      assert_nil env["data"]["confirmed"]
+      assert_equal false, env["data"]["pushed"]
       assert_includes env["commands"].join("\n"), "bd dolt push"
+      refute dolt_push_called?
     end
-
-    assert_empty @fake.calls
   end
 
-  def test_sync_push_dry_run_scan_would_run_true_when_armed
-    Dir.mktmpdir do |dir|
-      path = write_patterns(dir, "zqiblorf-control-1\nzqiblorf-secret")
+  def test_sync_push_dry_run_still_refuses_without_a_marker
+    with_common_dir do
+      expect_common_dir
+      expect_tracker_export
 
-      with_user_config(armed_config(path, "zqiblorf-control-1")) do
-        code, env = run_bead(%w[sync push --dry-run])
+      code, env = run_bead(%w[sync push --dry-run])
 
-        assert_equal 0, code
-        assert_equal true, env["data"]["scan_would_run"]
-      end
+      assert_equal 1, code
+      assert_equal ["scan_marker_missing"], env["blocked"].map { |b| b["code"] }
+      refute_includes env["commands"].join("\n"), "bd dolt push"
     end
+  end
 
-    assert_empty @fake.calls
+  def test_sync_push_a_fresh_marker_serves_more_than_one_push_of_the_same_export
+    with_common_dir do
+      scan_clean!
+      2.times do
+        expect_common_dir
+        expect_tracker_export
+        @fake.expect(%w[bd dolt push], out: "Push complete.\n")
+        code, = run_bead(%w[sync push])
+        assert_equal 0, code
+      end
+      assert File.file?(marker_path)
+    end
   end
 
   # --- resolve ----------------------------------------------------------------

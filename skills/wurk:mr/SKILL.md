@@ -371,9 +371,10 @@ change:
 
    No AI attribution in the title or the body, same rule as commit messages.
 
-9. **Sync beads, then record the request.** Also hand-run - `bd close` is on
-   the banned-operation list, and this step never closes anything, but `bd
-   dolt push` and `bd note` are ordinary bead commands no script wraps.
+9. **Sync beads, then record the request.** `bd close` is on the
+   banned-operation list, and this step never closes anything; `bd note`
+   is an ordinary bead command, and the push goes through the kit's gated
+   pair.
 
    **The note always runs. The push is gated on `beads.sync`.** Read the
    mode - never assume it:
@@ -388,11 +389,22 @@ change:
 
    ```bash
    bd note <id> "Request: <url>"     # every mode, once per bead step 2 resolved
-   bd dolt push                      # git and dolthub ONLY
+   ruby ~/.claude/skills/wurk:kit/scripts/bead.rb sync scan   # git and dolthub ONLY
+   ruby ~/.claude/skills/wurk:kit/scripts/bead.rb sync push   # after READING the scan result
    ```
 
    A bead whose request URL was never recorded is one nobody can follow
    from the issue to the review, so the note is unconditional.
+
+   The scan and the push are two verbs on purpose, and the push refuses
+   without a scan younger than ten minutes over the same export. Read the
+   scan result before pushing: a `blocked` `outbound_scan_hit` is a stop -
+   report the issue ids and field names it names, never rephrase-and-retry;
+   `data.informational_hits` (hits outside the manifest's
+   `beads.scan_refusal` set) do not refuse but go into the final report as
+   the ids and fields they name. Then read the push result: `data.confirmed`
+   false means the remote said nothing and the push is unconfirmed, which
+   the report says in those words.
 
    - **`local`** - **do not push, and do not look for a way to.** The
      repo's beads never leave the machine. Report `Bead: <id> in progress,

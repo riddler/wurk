@@ -10,6 +10,7 @@ require_relative "lib/refs"
 require_relative "lib/beads"
 require_relative "lib/base_ref"
 require_relative "lib/outbound_scan"
+require_relative "lib/tracker_scan"
 
 # Bead is the bd wrapper: `bd show` is parsed as prose in at least four
 # skills today, so this is the single biggest parsing win in the extraction
@@ -428,9 +429,40 @@ module Bead
 
     # --- sync -----------------------------------------------------------
     #
-    # Best-effort, never gating: a dolt sync failure is a warning, not a
-    # block. bd's local database keeps working regardless of whether the
-    # dolt remote is reachable.
+    # `sync pull` is best-effort, never gating: a dolt sync failure is a
+    # warning, not a block. bd's local database keeps working regardless of
+    # whether the dolt remote is reachable.
+    #
+    # `sync scan` and `sync push` are the two halves of the gated tracker
+    # push (wu-b4i, extending ADR-0014's tracker path). They are SEPARATE
+    # VERBS THAT REFUSE TO CHAIN: scan never pushes, push never scans, and
+    # there is no verb that does both. The scan reads the full tracker
+    # export (`bd list --all --json` - wu-caq: titles-of-open-issues
+    # scanning is the known-weak form), scans every string field in
+    # process, attributes hits per issue id, and on a clean result writes
+    # a marker (lib/tracker_scan.rb) carrying the export's fingerprint. The
+    # push refuses unless that marker exists, is younger than
+    # TrackerScan::MARKER_TTL_SECONDS, and fingerprints the export the
+    # push is about to publish. The point of the split is that the scan's
+    # report - in particular the informational hits under a `titles`
+    # refusal set - is looked at before anything is published, and a
+    # chained scan-and-push is exactly how that look gets skipped.
+    #
+    # Which hits refuse is the manifest's `beads.scan_refusal` (`all`, the
+    # default, or `titles`); the pattern set and control term stay in the
+    # machine config (ADR-0014) and are never inlined here. A refusing hit
+    # is a BLOCK (`outbound_scan_hit`, from OutboundScan.apply_to_envelope);
+    # a hit outside the refusal set is a warning attributed per issue id.
+    # Reading the tracker is a precondition for both verbs - a failed or
+    # unparseable export is a BLOCK (`tracker_export_unavailable`),
+    # deliberately asymmetric with the best-effort `dolt_push_failed`
+    # warning for the push itself, which stays a warning unchanged.
+    #
+    # Both verbs honor `beads.sync`: under `local` (declared or defaulted)
+    # neither reads nor pushes anything, and the envelope says so in
+    # `data.skipped` rather than in a warning, because a local tracker
+    # staying local is the correct outcome, not a degraded one
+    # (docs/manifest.md, `beads.sync`).
     #
     # A push that exits 0 saying nothing is UNCONFIRMED, not successful
     # (wu-hvz): `bd dolt push` has printed nothing on a first attempt
@@ -438,90 +470,218 @@ module Bead
     # once, and `data.confirmed` reports whether any attempt produced
     # confirming output - a caller about to depend on the push reads
     # `confirmed`, not just `succeeded`.
-    #
-    # ADR-0014 (ADR-0014's plan Phase 5, wu-e4l): a push also runs the
-    # outbound-content scan over the full tracker export first, in-process,
-    # before `bd dolt push` is ever shelled. Reading the tracker is a
-    # precondition - a failed or unparseable `bd list --all --json` is a
-    # BLOCK (`tracker_export_unavailable`), deliberately asymmetric with the
-    # best-effort `dolt_push_failed` warning for the push itself, which
-    # stays a warning unchanged. A scan hit is a BLOCK
-    # (`outbound_scan_hit`, from OutboundScan.apply_to_envelope) and the
-    # push never runs. Only the push direction is gated - pull gains
-    # nothing.
 
     TRACKER_EXPORT_SIZE_WARNING_BYTES = 5 * 1024 * 1024 # 5 MB, ADR-0014's measurement point
 
+    SYNC_VERBS = %w[pull scan push].freeze
+
     def run_sync(argv, io)
-      parser, options = Cli.build("bead.rb sync [options] <pull|push>")
+      parser, options = Cli.build("bead.rb sync [options] <pull|scan|push>")
       args = Cli.parse!(parser, argv)
-      direction = args.first
-      usage_error!("bead.rb sync <pull|push>", parser) unless %w[pull push].include?(direction)
+      verb = args.first
+      usage_error!("bead.rb sync <pull|scan|push>", parser) unless SYNC_VERBS.include?(verb)
 
       env = Envelope.new(script: "bead_sync")
-      env.data["direction"] = direction
-      cmd = ["bd", "dolt", direction]
+      env.data["direction"] = verb
+
+      case verb
+      when "pull" then run_sync_pull(env, io, options)
+      when "scan" then run_sync_scan(env, io, options)
+      when "push" then run_sync_push(env, io, options)
+      end
+    end
+
+    def run_sync_pull(env, io, options)
+      cmd = %w[bd dolt pull]
 
       if options[:dry_run]
         env.commands << Sh.render(cmd)
         env.data["succeeded"] = nil
-        if direction == "push"
-          env.data["confirmed"] = nil
-          env.data["scan_would_run"] = UserConfig.current.outbound_scan_declared?
-          env.commands << Sh.render(%w[bd list --all --json])
-        end
         return env.emit(io)
       end
 
-      if direction == "push"
-        scan_result = perform_tracker_scan(env)
-        return env.emit(io) if scan_result.nil?
+      result = Sh.run(cmd, envelope: env)
+      env.data["succeeded"] = result.success?
+      env.warn(code: "dolt_pull_failed", message: err_or(result, "bd dolt pull failed")) unless result.success?
+      env.emit(io)
+    end
 
-        if scan_result.refuse?
-          env.data["succeeded"] = nil
-          env.data["pushed"] = false
-          return env.emit(io)
-        end
+    # The scan verb. Read-only except for the marker it writes on a clean
+    # result, which is what --dry-run withholds: the export is read and
+    # scanned either way, so a dry run reports the real verdict.
+    def run_sync_scan(env, io, options)
+      manifest = Manifest.require!(env)
+      return env.emit(io) unless manifest
+
+      refusal = manifest.beads_scan_refusal
+      env.data["refusal"] = refusal
+      env.data["marker_written"] = false
+      return emit_tracker_local(env, io, manifest) unless manifest.beads_push_allowed?
+
+      config = UserConfig.require!(env)
+      return env.emit(io) unless config
+
+      marker_path = resolve_marker_path(env)
+      return env.emit(io) unless marker_path
+
+      export = read_tracker_export(env)
+      return env.emit(io) unless export
+
+      issues, raw = export
+      env.data["issues"] = issues.length
+      env.data["fingerprint"] = TrackerScan.fingerprint(raw)
+      env.warn(code: "tracker_export_empty", message: "bd list --all --json returned no issues; the scan ran over nothing") if issues.empty?
+
+      result = OutboundScan.run(TrackerScan.payload(issues), config: config)
+      refusing, informational = TrackerScan.partition_hits(result.hits, refusal)
+
+      # The gate is the refusing subset: apply_to_envelope blocks on it,
+      # warns when disarmed, and is the one place a Result is disclosed.
+      gate = OutboundScan::Result.new(
+        armed: result.armed?, probe_ok: result.probe_ok, hits: refusing,
+        scanned_locations: result.scanned_locations, errors: result.errors
+      )
+      OutboundScan.apply_to_envelope(gate, env, path_label: "tracker")
+      env.data["refusing_hits"] = TrackerScan.attribute(refusing)
+      env.data["informational_hits"] = TrackerScan.attribute(informational)
+
+      unless informational.empty?
+        env.warn(
+          code: "outbound_scan_informational",
+          message: "#{informational.sum(&:count)} outbound scan hit(s) in #{env.data['informational_hits'].length} issue(s) " \
+                   "outside the #{refusal} refusal set; they do not refuse the push - " \
+                   "see data.informational_hits for the issue ids and field names"
+        )
+      end
+
+      env.data["marker_path"] = marker_path
+      clean = env.blocked.empty?
+      env.data["clean"] = clean
+      return env.emit(io) unless clean
+
+      marker = TrackerScan.build_marker(
+        fingerprint: env.data["fingerprint"], refusal: refusal, armed: result.armed?,
+        issues: issues.length, informational: env.data["informational_hits"]
+      )
+      env.data["scanned_at"] = marker["scanned_at"]
+      env.data["marker_ttl_seconds"] = TrackerScan::MARKER_TTL_SECONDS
+
+      if options[:dry_run]
+        env.commands << "write #{marker_path}"
+        env.data["marker_written"] = nil
+        return env.emit(io)
+      end
+
+      TrackerScan.write_marker(marker_path, marker)
+      env.data["marker_written"] = true
+      env.emit(io)
+    end
+
+    # The push verb. Never scans: it re-reads the export only to prove the
+    # marker is about THIS content, then shells `bd dolt push`. Every
+    # pre-push read (manifest, marker, export) runs under --dry-run too, so
+    # the dry run reports the verdict the real run would reach.
+    def run_sync_push(env, io, options)
+      env.data["pushed"] = false
+      env.data["succeeded"] = nil
+      env.data["confirmed"] = nil
+
+      manifest = Manifest.require!(env)
+      return env.emit(io) unless manifest
+
+      refusal = manifest.beads_scan_refusal
+      env.data["refusal"] = refusal
+      return emit_tracker_local(env, io, manifest) unless manifest.beads_push_allowed?
+
+      marker_path = resolve_marker_path(env)
+      return env.emit(io) unless marker_path
+
+      export = read_tracker_export(env)
+      return env.emit(io) unless export
+
+      _issues, raw = export
+      marker = TrackerScan.read_marker(marker_path)
+      check = TrackerScan.check_marker(marker, fingerprint: TrackerScan.fingerprint(raw), refusal: refusal)
+      env.data["marker_path"] = marker_path
+      env.data["marker_state"] = check[:state]
+      env.data["marker_age_seconds"] = check[:age_seconds]
+
+      unless check[:state] == "fresh"
+        env.block!(code: "scan_marker_#{check[:state]}", message: marker_refusal_message(check[:state]))
+        return env.emit(io)
+      end
+
+      env.data["informational_hits"] = marker["informational"]
+      if marker["armed"] == false
+        env.warn(
+          code: "outbound_scan_disarmed",
+          message: "no outbound scan is configured on this machine; this push was not scanned"
+        )
+      end
+
+      cmd = %w[bd dolt push]
+      if options[:dry_run]
+        env.commands << Sh.render(cmd)
+        return env.emit(io)
       end
 
       result = Sh.run(cmd, envelope: env)
-
-      if direction == "push" && result.success? && blank_output?(result)
+      if result.success? && blank_output?(result)
         retry_result = Sh.run(cmd, envelope: env)
         result = retry_result if retry_result.success?
       end
 
+      env.data["pushed"] = true
       env.data["succeeded"] = result.success?
-      if direction == "push"
-        env.data["pushed"] = true
-        confirmed = result.success? && !blank_output?(result)
-        env.data["confirmed"] = confirmed
-        if result.success? && !confirmed
-          env.warn(
-            code: "dolt_push_unconfirmed",
-            message: "bd dolt push exited 0 with no output twice; treat the push as unconfirmed and verify the remote before depending on it"
-          )
-        end
+      confirmed = result.success? && !blank_output?(result)
+      env.data["confirmed"] = confirmed
+      if result.success? && !confirmed
+        env.warn(
+          code: "dolt_push_unconfirmed",
+          message: "bd dolt push exited 0 with no output twice; treat the push as unconfirmed and verify the remote before depending on it"
+        )
       end
-      env.warn(code: "dolt_#{direction}_failed", message: err_or(result, "bd dolt #{direction} failed")) unless result.success?
+      env.warn(code: "dolt_push_failed", message: err_or(result, "bd dolt push failed")) unless result.success?
       env.emit(io)
     end
 
-    # Reads the full tracker export and scans it before any push is
-    # shelled. Returns the OutboundScan::Result on a completed scan attempt
-    # (armed or not; the caller checks #refuse?), or nil when the export
-    # itself could not be read - in which case this method has already
-    # blocked the envelope and the caller must emit without pushing.
-    #
-    # `bd search`-style title-only scanning is deliberately not used here
-    # (wu-caq): it excludes closed issues and reads titles only, which is
-    # the known-weak form. The full `bd list --all --json` export is what
-    # gets scanned, every string field, walked generically so a bd schema
-    # addition is covered with no code change here.
-    def perform_tracker_scan(env)
-      config = UserConfig.require!(env)
-      return nil unless config
+    def marker_refusal_message(state)
+      reason =
+        case state
+        when "missing" then "no scan marker exists"
+        when "unreadable" then "the scan marker is not one this kit wrote"
+        when "expired" then "the scan marker is older than #{TrackerScan::MARKER_TTL_SECONDS} seconds"
+        when "stale" then "the tracker export or the refusal set changed since the scan"
+        end
+      "#{reason}; run `bead.rb sync scan`, read its result, then push - the two verbs never chain"
+    end
 
+    # Under `local` neither verb touches the tracker or the network. Not a
+    # warning: docs/manifest.md says a skipped push under `local` is the
+    # correct outcome and must not read as degraded.
+    def emit_tracker_local(env, io, manifest)
+      env.data["skipped"] = "tracker_local_only"
+      env.data["beads_sync"] = manifest.beads_sync
+      env.data["beads_sync_declared"] = manifest.beads_sync_declared?
+      env.emit(io)
+    end
+
+    # The marker lives under the git common dir - one per beads database,
+    # shared by every worktree - see TrackerScan::MARKER_RELATIVE_PATH.
+    def resolve_marker_path(env)
+      result = Sh.run(%w[git rev-parse --path-format=absolute --git-common-dir], envelope: env)
+      common = result.success? ? result.out.to_s.strip : ""
+      if common.empty?
+        env.block!(code: "git_rev_parse_failed", message: err_or(result, "git rev-parse --git-common-dir gave no directory"))
+        return nil
+      end
+      TrackerScan.marker_path(common)
+    end
+
+    # [issues, raw] for the full tracker export, or nil after blocking when
+    # it could not be read. Empty output is unusable output: `bd list --all
+    # --json` printing nothing is not an empty tracker, it is no export.
+    def read_tracker_export(env)
       result = Sh.run(%w[bd list --all --json], envelope: env)
       parsed = result.success? ? parse_json(result.out) : nil
 
@@ -530,8 +690,6 @@ module Bead
           code: "tracker_export_unavailable",
           message: err_or(result, "bd list --all --json returned no usable JSON")
         )
-        env.data["succeeded"] = nil
-        env.data["pushed"] = false
         return nil
       end
 
@@ -540,40 +698,11 @@ module Bead
         env.warn(
           code: "outbound_scan_large_tracker",
           message: "the tracker export is #{bytesize} bytes, above the 5 MB measurement point; " \
-                   "the full export was still scanned"
+                   "it was still read in full"
         )
       end
 
-      scan_result = OutboundScan.run(tracker_payload(parsed), config: config)
-      OutboundScan.apply_to_envelope(scan_result, env, path_label: "tracker")
-      scan_result
-    end
-
-    # Builds [location, text] pairs for every string value in the parsed
-    # `bd list --all --json` export, one issue at a time: `tracker:<issue
-    # id>` for the issue's own top-level fields, extended with the JSON
-    # path for anything nested, so a schema addition is scanned without a
-    # code change here.
-    def tracker_payload(issues)
-      payload = []
-      issues.each do |issue|
-        next unless issue.is_a?(Hash)
-
-        id = issue["id"].is_a?(String) ? issue["id"] : "unknown"
-        walk_tracker_json(issue, "tracker:#{id}", payload)
-      end
-      payload
-    end
-
-    def walk_tracker_json(node, location, payload)
-      case node
-      when String
-        payload << [location, node] unless node.empty?
-      when Hash
-        node.each { |key, value| walk_tracker_json(value, "#{location}:#{key}", payload) }
-      when Array
-        node.each_with_index { |value, index| walk_tracker_json(value, "#{location}[#{index}]", payload) }
-      end
+      [parsed, result.out.to_s]
     end
 
     def blank_output?(result)

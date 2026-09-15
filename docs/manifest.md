@@ -22,6 +22,10 @@ defaults are listed under "Defaults" below.
   "beads": {
     "prefix": "st",                   // id shape becomes st-[a-z0-9]+(\.\d+)?
     "topology": "beads",              // (opt) or "beads-with-forge-projection" (fixative)
+    "scan_refusal": "all",            // (opt) "all" (default) or "titles": which
+                                      // tracker fields an outbound-scan hit
+                                      // refuses the tracker push on - see
+                                      // "beads.scan_refusal" below
     "areas": {                        // (opt) label vocabulary + batching policy
       "labels": ["area:interpreter", "area:parser", "..."],
       "lands_alone": ["area:build"],
@@ -864,6 +868,45 @@ gate their tracker push without parsing the manifest themselves. The two
 fields are separate because "local because the repo said so" and "local
 because nobody said anything" are different sentences in a report.
 
+## `beads.scan_refusal`
+
+Which fields of the tracker export an outbound-scan hit refuses the
+tracker push on. The gated push is `bead.rb sync scan` followed by
+`bead.rb sync push` (`skills/wurk:kit/REFERENCE.md`, the banned-operation
+section): the scan reads the full export (`bd list --all --json`), scans
+every string field of every issue against the machine-configured pattern
+set (ADR-0014; the patterns and the control term live in
+`~/.claude/wurk.local.json`, never here), and writes a marker on a clean
+result that the push verb demands. This key decides what "clean" means.
+Two values:
+
+- **all** - a hit in any string field of any issue refuses the push. The
+  default: with no ruling on record, every field is treated as
+  public-grade.
+- **titles** - a hit in an issue's `title` refuses the push; a hit anywhere
+  else (description, notes, labels, any nested field) is reported as
+  informational and does not refuse. The shape for a tracker that syncs
+  to a PRIVATE remote where the operator has ruled that only titles must
+  be public-grade and the longer fields may carry context that would not
+  survive a public scan.
+
+Every field is scanned under both values; the key only decides which hits
+refuse. In both modes the scan attributes hits **per issue id, with field
+names** (`data.refusing_hits` and `data.informational_hits`, each
+`{id, count, fields}`), never by the matched text - the operator rules on
+which record to scrub, and the record is the unit they can act on. The
+push verb re-emits the scan marker's informational list in its own result
+so the report survives into the push.
+
+**Absent means `all`**, for the same reason `beads.sync` defaults to
+`local`: the two failure directions are not symmetrical. Guessing `titles`
+for a tracker whose remote is public publishes every description; guessing
+`all` for a tracker with a titles ruling costs one refused push and a
+report naming the issues that carried the hits.
+
+`manifest.rb check` reports `data.beads_scan_refusal`, so a caller reading
+a push result knows which hits could have refused it.
+
 ## `{path}` substitution
 
 `parallelism.trust` is the one command run *about* a new worktree rather
@@ -971,7 +1014,8 @@ Required: `wurk`, `beads.prefix`, `forge.kind`, `gate.full`, `gate.loop`,
 Defaults applied when a key is absent: `repo.default_branch` = `main`,
 `beads.topology` = `beads`, `beads.sync` = `local` (and warns - see
 "`beads.sync`" above for why the default is the safe value rather than the
-common one),
+common one), `beads.scan_refusal` = `all` (the wider refusal set, see
+"`beads.scan_refusal`" above),
 `commits.style` = `s-form`, `commits.subject_under` = 50,
 `commits.body_line_max` = 72, `commits.total_lines_max` = 40,
 `commits.trailer.key` = `Refs`, `models.direction` = `opus`,
