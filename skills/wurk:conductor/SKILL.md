@@ -367,7 +367,9 @@ worktree isolation when parallel workers share directories.
   "nothing moved" from "the conductor did not check".
 - **Worktrees**: create via the wurk:kit script
   (`worktree_create.rb`, `--base <integration-branch>` for stacked/
-  local-only work) - not raw git; the kit seeds and warms. Do not run
+  local-only work) - not raw git; the kit warms. (The tmux seed is
+  `/wurk:branch`'s own step, which a dispatched worker skips with
+  `--no-seed`.) Do not run
   many warms concurrently with a live gate - warms include a full test
   run and will contend (DB sandbox failures at 4x on one machine).
 - **Gate semaphore - first decide whether gates contend at all.** A
@@ -952,8 +954,9 @@ overrides for THIS dispatch (each cites its source):
 - Never push the tracker (conductor-owned).
 - <worktree override: "wurk:branch SKIPPED - worktree exists at <path>,
   branch <name>, verify via git branch --show-current", or "none". When
-  the worker cuts its own: /wurk:branch's create-and-warm step runs the
-  base preflight (`parallelism.preflight`, default true, docs/manifest.md)
+  the worker cuts its own, it runs `/wurk:branch --no-seed`:
+  /wurk:branch's create-and-warm step runs the base preflight
+  (`parallelism.preflight`, default true, docs/manifest.md)
   on every cut, and a `blocked preflight_refused` with
   data.preflight.reason in {local_default_diverged,
   default_checked_out_elsewhere, fast_forward_failed} is
