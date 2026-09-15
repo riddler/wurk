@@ -2,7 +2,7 @@
 name: wurk:branch
 description: Stand up the workspace for one bead - under worktree-per-issue, a warmed worktree with its own branch and a seeded tmux session; under branch-in-place, a branch in the current checkout. Reads .claude/wurk.json; honors .claude/wurk/branch.md.
 model: sonnet
-argument-hint: ["branch/worktree name, e.g. zz-00p.3-regression-ratchet; optionally -- <seed command>"]
+argument-hint: ["[--no-seed] [--no-finish] [--base <ref>] branch/worktree name, e.g. zz-00p.3-regression-ratchet; optionally -- <seed command>"]
 ---
 
 # Branch
@@ -42,12 +42,23 @@ grammar, a project's warm-cache expectations, what to check after
 
 ## Input
 
-`$ARGUMENTS` = optionally `--no-finish` and/or `--base <ref>`, then the
-branch name, optionally followed by `--` and the command to seed the new
-session with.
+`$ARGUMENTS` = optionally `--no-seed`, `--no-finish` and/or `--base <ref>`,
+then the branch name, optionally followed by `--` and the command to seed
+the new session with.
+
+**`--no-seed`** (optional) skips step 2 entirely: the workspace is created
+and warmed, and no tmux window is opened and no session is seeded. This is
+the flag for a caller that IS the session for the bead - a dispatched
+wurk-repo-worker, or a conductor cutting a workspace for a worker it is
+about to dispatch - where the seeded session would be a second claude
+working the same bead in the same worktree. The skip is mechanical so that
+such a caller never has to judge it. `--no-seed` with a seed command after
+`--` is a contradiction: refuse it and stop, rather than guessing which half
+the caller meant.
 
 **`--no-finish`** (optional) is passed straight through to `tmux_window.rb
-open` in step 2 - see there for when to use it.
+open` in step 2 - see there for when to use it. It is meaningless with
+`--no-seed`, which skips that step; accept the pair silently.
 
 **`--base <ref>`** (optional) is passed straight through to
 `worktree_create.rb` in step 1: the branch is cut from `<ref>` instead of
@@ -131,7 +142,9 @@ restated description goes stale the moment the bead is edited.
    Run it for real. **Do not `--dry-run` this one**: the point of the step is
    the workspace existing and warm, and a preview leaves you with neither.
 
-2. **Open the tmux window**, only once step 1 reports `ok: true`:
+2. **Open the tmux window**, only once step 1 reports `ok: true`, and
+   **only without `--no-seed`** - with it, skip this step entirely, run
+   neither command, and go to the report:
 
    ```bash
    ruby ~/.claude/skills/wurk:kit/scripts/tmux_window.rb ensure-session
@@ -245,10 +258,12 @@ restated description goes stale the moment the bead is edited.
 
 State the workspace path, the branch and what it was cut from, whether the
 warm caches came along, the gate result, **the tmux window** (name and id, or
-why it was skipped), and **the model the session launched with**, so the user
-can jump to it and knows what is running there without switching windows.
-When `data.layout` is `session-per-issue`, state the session name alongside
-the window.
+why it was skipped - `--no-seed` is a reason, and the report says so), and
+**the model the session launched with**, so the user can jump to it and
+knows what is running there without switching windows. When `data.layout`
+is `session-per-issue`, state the session name alongside the window. Under
+`--no-seed` there is no window and no model to report; say that the caller
+works the bead in the workspace itself.
 
 Remind that subsequent work on this bead happens **inside the workspace**, and
 that under worktree-per-issue the worktree is removed at merge by
@@ -277,6 +292,12 @@ that under worktree-per-issue the worktree is removed at merge by
   is not to then babysit four sessions. It is auto, not bypass: the permission
   system still applies, and the project's authority table still gates push,
   request-opening, and bead-closing on an explicit human ask.
+- **The caller that is already the session passes `--no-seed`.** A
+  dispatched wurk-repo-worker, or a conductor standing up a workspace for
+  one, is the session for that bead; a seeded window beside it is a second
+  writer on the same branch that someone later has to find and kill before
+  the worktree can be removed. The flag makes the skip mechanical, so no
+  such caller reasons its way to it - or fails to.
 - **A seeded session cannot spawn a nested Claude session of its own** - auto
   mode's classifier blocks it, regardless of which model is driving. If a bead
   needs a live session to observe (terminal rendering, spinner frames, dialog

@@ -22,10 +22,22 @@ Process:
    a dispatch instruction contradicts a repo rule WITHOUT a named
    override, flag the tension in your result instead of silently picking
    one.
-2. Stand up the workspace with wurk:branch - unless the dispatch says
-   the worktree already exists (then verify it: git branch
-   --show-current, seeded/warmed state) - and drive the bead with
+2. Stand up the workspace with `/wurk:branch --no-seed <name>` - unless
+   the dispatch says the worktree already exists (then verify it: git
+   branch --show-current, warmed state) - and drive the bead with
    wurk:work (or wurk:implement --loop if an approved plan exists).
+
+   **You ARE the session for this bead; never seed another.** Without
+   `--no-seed`, /wurk:branch ends by opening a tmux window and seeding a
+   second claude session on the same bead, which is a second writer on
+   your branch that the conductor then has to find and kill before the
+   worktree can be removed (campaign 260914: eleven workers reasoned
+   their way past the seed, one followed the default). The skip is a
+   rule, not a judgement call: pass `--no-seed`, never run
+   `tmux_window.rb open` by hand, and never start a claude session of
+   your own. If the workspace already has a live session when you
+   arrive, treat it as a foreign writer - halt and report, never work
+   beside it.
    TDD-first where the repo's conventions say so; the repo's quality
    gate is the advancement gate and is never skipped or weakened.
    When implementation completes, ALWAYS run `/wurk:verify --unattended`
