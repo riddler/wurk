@@ -85,7 +85,7 @@ class Manifest
                  project_level_skips not_applicable_skips sabotage timeout_seconds long_timeout_seconds],
     "gate.sabotage" => %w[test_roots test_pattern exempt_prefixes],
     "parallelism" => %w[model worktrees_dir trust warm_clone warm_globs warm repair_when repair post_branch
-                        timeout_seconds],
+                        timeout_seconds preflight],
     "tmux" => %w[session model layout editor],
     "models" => %w[direction],
     "artifacts" => %w[plans research adr filename repository],
@@ -120,6 +120,10 @@ class Manifest
     "gate.timeout_seconds" => 600,
     "gate.long_timeout_seconds" => 3600,
     "parallelism.timeout_seconds" => 600,
+    # Default ON: the preflight exists because worktrees cut from a stale
+    # local default branch have forked behind the remote and rebuilt already-
+    # merged work (see docs/manifest.md). Opting out is a deliberate act.
+    "parallelism.preflight" => true,
     "tmux.layout" => "window-per-issue"
   }.freeze
 
@@ -503,6 +507,15 @@ class Manifest
     fetch("parallelism.timeout_seconds")
   end
 
+  # Whether worktree_create.rb runs the base preflight before cutting a
+  # branch: local default == remote default by sha, fast-forwarding a
+  # zero-commit stale local default and refusing a diverged one. Defaults
+  # to true; `false` is the only way off, and `fetch` keeps a written false
+  # (false is not nil, so the default does not paper over it).
+  def preflight?
+    fetch("parallelism.preflight") == true
+  end
+
   def tmux?
     !fetch("tmux").nil?
   end
@@ -778,6 +791,7 @@ class Manifest
     validate_gate_timeout_seconds
     validate_gate_long_timeout_seconds
     validate_parallelism_timeout_seconds
+    validate_parallelism_preflight
     validate_gate_cwd
     validate_tmux
     validate_retired
@@ -930,6 +944,17 @@ class Manifest
     return if value.is_a?(Integer) && value.positive?
 
     errors << "#{path}: parallelism.timeout_seconds must be a positive integer, got #{value.inspect}"
+  end
+
+  # A JSON boolean or nothing. A string "false" is the value this rule
+  # exists to catch: it is truthy in Ruby, so without the check a consumer
+  # who wrote "false" to opt out would get the preflight anyway and read
+  # the refusal as a kit bug.
+  def validate_parallelism_preflight
+    value = dig_raw("parallelism.preflight")
+    return if value.nil? || value == true || value == false
+
+    errors << "#{path}: parallelism.preflight must be true or false, got #{value.inspect}"
   end
 
   # Shape only, never the filesystem - see docs/manifest.md and this plan's

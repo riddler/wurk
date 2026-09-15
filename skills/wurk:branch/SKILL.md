@@ -93,12 +93,22 @@ restated description goes stale the moment the bead is edited.
    ruby ~/.claude/skills/wurk:kit/scripts/worktree_create.rb [--base <ref>] <name>
    ```
 
-   One call covers the guard (an existing branch or directory), cutting the
-   branch from the default branch on the remote (falling back to the local
-   one if the fetch fails), or from `--base <ref>` when stacked work names a
-   parent branch, trusting the new path with the project's toolchain
-   manager before any managed command runs there, cloning the warm caches, and
-   a final `gate.loop` run to confirm the workspace comes up green.
+   One call covers the guard (an existing branch or directory), the **base
+   preflight** (below), cutting the branch from the default branch on the
+   remote (falling back to the local one if the fetch fails), or from
+   `--base <ref>` when stacked work names a parent branch, trusting the new
+   path with the project's toolchain manager before any managed command
+   runs there, cloning the warm caches, and a final `gate.loop` run to
+   confirm the workspace comes up green.
+
+   The base preflight runs after the fetch and before anything is cut,
+   whenever `parallelism.preflight` is on (it is on unless the manifest
+   says `false`). It asserts the local default branch equals the remote's
+   by sha, fast-forwards a local default that is merely behind, and
+   refuses one that has commits of its own - a worktree cut beside a stale
+   local default has forked behind the remote and rebuilt already-merged
+   work before, which is what the preflight exists to stop. Its verdict
+   comes back as `data.preflight` (see the result bullets below).
 
    The guard has exactly one way past it, and it is not a force: when the
    branch already exists **and** the worktree git has registered for it is
@@ -183,6 +193,23 @@ restated description goes stale the moment the bead is edited.
   nothing was cut. A `--base` passed alongside an adopt cannot apply and comes
   back as the `base_ignored_on_adopt` warning; surface it, since the caller
   asked for a base that was not used.
+- `blocked` `preflight_refused` - the base preflight stopped the cut before
+  anything was created; `data.preflight.reason` says why. STOP and report
+  the reason as given. `local_default_diverged` means the local default
+  branch has commits the remote does not: that is a merge-forward for the
+  user, and you never reset, rebase, or force-move the default branch to
+  make the preflight pass. `default_checked_out_elsewhere` names the
+  worktree that has the stale default checked out; the fast-forward belongs
+  there, by the user. `fast_forward_failed` carries git's own message (a
+  dirty file in the way, typically); report it verbatim. Do not turn the
+  preflight off in the manifest to get past a refusal.
+- `data.preflight.status` - `"in_sync"` needs no mention. `"fast_forwarded"`
+  goes in the report: the local default branch moved to the remote's sha
+  before the cut, and the user should know their main checkout moved.
+  `"skipped"` (with the `preflight_skipped` warning) and `"disabled"` are
+  worth a line each, since either means the base was not checked. The
+  `preflight_stale_remote` warning rides with `fetch_failed`: the check ran
+  against the remote as last fetched.
 - `blocked` `base_ref_not_found` - the `--base` ref does not resolve to a
   commit. Report it; a typo'd parent silently cut from the wrong base is the
   stacking defect the check exists to prevent. Do not fall back to the
