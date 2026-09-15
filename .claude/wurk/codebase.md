@@ -12,7 +12,10 @@ state, because wurk is orienting agents to itself.
   contract), `scripts/*.rb`, `scripts/lib/*.rb`, `scripts/test/*.rb`.
 - `agents/*.md` - the eight subagents the skills spawn: six read-only
   research agents, plus `wurk-gate-reader` (triages a failing gate; the one
-  with a Bash tool) and `wurk-plan-critic`.
+  with a Bash tool) and `wurk-plan-critic`. Every `agents/*.md` is
+  generated from `agents/*.md.in` plus `agents/blocks/` per
+  `agents/routing.yml` (`build_agents.rb`); edit the template or block,
+  never the generated file.
 - `docs/` - `architecture.md`, `manifest.md`, `gate-contract.md`, `plan.md`
   (active migration plan), `docs/adr/` (settled decisions), `docs/plans/`
   (per-bead implementation plans), `docs/research/` (dated research docs).

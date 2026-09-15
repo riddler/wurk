@@ -1,0 +1,27 @@
+# Which generated agent must carry which shared block.
+#
+# Read by skills/wurk:kit/scripts/build_agents.rb (ADR-0019). Each key under
+# `blocks` names a file agents/blocks/<key>.md; its list names the agents
+# (template basenames, without .md.in) whose template carries
+# `@include <key>` on a line of its own. The build refuses when a template
+# includes a block this file does not route to it, when a listed agent's
+# template lacks the include, when a block file has no entry here, or when
+# an entry names no block file - so this file is the one place a reader
+# learns who shares what, and an include that appears nowhere here is a
+# mistake rather than a convention.
+#
+# An agent belongs on a block's list when it MAY DO the thing the block
+# governs. Both blocks below govern a subagent that may commit or run the
+# gate; a read-only agent never carries them, because the prose would tell
+# it about a protocol it cannot reach.
+
+blocks:
+  # The gate-wait protocol: short gate foreground, long gate started
+  # detached and polled foreground, never a Monitor, the semaphore rules.
+  gate-discipline:
+    - wurk-repo-worker
+
+  # What a dispatch relays verbatim to any subagent that may commit or run
+  # the gate: the consent quote and the applicable gate tier.
+  consent-relay:
+    - wurk-repo-worker
