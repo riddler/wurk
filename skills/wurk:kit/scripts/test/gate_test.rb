@@ -1977,4 +1977,67 @@ class GateTest < Minitest::Test
       refute_equal File.realpath(main), File.realpath(env["data"]["work_tree_root"])
     end
   end
+
+  # gate.guard_ledger names a tracked file in the tree being gated, so whether
+  # it exists is a property of the branch under test, not of wherever the
+  # manifest happened to be found. The fixture writes the ledger into the
+  # manifest's checkout only, never into the worktree - the branch-adds-the-
+  # ledger case: the current-checkout-root anchor answers true (wrong), the
+  # work-tree anchor answers false (right). Exercised through all three
+  # gate_guard_from call sites - the carve-out path, the gate-could-not-start
+  # path, and the normal completed-run path - so a revert of any one of them
+  # alone turns this test red, not just the site a narrower fixture would
+  # happen to hit.
+  # sabotage: pass manifest.checkout_root to gate_guard_from instead of the
+  # threaded work-tree root -> red (ledger_exists comes back true from the
+  # ledger in the manifest's checkout, though the tree being gated has none)
+  def test_ledger_exists_answers_about_the_worktree_not_the_manifests_checkout
+    write_ledger = lambda do |main|
+      FileUtils.mkdir_p(File.join(main, "docs"))
+      File.write(File.join(main, "docs", "quality-gate-changes.md"), "# ledger\n")
+    end
+
+    # Carve-out path: gate_guard_from's first call site.
+    in_tmp_worktree("gate_tier1") do |tree, main|
+      @fake.expect(%w[git rev-parse --git-common-dir], out: "#{main}/.git\n")
+      expect_no_elixir_diff(toplevel: tree)
+      expect_no_sabotage_diff
+      write_ledger.call(main)
+
+      _code, env = run_gate
+
+      assert_equal false, env["data"]["gate_guard"]["ledger_exists"],
+                   "carve-out path: ledger_exists answered about the manifest's checkout"
+    end
+
+    # Gate-could-not-start path: gate_guard_from's second call site.
+    in_tmp_worktree("gate_tier1") do |tree, main|
+      @fake.expect(%w[git rev-parse --git-common-dir], out: "#{main}/.git\n")
+      expect_elixir_diff(toplevel: tree)
+      expect_no_sabotage_diff
+      write_ledger.call(main)
+      @fake.expect(%w[make report], start_failed: true,
+                                     err: "could not start command - No such file or directory - make")
+
+      _code, env = run_gate
+
+      assert_equal false, env["data"]["gate_guard"]["ledger_exists"],
+                   "gate-could-not-start path: ledger_exists answered about the manifest's checkout"
+    end
+
+    # Normal completed-run path: gate_guard_from's third call site.
+    in_tmp_worktree("gate_tier1") do |tree, main|
+      @fake.expect(%w[git rev-parse --git-common-dir], out: "#{main}/.git\n")
+      expect_elixir_diff(toplevel: tree)
+      expect_no_sabotage_diff
+      write_ledger.call(main)
+      @fake.expect(%w[make report], out: JSON.generate(GREEN_REPORT))
+      @fake.expect(%w[make attest], out: "Full gate green.\n")
+
+      _code, env = run_gate
+
+      assert_equal false, env["data"]["gate_guard"]["ledger_exists"],
+                   "normal path: ledger_exists answered about the manifest's checkout"
+    end
+  end
 end

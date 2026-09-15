@@ -682,9 +682,19 @@ working tree carries its own .claude/wurk.json:
     gate.rb sabotage_diff_args
   the working-tree file reads behind the `# sabotage:` note check -
     gate.rb's default sabotage file reader
-resolved against the manifest's checkout root, never the process cwd:
   gate.guard_ledger existence - gate.rb gate_guard_from
 ```
+
+The gate family has no remaining use of the manifest's checkout root as an
+anchor - see wu-1zu. Two other manifest-relative resolutions this audit found
+stay on the checkout root deliberately, because what they check are siblings
+of the manifest inside `.claude/`, not tracked content of the branch being
+gated: `mr.review_agents` resolution (`mr_review_agent_roots` /
+`mr_review_agent_path` / `mr_review_agents_missing`) and the ADR-directory
+lint (`block_missing_adr_dir`, `artifacts.adr`). The ADR-directory lint is
+the exception worth flagging: whether it should anchor on the working tree
+instead is an open question, covered by a follow-up bead rather than settled
+here.
 
 ## `tmux`
 

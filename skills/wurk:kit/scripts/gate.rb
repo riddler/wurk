@@ -350,10 +350,13 @@ module Gate
 
       {
         ledger_path: ledger_path,
-        # Resolved against the manifest's checkout root, not Dir.pwd: manifest
-        # resolution walks up from the working directory, so gate.rb is
-        # legitimately invoked from a subdirectory, where a bare relative
-        # File.exist? silently reports a present ledger as absent.
+        # Resolved against the root of the working tree being gated, not Dir.pwd and
+        # not the manifest's checkout root: manifest resolution walks up from the
+        # working directory, so gate.rb is legitimately invoked from a subdirectory,
+        # where a bare relative File.exist? silently reports a present ledger as
+        # absent - and the manifest may have been found in a DIFFERENT checkout
+        # entirely, where the ledger's presence answers about another branch. See
+        # lib/work_tree.rb and wu-1zu.
         ledger_exists: !ledger_path.nil? && File.exist?(File.join(root, ledger_path)),
         stage: stage && { status: stage["status"], summary: stage["summary"], findings: stage["findings"] }
       }
@@ -553,7 +556,7 @@ module Gate
         env.data[:profile] = nil
         env.data[:stages] = []
         env.data[:skipped_stages] = []
-        env.data[:gate_guard] = gate_guard_from([], ledger_path, manifest.checkout_root)
+        env.data[:gate_guard] = gate_guard_from([], ledger_path, root)
         env.data[:gate_cwd] = nil
         return env.emit(io)
       end
@@ -576,7 +579,7 @@ module Gate
         env.data[:profile] = nil
         env.data[:stages] = []
         env.data[:skipped_stages] = []
-        env.data[:gate_guard] = gate_guard_from([], ledger_path, manifest.checkout_root)
+        env.data[:gate_guard] = gate_guard_from([], ledger_path, root)
         env.data[:gate_cwd] = manifest.gate_chdir
         env.data[:attested] = false
         env.data[:attestation_message] = nil
@@ -604,7 +607,7 @@ module Gate
       env.data[:profile] = report["profile"]
       env.data[:stages] = stages
       env.data[:skipped_stages] = skipped
-      env.data[:gate_guard] = gate_guard_from(stages, ledger_path, manifest.checkout_root)
+      env.data[:gate_guard] = gate_guard_from(stages, ledger_path, root)
       # Resolved absolute directory the gate command ran in, or nil when the
       # project gates from its checkout root. The `commands` trail already
       # shows it via Sh.render; this makes it machine-readable for the

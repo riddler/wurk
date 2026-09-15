@@ -910,14 +910,14 @@ which is the follow-up bead named in What We're NOT Doing).
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] The kit suite passes: `ruby skills/wurk:kit/scripts/test/run.rb`, 0
+- [x] The kit suite passes: `ruby skills/wurk:kit/scripts/test/run.rb`, 0
       failures, 0 errors, 0 skips.
-- [ ] `test_ledger_exists_answers_about_the_worktree_not_the_manifests_checkout`
+- [x] `test_ledger_exists_answers_about_the_worktree_not_the_manifests_checkout`
       fails when any of the three call sites is reverted to
       `manifest.checkout_root`.
-- [ ] `test_ledger_exists_is_true_when_gate_rb_is_invoked_from_a_subdirectory`
+- [x] `test_ledger_exists_is_true_when_gate_rb_is_invoked_from_a_subdirectory`
       still passes, unmodified.
-- [ ] `rg "gate_guard_from\(.*checkout_root" skills/wurk:kit/scripts/` returns
+- [x] `rg "gate_guard_from\(.*checkout_root" skills/wurk:kit/scripts/` returns
       nothing.
 
 #### Manual Verification:
