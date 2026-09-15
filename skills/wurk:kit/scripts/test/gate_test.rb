@@ -2040,4 +2040,40 @@ class GateTest < Minitest::Test
                    "normal path: ledger_exists answered about the manifest's checkout"
     end
   end
+
+  # gate.cwd is scoped execution, not a matching rescope (docs/manifest.md),
+  # but the ROOT that scope is resolved against is the same anchor as every
+  # other wu-1zu site: the work tree, not the checkout the manifest happened
+  # to be found in. The gate_subdir fixture's gate.cwd ("backend") exists in
+  # both the worktree and the manifest's checkout here, so only the anchor
+  # distinguishes the two rendered `(cd ... && make report)` paths.
+  # sabotage: pass manifest.gate_chdir(root: manifest.checkout_root) instead of
+  # the threaded work-tree root -> red (the rendered `(cd ... && make report)`
+  # names <manifest checkout>/backend, and the assertion on
+  # <worktree>/backend fails)
+  def test_the_gate_command_runs_under_the_worktree_when_gate_cwd_is_declared
+    in_tmp_worktree("gate_subdir") do |tree, main|
+      FileUtils.mkdir_p(File.join(tree, "backend"))
+      FileUtils.mkdir_p(File.join(main, "backend"))
+      @fake.expect(%w[git rev-parse --git-common-dir], out: "#{main}/.git\n")
+      expect_base_ref(toplevel: tree)
+      @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "backend/lib/acme/foo.ex\n")
+      @fake.expect(%w[git status --porcelain], out: "")
+      expect_no_subdir_sabotage_diff
+      @fake.expect(%w[make report], out: JSON.generate(GREEN_REPORT))
+      @fake.expect(%w[make attest], out: "Full gate green.\n")
+
+      _code, env = run_gate
+
+      expected_chdir = File.join(File.realpath(tree), "backend")
+      wrong_chdir = File.join(File.realpath(main), "backend")
+      report_call = @fake.calls.find { |c| c.argv == %w[make report] }
+      attest_call = @fake.calls.find { |c| c.argv == %w[make attest] }
+
+      assert_equal expected_chdir, File.realpath(report_call.chdir)
+      assert_equal expected_chdir, File.realpath(attest_call.chdir)
+      assert_equal expected_chdir, File.realpath(env["data"]["gate_cwd"])
+      refute_equal wrong_chdir, File.realpath(report_call.chdir)
+    end
+  end
 end

@@ -625,9 +625,13 @@ The repo-root-relative directory the five consumer gate commands
 (`gate.full`, `gate.loop`, `gate.report`, `gate.report_loop`, `gate.attest`)
 run in. Absent (the common case) means they run at the root of the checkout
 being gated. Present, the resolved `chdir:` is
-`<root of the checkout being gated>/<gate.cwd>` - the checkout root for
-`gate.rb`, and the new (or refreshed) worktree's root for
-`worktree_create.rb` and `worktree_refresh.rb`.
+`<root of the checkout being gated>/<gate.cwd>`. "The checkout being gated"
+is not one fixed anchor: for `gate.rb` and `gate_run.rb` it is the root of the
+working tree git reports (`git rev-parse --show-toplevel`, see
+`lib/work_tree.rb`), and for `worktree_create.rb` and `worktree_refresh.rb` it
+is the worktree path they were handed. See "What is root-relative, and
+against what" below for why the first pair does not use the manifest's own
+checkout root (wu-1zu).
 
 **The rule: `gate.cwd` scopes execution of consumer gate commands; it never
 rescopes matching of manifest paths.** `gate.build_paths`,
@@ -1029,12 +1033,32 @@ steps:
    and look there.
 
 Walk-up comes first, rather than going straight to the main checkout as the
-plan originally leaned. A worktree is a full checkout and carries its own
-`.claude/wurk.json`, so walking up finds the manifest *on the branch being
-worked* - which is what makes a schema change testable on the branch that
-makes it. Reading main's copy instead would mean every manifest edit landed
-untested. Step 2 covers the case where the working directory is outside any
-checkout of the repo.
+plan originally leaned. When a worktree tracks its own `.claude/wurk.json` -
+the convention every consumer in this fleet follows, not a guarantee the kit
+enforces - walking up finds the manifest *on the branch being worked*, which
+is what makes a schema change testable on the branch that makes it. Reading
+main's copy instead would mean every manifest edit landed untested. The
+ordering, and that rationale, are unchanged by wu-1zu.
+
+What wu-1zu corrects is the premise that walk-up-first therefore makes the
+manifest's checkout and the working tree the same thing. It does not, in two
+cases: a consumer that gitignores `.claude/` (the walk-up crosses into
+whatever checkout - a sibling worktree, the main checkout - happens to carry
+a manifest above it), and a worktree that simply carries no manifest of its
+own, which is not an edge case but the ordinary shape of a worktree that adds
+no schema change. Step 2's own stated scope ("the working directory is
+outside any checkout of the repo") undersells how often it actually fires:
+it also fires, routinely, for a working directory squarely inside a worktree
+that has no manifest above it - not only for one outside any checkout at all.
+
+The kit's gate path (`gate.rb`, `gate_run.rb`) no longer depends on the
+"same checkout" premise: both resolve their own working-tree anchor
+(`lib/work_tree.rb`, reported as `data.work_tree_root`) rather than reading
+`Manifest#checkout_root` for anything but siblings of the manifest itself.
+Two lint sites still assume the premise and are open questions rather than
+settled by this fix: the ADR-directory lint (`block_missing_adr_dir`,
+`artifacts.adr`) and `mr_review_agent_roots` / `mr_review_agent_path` /
+`mr_review_agents_missing`.
 
 ## Required, optional, and defaults
 
@@ -1079,7 +1103,9 @@ lifecycle is empty, and
 no `artifacts.adr` means the docs agents locate decision records by
 convention and say so, and
 no `gate.cwd` means the gate commands run at the root of the checkout being
-gated.
+gated - the working tree's own root for `gate.rb` and `gate_run.rb`, the
+worktree path handed in for `worktree_create.rb` and `worktree_refresh.rb`
+(see "`gate.cwd`" above).
 
 ## Validation
 

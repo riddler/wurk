@@ -356,6 +356,16 @@ verify_res = Sh.run(manifest.gate_attest, chdir: manifest.gate_chdir, envelope: 
 invoking gate.rb from inside the subdirectory does not double-apply the
 prefix.
 
+**Later (2026-09-15):** `gate_chdir`'s `root:` keyword no longer has a
+default. Defaulting it to `manifest.checkout_root` was correct for the
+subdirectory case this plan addressed and wrong across git worktrees, where
+the manifest may have been found in a different checkout entirely - so a
+consumer with `gate.cwd` ran its whole gate in the wrong tree (wu-1zu).
+`root:` is now required, and `gate.rb` / `gate_run.rb` pass the working-tree
+root from `git rev-parse --show-toplevel` (`lib/work_tree.rb`). The
+subdirectory guarantee this paragraph is about is unchanged: that anchor is
+invariant across subdirectories too.
+
 Also set, beside the other `env.data` gate fields (near `gate.rb:462-469`):
 
 ```ruby

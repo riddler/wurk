@@ -50,10 +50,18 @@ class GateRunTest < Minitest::Test
     $stderr = original
   end
 
+  # gate_run.rb start resolves the work-tree anchor once (wu-1zu), the same as
+  # gate.rb, so every start test authorizes it. Defaults to Dir.pwd, which is
+  # what real git reports for in_tmp_repo's fixture.
+  def expect_work_tree(toplevel: nil)
+    @fake.expect(%w[git rev-parse --show-toplevel], out: "#{toplevel || Dir.pwd}\n")
+  end
+
   # --- start ------------------------------------------------------------
 
   def test_start_resolves_reporting_argv_and_records_it_for_the_supervisor
     in_tmp_repo("gate_tier1") do |dir|
+      expect_work_tree
       run_dir = File.join(dir, "run")
       code, env = run_gr(%W[start --run-dir #{run_dir}])
 
@@ -76,6 +84,7 @@ class GateRunTest < Minitest::Test
 
   def test_start_falls_back_to_gate_full_when_no_reporting_command_exists
     in_tmp_repo("valid") do |dir|
+      expect_work_tree
       run_dir = File.join(dir, "run")
       run_gr(%W[start --run-dir #{run_dir}])
 
@@ -86,6 +95,7 @@ class GateRunTest < Minitest::Test
 
   def test_start_deadline_uses_long_timeout_seconds_not_timeout_seconds
     in_tmp_repo("gate_tier1") do |dir|
+      expect_work_tree
       run_dir = File.join(dir, "run")
       run_gr(%W[start --run-dir #{run_dir}])
 
@@ -101,12 +111,16 @@ class GateRunTest < Minitest::Test
 
   def test_start_dry_run_creates_no_run_dir_and_spawns_nothing
     in_tmp_repo("gate_tier1") do |dir|
+      expect_work_tree
       run_dir = File.join(dir, "run")
       code, env = run_gr(%W[start --dry-run --run-dir #{run_dir}])
 
       assert_equal 0, code
       refute Dir.exist?(run_dir)
-      assert_empty @fake.calls
+      # The work-tree anchor (wu-1zu) is resolved even on --dry-run, so the
+      # preview reports the same chdir the real run would use - that is the
+      # one call expected here, not zero.
+      assert_equal [%w[git rev-parse --show-toplevel]], @fake.calls.map(&:argv)
       assert_empty @fake.detached_calls
       assert_nil env["data"]["pid"]
       assert_equal [], env["data"]["locks"]
@@ -115,6 +129,7 @@ class GateRunTest < Minitest::Test
 
   def test_start_with_lock_flags_acquires_and_records_the_supervisor_pid
     in_tmp_repo("gate_tier1") do |dir|
+      expect_work_tree
       run_dir = File.join(dir, "run")
       lock_dir = File.join(dir, "locks", "gate-x")
 
@@ -157,6 +172,7 @@ end
   # answer that Lock.try_acquire is right to keep.
   def test_start_on_an_unusable_lock_path_blocks_with_an_envelope
     in_tmp_repo("gate_tier1") do |dir|
+      expect_work_tree
       closed = File.join(dir, "closed")
       FileUtils.mkdir_p(closed)
       File.chmod(0o500, closed)
@@ -176,6 +192,7 @@ end
 
   def test_start_on_an_unusable_run_dir_blocks_with_an_envelope
     in_tmp_repo("gate_tier1") do |dir|
+      expect_work_tree
       closed = File.join(dir, "closed")
       FileUtils.mkdir_p(closed)
       File.chmod(0o500, closed)
@@ -212,6 +229,7 @@ end
   def test_start_prefers_machine_gate_slots_over_the_slots_flag
     in_tmp_repo("gate_tier1") do |dir|
       with_user_config("machine" => { "gate_slots" => 2 }) do
+        expect_work_tree
         code, env = run_gr(%W[start --run-dir #{dir}/run --slots-dir #{dir}/slots --slots 3
                               --campaign c1 --bead zz-1 --dry-run])
 
@@ -229,6 +247,7 @@ end
   def test_start_takes_the_slot_count_from_the_machine_config_alone
     in_tmp_repo("gate_tier1") do |dir|
       with_user_config("machine" => { "gate_slots" => 1 }) do
+        expect_work_tree
         code, env = run_gr(%W[start --run-dir #{dir}/run --slots-dir #{dir}/slots --campaign c1 --bead zz-1 --dry-run])
 
         assert_equal 0, code
@@ -236,6 +255,36 @@ end
         assert_equal "machine_config", env["data"]["slots_source"]
         assert_empty env["warnings"]
       end
+    end
+  end
+
+  # The gate.cwd resolution wu-1zu fixes and the run_dir placement it
+  # deliberately leaves alone (see gate_run.rb): the detached gate RUNS under
+  # the work tree's gate.cwd, but RECORDS beside the manifest, so a
+  # /wurk:cleanup that later removes the worktree cannot orphan a run still
+  # writing its sentinel there.
+  # sabotage: resolve the detached gate's chdir from manifest.checkout_root
+  # again -> red (the DetachedCall's chdir is the manifest's checkout, not the
+  # worktree the run was started from)
+  def test_the_detached_gate_runs_in_the_worktree_and_records_beside_the_manifest
+    in_tmp_worktree("gate_subdir") do |tree, main|
+      # Both exist so a reverted anchor resolves to a real directory too - the
+      # point is a clean assertion mismatch, not an ENOENT crash, when the
+      # mutation in the sabotage note above is applied.
+      FileUtils.mkdir_p(File.join(tree, "backend"))
+      FileUtils.mkdir_p(File.join(main, "backend"))
+      @fake.expect(%w[git rev-parse --git-common-dir], out: "#{main}/.git\n")
+      expect_work_tree(toplevel: tree)
+
+      code, env = run_gr(%w[start])
+
+      assert_equal 0, code
+      meta = JSON.parse(File.read(File.join(env["data"]["run_dir"], "meta.json")))
+
+      assert_equal File.join(File.realpath(tree), "backend"), File.realpath(meta["chdir"])
+
+      run_dir_root = File.realpath(env["data"]["run_dir"]).sub(%r{/\.claude/wurk-runs/gate/.+\z}, "")
+      assert_equal File.realpath(main), run_dir_root
     end
   end
 

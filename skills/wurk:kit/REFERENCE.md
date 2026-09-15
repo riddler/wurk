@@ -378,7 +378,8 @@ Runs the consumer's own gate commands - `gate.full`, `gate.loop`,
 `docs/gate-contract.md` the project reached. It knows no gate tool's flag
 surface; every command is manifest data. The most constrained script here.
 Each of the five runs in `gate.cwd` when the manifest declares one (default
-the checkout root); `data.gate_cwd` reports the resolved directory. See
+the working-tree root - `data.work_tree_root` below, not the manifest's own
+checkout root); `data.gate_cwd` reports the resolved directory. See
 `docs/manifest.md`.
 
 - `data.work_tree_root` reports the absolute path of the git working tree
