@@ -1364,6 +1364,38 @@ class ManifestBeadsSyncTest < Minitest::Test
   end
 end
 
+# beads.scan_refusal - which tracker fields a scan hit refuses the push on
+# (wu-b4i). The safety property: an absent key resolves to the WIDER set.
+class ManifestBeadsScanRefusalTest < Minitest::Test
+  def with_refusal(value)
+    ManifestFixtures.load_with("valid", { "beads" => { "scan_refusal" => value } })
+  end
+
+  # sabotage: change the default to "titles" -> red. With no ruling on
+  # record, every field refuses.
+  def test_absent_scan_refusal_defaults_to_all_silently
+    m = ManifestFixtures.load("valid")
+    assert m.valid?
+    assert_empty m.warnings
+    assert_equal "all", m.beads_scan_refusal
+  end
+
+  def test_titles_is_accepted_and_is_not_an_unknown_key
+    m = with_refusal("titles")
+    assert m.valid?, m.errors.inspect
+    assert_empty m.warnings
+    assert_equal "titles", m.beads_scan_refusal
+  end
+
+  # sabotage: drop the enum entry -> red. A value the kit does not know
+  # must not reach the scan as "refuse on nothing".
+  def test_an_unrecognized_refusal_set_blocks
+    m = with_refusal("descriptions")
+    refute m.valid?
+    assert_match(/beads\.scan_refusal is "descriptions"; expected one of all, titles/, m.errors.join("\n"))
+  end
+end
+
 # The lint's environmental check: mode local, dolt remote present anyway.
 class ManifestBeadsSyncLintTest < Minitest::Test
   DOLT_REMOTE_STATE = {
@@ -1467,6 +1499,13 @@ class ManifestBeadsSyncLintTest < Minitest::Test
     in_checkout(sync: nil) do |_code, env|
       assert_equal "local", env["data"]["beads_sync"]
       assert_equal false, env["data"]["beads_sync_declared"]
+    end
+  end
+
+  # sabotage: drop data.beads_scan_refusal -> red.
+  def test_the_lint_reports_the_scan_refusal_set
+    in_checkout(sync: "dolthub") do |_code, env|
+      assert_equal "all", env["data"]["beads_scan_refusal"]
     end
   end
 end

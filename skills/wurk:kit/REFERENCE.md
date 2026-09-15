@@ -235,11 +235,30 @@ places or neither.
 
 A script that can only *refuse* an operation performs nothing irreversible;
 it is itself the human-meaningful gate this list exists to keep in front of
-a push, not an exception carved out of it. `outbound_scan.rb` and the scan
-`bead.rb sync push` runs before shelling `bd dolt push` are both this
-shape - each blocks a push on a hit and neither ever issues one - so they
-extend what the list protects rather than needing an entry of their own
-(ADR-0014). The list itself does not change.
+a push, not an exception carved out of it. `outbound_scan.rb` and
+`bead.rb sync scan` are both this shape - each blocks a push on a hit and
+neither ever issues one - so they extend what the list protects rather than
+needing an entry of their own (ADR-0014). `bd dolt push` is not on the
+list, and `bead.rb sync push` shells it; what fronts that push is the scan
+verb's marker. The list itself does not change.
+
+**The tracker push is two verbs that never chain.** `bead.rb sync scan`
+reads the full tracker export (`bd list --all --json`), scans every string
+field in process, attributes hits per issue id and field name, and on a
+clean result writes a marker under the git common dir
+(`.git/wurk/tracker-scan.json`) carrying the export's fingerprint and the
+manifest's `beads.scan_refusal` (`all` or `titles` - `docs/manifest.md`).
+`bead.rb sync push` never scans: it refuses (`scan_marker_missing`,
+`scan_marker_expired` past ten minutes, `scan_marker_stale` when the export
+or the refusal set changed, `scan_marker_unreadable`) unless a fresh marker
+fingerprints the export it is about to publish, then shells `bd dolt push`
+and reports `data.confirmed` - a push that exits 0 saying nothing is
+re-run once and, if still silent, reported unconfirmed rather than
+successful. Both verbs honor `beads.sync` and do nothing under `local`
+(`data.skipped`). There is no verb that scans and pushes in one call, on
+purpose: the scan's report - in particular the informational hits under a
+`titles` refusal set - is meant to be read before anything is published,
+and a chained command is exactly how that reading gets skipped.
 
 The banned list is the mechanical floor, not the whole story: judgment calls
 (phase sizing, `bd close` triggers, a project's own testing protocol) stay in

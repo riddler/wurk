@@ -188,15 +188,25 @@ Omitted, sweep every worktree.
      is where this repo's beads live by design. Report `closes recorded,
      not pushed (tracker is local-only)`. That is the finished state, not a
      deferral; there is no "next push" to mention.
-   - **`git` or `dolthub`** - push:
+   - **`git` or `dolthub`** - scan, read the result, then push:
 
      ```bash
-     bd dolt push
+     ruby ~/.claude/skills/wurk:kit/scripts/bead.rb sync scan
+     ruby ~/.claude/skills/wurk:kit/scripts/bead.rb sync push
      ```
 
-     Non-fatal if offline; report that the closes are local and will publish
-     on the next push. Under `dolthub` the credentials are DoltHub's rather
-     than the forge's, so an auth failure is the same non-fatal report.
+     The two are separate verbs on purpose: the push refuses without a
+     scan younger than ten minutes over the same export, so the scan's
+     result is read before anything is published. A `blocked`
+     `outbound_scan_hit` is a stop - report the issue ids and field names,
+     never rephrase-and-retry. `data.informational_hits` do not refuse
+     but go into the report by id and field.
+
+     Non-fatal if offline (`dolt_push_failed` is a warning); report that
+     the closes are local and will publish on the next push, and report
+     `data.confirmed` false as an unconfirmed push, not a successful one.
+     Under `dolthub` the credentials are DoltHub's rather than the forge's,
+     so an auth failure is the same non-fatal report.
 
 ## How to read the result
 

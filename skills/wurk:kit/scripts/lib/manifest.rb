@@ -56,6 +56,7 @@ class Manifest
   ENUMS = {
     "beads.topology" => %w[beads beads-with-forge-projection],
     "beads.sync" => %w[local git dolthub],
+    "beads.scan_refusal" => %w[all titles],
     "forge.kind" => %w[github gitlab],
     "parallelism.model" => %w[worktree-per-issue branch-in-place],
     "commits.style" => %w[s-form conventional],
@@ -95,7 +96,7 @@ class Manifest
     nil => %w[wurk repo beads forge gate parallelism tmux models artifacts commits changelog release judge rebase
              mr external_tracker],
     "repo" => %w[default_branch],
-    "beads" => %w[prefix topology sync areas],
+    "beads" => %w[prefix topology sync scan_refusal areas],
     "beads.areas" => %w[labels lands_alone always_batchable],
     "forge" => %w[kind host labels],
     "gate" => %w[cwd full loop report report_loop attest guard_ledger build_paths also_gated_paths moving_files
@@ -129,6 +130,9 @@ class Manifest
     # Deliberately NOT the most common value. See validate_beads_sync and
     # docs/manifest.md: an absent key must never be able to cause a push.
     "beads.sync" => "local",
+    # The wider refusal set: with no ruling on record every field a scan hit
+    # lands in refuses the tracker push. See beads_scan_refusal.
+    "beads.scan_refusal" => "all",
     "commits.style" => "s-form",
     "commits.subject_under" => 50,
     "commits.body_line_max" => 72,
@@ -302,6 +306,23 @@ class Manifest
   # into a push here.
   def beads_push_allowed?
     %w[git dolthub].include?(beads_sync)
+  end
+
+  # Which fields of the tracker export a scan hit refuses the push on
+  # (`bead.rb sync scan`, extending the tracker path of ADR-0014):
+  #
+  #   all    - any string field of any issue. The default: with no ruling
+  #            on record, every hit refuses.
+  #   titles - each issue title only. A hit anywhere else is reported,
+  #            attributed to its issue id, and does not refuse. The shape
+  #            an operator rules when the remote is private and only the
+  #            titles must be public-grade.
+  #
+  # Every field is still scanned in both modes; the mode only decides
+  # which hits refuse. Written as an accessor over the enum so a value the
+  # kit does not know cannot reach the scan as "refuse on nothing".
+  def beads_scan_refusal
+    fetch("beads.scan_refusal")
   end
 
   # True when the consumer actually wrote the key down, false when the
@@ -1538,6 +1559,9 @@ module ManifestCli
       # said" are different sentences in those skills' reports.
       env.data[:beads_sync] = manifest.beads_sync
       env.data[:beads_sync_declared] = manifest.beads_sync_declared?
+      # The scan refusal set `bead.rb sync scan` applies, so a caller
+      # reading the push result knows which hits could have refused.
+      env.data[:beads_scan_refusal] = manifest.beads_scan_refusal
 
       # The pre-request review round, read by /wurk:mr: the names to spawn,
       # and empty when the consumer declares none.
