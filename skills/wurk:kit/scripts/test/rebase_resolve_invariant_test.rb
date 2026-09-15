@@ -2,6 +2,7 @@
 
 require "minitest/autorun"
 require_relative "../rebase_resolve"
+require_relative "support/home_guard"
 
 # additive_merge? as a pure function against synthetic strings - no Sh, no
 # manifest, no CLI. See rebase_resolve.rb's own comment on the function for

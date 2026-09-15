@@ -4,6 +4,7 @@ require "json"
 require "tmpdir"
 require "fileutils"
 require_relative "../../lib/manifest"
+require_relative "home_guard"
 
 # The fixture-manifest convention, in one place. Every test that exercises a
 # manifest-derived value drives it from test/fixtures/manifests/, never from

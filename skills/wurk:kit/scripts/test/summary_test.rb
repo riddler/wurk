@@ -2,6 +2,7 @@
 
 require "minitest/autorun"
 require_relative "../lib/summary"
+require_relative "support/home_guard"
 
 class SummaryTest < Minitest::Test
   # sabotage: SENTENCE_END changed to /(?<=[.!?])/ (drop the whitespace/

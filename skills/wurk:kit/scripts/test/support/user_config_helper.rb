@@ -4,6 +4,7 @@ require "json"
 require "tmpdir"
 require "fileutils"
 require_relative "../../lib/user_config"
+require_relative "home_guard"
 
 # The UserConfig test-support convention, mirroring ManifestHelper. A machine
 # config has no fixture directory the way the manifest does - every test

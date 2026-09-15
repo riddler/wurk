@@ -4,6 +4,7 @@ require "minitest/autorun"
 require "json"
 require "stringio"
 require_relative "../lib/envelope"
+require_relative "support/home_guard"
 
 class EnvelopeTest < Minitest::Test
   def test_shape_and_ok_true_when_nothing_blocked

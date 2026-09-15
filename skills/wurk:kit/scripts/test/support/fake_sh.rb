@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "../../lib/sh"
+require_relative "home_guard"
 
 # FakeSh is a recording/replaying double for Sh, installed via
 # Sh.runner = FakeSh.new so no test ever shells out for real.
