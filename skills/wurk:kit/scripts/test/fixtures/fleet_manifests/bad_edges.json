@@ -1,0 +1,10 @@
+{
+  "repos": [
+    { "dir": "alpha", "package": "alpha", "beadsPrefix": "aa" },
+    { "dir": "beta", "package": "beta", "beadsPrefix": "bb" }
+  ],
+  "dependsOn": {
+    "alpha": ["beta"],
+    "beta": ["alpha"]
+  }
+}

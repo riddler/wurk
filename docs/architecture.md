@@ -66,6 +66,12 @@ New in wurk: `lib/manifest.rb`, the single place that locates, parses, and
 validates the consumer repo's `.claude/wurk.json` and hands typed values to
 the other scripts.
 
+Beside it, `lib/fleet_manifest.rb` locates, parses, and validates the
+fleet manifest (`.claude/wurk-fleet.json`, `docs/fleet-manifest.md`) - a
+separate class for a separate file, as `lib/user_config.rb` is for the
+machine config, because its readers are the conductor skill and the
+fleet-scout agent rather than the scripts, and the kit's part is the lint.
+
 The kit also ships a refusal-only outbound-scan gate (ADR-0014): a
 machine-configured pattern set is run over outbound content on the two push
 paths the kit can reach, and any hit refuses the push. This is consistent

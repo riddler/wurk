@@ -1,0 +1,12 @@
+{
+  "repos": [
+    { "dir": "alpha", "package": "alpha", "beadsPrefix": "aa", "group": "core" }
+  ],
+  "campaignState": {
+    "journalDir": ".claude/fleet/journal",
+    "journalFile": ".claude/fleet/journal/<date>-campaign-<id>.md"
+  },
+  "firewallScan": {
+    "doc": "docs/scan.md"
+  }
+}
