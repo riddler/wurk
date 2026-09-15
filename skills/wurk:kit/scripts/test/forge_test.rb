@@ -4,6 +4,7 @@ require "minitest/autorun"
 require_relative "../lib/forge"
 require_relative "../worktree_survey"
 require_relative "../worktree_cleanup"
+require_relative "support/home_guard"
 
 # Forge (the neutral vocabulary, not the guard - the guard is exercised
 # behaviorally in request_state_test.rb, permalinks_test.rb,

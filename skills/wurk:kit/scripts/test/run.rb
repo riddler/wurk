@@ -16,4 +16,7 @@
 require "minitest/autorun"
 
 here = File.expand_path(__dir__)
+# Before any test file: the suite never reads the operator's real machine
+# config (see support/home_guard.rb).
+require File.join(here, "support", "home_guard")
 Dir.glob(File.join(here, "**", "*_test.rb")).sort.each { |f| require f }

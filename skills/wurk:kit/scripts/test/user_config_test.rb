@@ -88,13 +88,10 @@ class UserConfigResolutionTest < Minitest::Test
   # sabotage: stop rescuing JSON::ParserError and re-raise raw -> red (this
   # test expects a clean invalid instance, not an exception)
   def test_unparseable_json_blocks_and_names_the_path
-    Dir.mktmpdir do |dir|
+    in_tmp_home(nil) do |dir|
       write_raw_user_config(dir, "{ not json")
-      in_tmp_home(nil) do
-        ENV["HOME"] = dir
-        error = assert_raises(JSON::ParserError) { UserConfig.load }
-        assert_includes error.message, File.join(dir, ".claude", "wurk.local.json")
-      end
+      error = assert_raises(JSON::ParserError) { UserConfig.load }
+      assert_includes error.message, File.join(dir, ".claude", "wurk.local.json")
     end
   end
 
@@ -104,44 +101,35 @@ class UserConfigResolutionTest < Minitest::Test
   # into a block! message and out of the pre-push hook on stdout. Position
   # only. Every token below is invented nonsense, which is the point.
   def test_unparseable_json_never_quotes_the_files_own_content
-    Dir.mktmpdir do |dir|
+    in_tmp_home(nil) do |dir|
       token = "zqorbex-control-term-7714"
       write_raw_user_config(dir, %({"outbound_scan": {"control_term": #{token}}}))
-      in_tmp_home(nil) do
-        ENV["HOME"] = dir
 
-        error = assert_raises(JSON::ParserError) { UserConfig.load }
-        refute_includes error.message, token
+      error = assert_raises(JSON::ParserError) { UserConfig.load }
+      refute_includes error.message, token
 
-        env = Envelope.new(script: "probe")
-        assert_nil UserConfig.require!(env)
-        refute_includes env.to_json, token
-      end
+      env = Envelope.new(script: "probe")
+      assert_nil UserConfig.require!(env)
+      refute_includes env.to_json, token
     end
   end
 
   # sabotage: skip the empty-string special case and let JSON.parse("") raise
   # uncaught with a message that doesn't name the path -> red
   def test_empty_file_is_unparseable
-    Dir.mktmpdir do |dir|
+    in_tmp_home(nil) do |dir|
       write_raw_user_config(dir, "")
-      ENV["HOME"] = dir
       assert_raises(JSON::ParserError) { UserConfig.load }
-    ensure
-      ENV.delete("HOME")
     end
   end
 
   # sabotage: accept an array top level as if it were a hash -> red
   def test_non_object_top_level_blocks
-    Dir.mktmpdir do |dir|
+    in_tmp_home(nil) do |dir|
       write_raw_user_config(dir, "[]")
-      ENV["HOME"] = dir
       config = UserConfig.load
       refute config.valid?
       assert_includes config.errors.join("\n"), config.path
-    ensure
-      ENV.delete("HOME")
     end
   end
 
@@ -572,17 +560,22 @@ class UserConfigRequireTest < Minitest::Test
 
   # sabotage: stop rescuing JSON::ParserError in require! -> red (an
   # exception escaping mid-run instead of a blocked envelope)
+  #
+  # sabotage 2 (wu-yi7.11): replace in_tmp_home with a bare Dir.mktmpdir +
+  # ENV["HOME"] = dir and drop the reset! -> red whenever an earlier test in
+  # the process already memoized UserConfig.current (lock_test and
+  # gate_run_test both do, through their CLIs). require! goes through the
+  # memo, so a HOME swap without a reset! reads the previous config, not
+  # the unparseable fixture. The explicit UserConfig.current below is that
+  # earlier test, made deterministic.
   def test_require_blocks_the_envelope_on_unparseable_json
-    Dir.mktmpdir do |dir|
-      UserConfigHelper.write_raw_user_config(dir, "{ not json")
-      previous_home = ENV["HOME"]
-      ENV["HOME"] = dir
+    UserConfig.current # memoize whatever the guarded HOME holds first
+    in_tmp_home(nil) do |dir|
+      write_raw_user_config(dir, "{ not json")
       env = Envelope.new(script: "probe")
       assert_nil UserConfig.require!(env)
       refute env.ok?
       assert_equal ["user_config_unavailable"], env.blocked.map { |b| b[:code] }.uniq
-    ensure
-      ENV["HOME"] = previous_home
     end
   end
 end
