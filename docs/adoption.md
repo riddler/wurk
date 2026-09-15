@@ -283,6 +283,20 @@ Fix the manifest, not the script.
 - **The outbound-scan hook.** `outbound_scan.rb install` from the repo
   root, per ADR-0014. Consistent with a pilot's footprint, since hooks are
   untracked.
+- **Session hooks.** `ruby install.rb --with hooks` from the wurk checkout
+  links two Claude Code hooks into `~/.claude/hooks/`; it is opt-in and
+  the default install is unchanged. `wurk-main-session-policy.sh`
+  (SessionStart) tells the top-level session that it coordinates and
+  delegates rather than codes, and suppresses itself inside subagents by
+  checking the `agent_id` field of the hook input, so workers never see
+  it. `wurk-safe-wait-guard.sh` (PreToolUse on Bash) denies the three
+  wait shapes the conductor and worker prose forbid - a while/until loop
+  with no sleep, a backgrounded loop with no trap, `pgrep -f` in a loop
+  that does not exclude `$$` - and names the fix in the denial; it is
+  fail-open, so a malformed input lets the call through. Linking is not
+  wiring: the installer prints the `settings.json` snippet (absolute
+  paths) to merge into `~/.claude/settings.json` or a project's
+  `.claude/settings.json`, and never edits a settings file itself.
 - **An upstream tracker.** If tickets are filed and read in Jira, Linear
   or Notion, read `docs/two-tracker-pattern.md` before minting the first
   bead, so the external ref convention is in place from bead one.

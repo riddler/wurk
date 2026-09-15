@@ -1,7 +1,8 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# install.rb - links this repo's skills and agents into ~/.claude/.
+# install.rb - links this repo's skills, agents and (opt-in) hooks into
+# ~/.claude/.
 #
 # Wurk is consumed by symlink (ADR-0002/ADR-0003): the skills live here, in
 # git, and ~/.claude points at them, so an edit here is live everywhere with
@@ -11,6 +12,9 @@
 #   ruby install.rb --dry-run       # say what would happen, change nothing
 #   ruby install.rb --uninstall     # remove only the links that point here
 #   ruby install.rb --home DIR      # target DIR/.claude instead of $HOME
+#   ruby install.rb --with hooks    # also link hooks/*.sh (opt-in, never
+#                                   # default) and print the settings.json
+#                                   # snippet that wires them
 #
 # Two rules make re-running safe:
 #
@@ -20,10 +24,22 @@
 #     name and the run exits 1. Nothing here overwrites what it did not
 #     create.
 #
-# Note the two halves differ in shape. Skills install as directories named
-# `wurk:<name>` - the colon is part of the installed name. Agent names may
-# not contain a colon, so agents install as individual `wurk-<name>.md`
-# files. That is why this script globs twice rather than once.
+# Note the three parts differ in shape. Skills install as directories
+# named `wurk:<name>` - the colon is part of the installed name. Agent
+# names may not contain a colon, so agents install as individual
+# `wurk-<name>.md` files. Hooks install as individual `wurk-<name>.sh`
+# files under ~/.claude/hooks, and only when asked for with `--with hooks`:
+# a hook runs on every session start or tool call, so nobody gets one by
+# default. That is why this script globs three times rather than once.
+#
+# Linking a hook is not wiring it. Claude Code runs a hook only when a
+# settings file names it, so after linking, the script prints the
+# settings.json snippet (absolute paths - `~` expansion in a hook command
+# is not documented) for the person to merge into ~/.claude/settings.json
+# or a project's .claude/settings.json. This script never edits a settings
+# file. `--uninstall` scans ~/.claude/hooks along with skills and agents
+# whether or not hooks were ever requested; like everywhere else it removes
+# only symlinks that point into this repo.
 #
 # Output is plain text, not the kit's JSON envelope. The envelope contract
 # (docs/adr/0006, skills/wurk:kit/REFERENCE.md) governs scripts that a skill
@@ -36,6 +52,7 @@
 
 require "optparse"
 require "fileutils"
+require "json"
 
 module Install
   # One thing to do to one path. `kind` drives both the output label and
@@ -48,12 +65,29 @@ module Install
   class Installer
     SKILL_GLOB = "skills/wurk:*"
     AGENT_GLOB = "agents/*.md"
+    HOOK_GLOB = "hooks/*.sh"
 
-    attr_reader :repo_root, :home
+    # The optional pieces `--with` can name. Only one so far.
+    WITH = %w[hooks].freeze
 
-    def initialize(repo_root:, home:)
+    # Which hook event each shipped hook wires into, and its matcher. A hook
+    # file this table does not name is still linked, but the printed
+    # snippet cannot place it.
+    HOOK_EVENTS = {
+      "main-session-policy.sh" => { event: "SessionStart", matcher: "startup" },
+      "safe-wait-guard.sh" => { event: "PreToolUse", matcher: "Bash" }
+    }.freeze
+
+    attr_reader :repo_root, :home, :with
+
+    def initialize(repo_root:, home:, with: [])
       @repo_root = File.expand_path(repo_root)
       @home = File.expand_path(home)
+      @with = with
+    end
+
+    def hooks?
+      with.include?("hooks")
     end
 
     def claude_dir
@@ -68,6 +102,10 @@ module Install
       File.join(claude_dir, "agents")
     end
 
+    def hooks_dir
+      File.join(claude_dir, "hooks")
+    end
+
     # Every skill directory this repo ships. Sorted so output and tests are
     # stable; directories only, so a stray file beside them is not linked.
     def skill_sources
@@ -78,16 +116,31 @@ module Install
       Dir.glob(File.join(repo_root, AGENT_GLOB)).select { |p| File.file?(p) }.sort
     end
 
+    def hook_sources
+      Dir.glob(File.join(repo_root, HOOK_GLOB)).select { |p| File.file?(p) }.sort
+    end
+
+    # Where each shipped hook lands: ~/.claude/hooks/wurk-<basename>. The
+    # prefix keeps our links apart from anything else living there.
+    def hook_links
+      hook_sources.map { |source| [source, File.join(hooks_dir, "wurk-#{File.basename(source)}")] }
+    end
+
     # The full plan for an install, as data. Nothing is touched until
     # #apply runs it, which is what makes --dry-run exact rather than a
-    # narrated guess.
+    # narrated guess. Without `--with hooks` this plan is exactly what it
+    # was before hooks existed: no hooks dir, no hook links.
     def install_actions
       actions = []
-      [skills_dir, agents_dir].each do |dir|
+      dirs = [skills_dir, agents_dir]
+      dirs << hooks_dir if hooks?
+      dirs.each do |dir|
         actions << Action.new(kind: :mkdir, path: dir) unless File.directory?(dir)
       end
 
-      (pairs(skill_sources, skills_dir) + pairs(agent_sources, agents_dir)).each do |source, dest|
+      links = pairs(skill_sources, skills_dir) + pairs(agent_sources, agents_dir)
+      links += hook_links if hooks?
+      links.each do |source, dest|
         actions << link_action(source, dest)
       end
 
@@ -97,9 +150,10 @@ module Install
     # Uninstall works from what is installed, not from what this repo
     # currently ships: a skill renamed or deleted since install time still
     # has a link pointing here, and leaving it behind would leave a dangling
-    # /wurk:* name that resolves to nothing.
+    # /wurk:* name that resolves to nothing. Hooks are scanned too, whether
+    # or not this run asked for them, for the same reason.
     def uninstall_actions
-      [skills_dir, agents_dir].flat_map { |dir| uninstall_actions_in(dir) }
+      [skills_dir, agents_dir, hooks_dir].flat_map { |dir| uninstall_actions_in(dir) }
     end
 
     # Executes actions in order. In dry-run mode it executes nothing and the
@@ -111,10 +165,34 @@ module Install
         io.puts(format_action(action, dry_run: dry_run))
       end
       io.puts(summary(actions, dry_run: dry_run))
+      print_hook_wiring(io) if hooks?
       actions.any? { |a| REFUSALS.include?(a.kind) } ? 1 : 0
     end
 
+    # The settings.json fragment that makes Claude Code run the linked
+    # hooks. Absolute paths on purpose: `~` expansion in a hook command is
+    # not documented. Printed on dry runs too - it is information, not a
+    # change - and never written anywhere by this script.
+    def hook_settings
+      hooks = {}
+      hook_links.each do |source, dest|
+        spec = HOOK_EVENTS[File.basename(source)] or next
+        entry = { "matcher" => spec[:matcher],
+                  "hooks" => [{ "type" => "command", "command" => dest, "timeout" => 10 }] }
+        (hooks[spec[:event]] ||= []) << entry
+      end
+      { "hooks" => hooks }
+    end
+
     private
+
+    def print_hook_wiring(io)
+      io.puts
+      io.puts "Hooks run only once a settings file names them. Merge this into " \
+              "#{display(File.join(claude_dir, 'settings.json'))} (or a project's " \
+              ".claude/settings.json); install.rb never edits settings.json itself:"
+      io.puts JSON.pretty_generate(hook_settings)
+    end
 
     def pairs(sources, dest_dir)
       sources.map { |source| [source, File.join(dest_dir, File.basename(source))] }
@@ -217,13 +295,16 @@ module Install
   module_function
 
   def main(argv, io: $stdout)
-    options = { dry_run: false, uninstall: false, home: ENV["HOME"] || Dir.home }
+    options = { dry_run: false, uninstall: false, home: ENV["HOME"] || Dir.home, with: [] }
 
     parser = OptionParser.new do |opts|
-      opts.banner = "Usage: ruby install.rb [--dry-run] [--uninstall] [--home DIR]"
+      opts.banner = "Usage: ruby install.rb [--dry-run] [--uninstall] [--home DIR] [--with hooks]"
       opts.on("--dry-run", "print what would change, change nothing") { options[:dry_run] = true }
       opts.on("--uninstall", "remove only the symlinks that point into this repo") { options[:uninstall] = true }
       opts.on("--home DIR", "install under DIR/.claude instead of $HOME") { |v| options[:home] = v }
+      opts.on("--with NAMES", Array, "also install optional pieces (#{Installer::WITH.join(', ')})") do |v|
+        options[:with] |= v
+      end
       opts.on("--help", "print this help") do
         io.puts opts
         return 0
@@ -242,7 +323,13 @@ module Install
       return 2
     end
 
-    installer = Installer.new(repo_root: __dir__, home: options[:home])
+    unknown = options[:with] - Installer::WITH
+    unless unknown.empty?
+      warn "unknown --with name: #{unknown.join(', ')} (known: #{Installer::WITH.join(', ')})\n\n#{parser}"
+      return 2
+    end
+
+    installer = Installer.new(repo_root: __dir__, home: options[:home], with: options[:with])
     actions = options[:uninstall] ? installer.uninstall_actions : installer.install_actions
     installer.apply(actions, dry_run: options[:dry_run], io: io)
   end
