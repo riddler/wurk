@@ -10,7 +10,9 @@ require_relative "cli"
 # manifest has no business carrying.
 #
 # This file describes the machine and the person sitting at it, not the
-# project - permission mode is the first example (see wu-jhb). That is why
+# project - permission mode is the first example (see wu-jhb); the machine's
+# own name, its gate-slot cap, and the list of workloads it runs (wu-yi7.5)
+# are the same kind of fact. That is why
 # resolution is HOME-anchored only, with no walk-up and no git fallback: a
 # stray `.claude/wurk.local.json` committed inside some checkout (by accident,
 # or by a template) must never be picked up as if it were machine config, the
@@ -37,11 +39,19 @@ class UserConfig
   # The known key surface, for the unknown-key warning. Same shape as
   # Manifest::KNOWN: nested sections list their own keys; a section absent
   # from this map is not validated further.
+  # A key ending in "[]" describes the object elements of an array under
+  # that key; collect_unknown_keys walks into each element with it.
   KNOWN = {
-    nil => %w[wurk tmux outbound_scan],
+    nil => %w[wurk tmux outbound_scan machine workloads],
     "tmux" => %w[permission_mode],
-    "outbound_scan" => %w[patterns_file control_term]
+    "outbound_scan" => %w[patterns_file control_term],
+    "machine" => %w[name gate_slots],
+    "workloads[]" => %w[root fleet_manifest enabled primary]
   }.freeze
+
+  # Per-entry defaults for workloads[]. `root` has none: an entry without
+  # one is an error, because the root is what identifies the workload.
+  WORKLOAD_DEFAULTS = { "fleet_manifest" => nil, "enabled" => true, "primary" => false }.freeze
 
   DEFAULTS = {
     "tmux.permission_mode" => "auto"
@@ -167,6 +177,54 @@ class UserConfig
     raw.key?("outbound_scan")
   end
 
+  # A human-readable name for this machine, or nil when the file does not
+  # give one. No default and no fallback to the hostname: a caller that
+  # wants a hostname asks the OS, and a caller that wants the operator's
+  # name for the box gets exactly that or nothing.
+  def machine_name
+    fetch("machine.name")
+  end
+
+  # The machine-wide cap on concurrent full gates and warms - the count of
+  # `slot-N` directories a slot acquire may take - or nil when the file does
+  # not set one. No default: absent means "whatever the caller was told",
+  # which today is the fleet manifest's value handed to lock.rb and
+  # gate_run.rb as `--slots N`. When set it wins over that flag, because
+  # the machine knows its own capacity and the fleet manifest is shared by
+  # every machine that runs the fleet (see Lock.resolve_slot_count).
+  def machine_gate_slots
+    fetch("machine.gate_slots")
+  end
+
+  # The workloads this machine runs, as an array of normalized hashes with
+  # every key present: `root` (expanded to an absolute path, so "~" works),
+  # `fleet_manifest` (a path or nil), `enabled` (default true), `primary`
+  # (default false). Empty when the section is absent. Only meaningful on a
+  # valid config; on an invalid one, entries that failed validation are
+  # skipped rather than half-normalized.
+  def workloads
+    entries = raw["workloads"]
+    return [] unless entries.is_a?(Array)
+
+    entries.map do |entry|
+      next unless entry.is_a?(Hash) && entry["root"].is_a?(String) && !entry["root"].strip.empty?
+
+      { "root" => File.expand_path(entry["root"]) }.merge(WORKLOAD_DEFAULTS).merge(entry.slice(*WORKLOAD_DEFAULTS.keys))
+    end.compact
+  end
+
+  # The workloads with enabled: true - "what does this machine run right
+  # now", as opposed to everything it knows how to run.
+  def enabled_workloads
+    workloads.select { |w| w["enabled"] == true }
+  end
+
+  # The one workload marked primary: true, or nil when none is. Validation
+  # guarantees at most one.
+  def primary_workload
+    workloads.find { |w| w["primary"] == true }
+  end
+
   # Dotted lookup with defaults applied. Returns nil for an absent optional
   # key that has no default.
   def fetch(dotted)
@@ -184,6 +242,8 @@ class UserConfig
     validate_version
     validate_enums
     validate_outbound_scan
+    validate_machine
+    validate_workloads
     collect_unknown_keys(raw, nil)
   end
 
@@ -241,16 +301,110 @@ class UserConfig
     end
   end
 
+  # Shape validation of the machine section. `name` is a non-blank string;
+  # `gate_slots` is a positive integer, because it becomes the count of
+  # slot directories a lock acquire may take, and a cap of zero or a
+  # fraction is a config that can never grant a slot.
+  def validate_machine
+    return unless raw.key?("machine")
+
+    section = raw["machine"]
+    unless section.is_a?(Hash)
+      errors << "#{path}: machine must be a JSON object, got #{section.class}"
+      return
+    end
+
+    if section.key?("name")
+      name = section["name"]
+      if !name.is_a?(String)
+        errors << "#{path}: machine.name must be a string, got #{name.class}"
+      elsif name.strip.empty?
+        errors << "#{path}: machine.name must not be blank"
+      end
+    end
+
+    return unless section.key?("gate_slots")
+
+    slots = section["gate_slots"]
+    return if slots.is_a?(Integer) && slots.positive?
+
+    errors << "#{path}: machine.gate_slots must be a positive integer, got #{slots.inspect}"
+  end
+
+  # Shape validation of workloads[]: an array of objects, each with a
+  # non-blank string `root`, an optional non-blank string `fleet_manifest`,
+  # optional boolean `enabled` and `primary`, no two entries sharing a root,
+  # and at most one entry marked primary. Paths are validated as strings
+  # only - whether a root or a fleet manifest exists on disk is the
+  # caller's concern, same reasoning as validate_outbound_scan.
+  def validate_workloads
+    return unless raw.key?("workloads")
+
+    entries = raw["workloads"]
+    unless entries.is_a?(Array)
+      errors << "#{path}: workloads must be a JSON array, got #{entries.class}"
+      return
+    end
+
+    roots = []
+    primaries = 0
+    entries.each_with_index do |entry, index|
+      label = "workloads[#{index}]"
+      unless entry.is_a?(Hash)
+        errors << "#{path}: #{label} must be a JSON object, got #{entry.class}"
+        next
+      end
+
+      root = entry["root"]
+      if !root.is_a?(String) || root.strip.empty?
+        errors << "#{path}: #{label}.root must be a non-blank string, got #{root.inspect}"
+      elsif roots.include?(File.expand_path(root))
+        errors << "#{path}: #{label}.root duplicates an earlier workload's root"
+      else
+        roots << File.expand_path(root)
+      end
+
+      if entry.key?("fleet_manifest")
+        fm = entry["fleet_manifest"]
+        if !fm.is_a?(String) || fm.strip.empty?
+          errors << "#{path}: #{label}.fleet_manifest must be a non-blank string, got #{fm.inspect}"
+        end
+      end
+
+      %w[enabled primary].each do |key|
+        next unless entry.key?(key)
+        next if [true, false].include?(entry[key])
+
+        errors << "#{path}: #{label}.#{key} must be true or false, got #{entry[key].inspect}"
+      end
+
+      primaries += 1 if entry["primary"] == true
+    end
+
+    errors << "#{path}: workloads marks #{primaries} entries primary; at most one may be" if primaries > 1
+  end
+
   # Forward compatibility: a key this kit does not know about is a warning,
-  # never an error - same reasoning as Manifest#collect_unknown_keys.
-  def collect_unknown_keys(node, prefix)
-    known = KNOWN[prefix]
+  # never an error - same reasoning as Manifest#collect_unknown_keys. An
+  # array under a key with a "<key>[]" entry in KNOWN is walked element by
+  # element, each object element reported under its index
+  # ("workloads[0].nope") but looked up under the shared "workloads[]" key.
+  def collect_unknown_keys(node, prefix, known_key = prefix)
+    if node.is_a?(Array)
+      element_key = "#{known_key}[]"
+      return unless KNOWN[element_key]
+
+      node.each_with_index { |element, index| collect_unknown_keys(element, "#{prefix}[#{index}]", element_key) }
+      return
+    end
+
+    known = KNOWN[known_key]
     return unless node.is_a?(Hash) && known
 
     node.each_key do |key|
       dotted = prefix ? "#{prefix}.#{key}" : key
       if known.include?(key)
-        collect_unknown_keys(node[key], dotted)
+        collect_unknown_keys(node[key], dotted, known_key ? "#{known_key}.#{key}" : key)
       else
         warnings << "#{path}: unknown key #{dotted} (ignored)"
       end
@@ -284,6 +438,9 @@ module UserConfigCli
       env.data[:errors] = config.errors
       env.data[:tmux_permission_mode] = config.tmux_permission_mode
       env.data[:outbound_scan_declared] = config.outbound_scan_declared?
+      env.data[:machine_name] = config.machine_name
+      env.data[:machine_gate_slots] = config.machine_gate_slots
+      env.data[:workloads] = config.workloads
 
       config.warnings.each { |w| env.warn(code: "unknown_key", message: w) }
       config.errors.each { |e| env.block!(code: "invalid", message: e) }

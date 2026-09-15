@@ -10,6 +10,7 @@ require_relative "lib/sh"
 require_relative "lib/cli"
 require_relative "lib/manifest"
 require_relative "lib/lock"
+require_relative "lib/user_config"
 
 # GateRun is the sanctioned long-gate runner: `start` launches the manifest's
 # gate detached (optionally under one or more locks), `supervise` is the
@@ -71,8 +72,10 @@ module GateRun
   GATE_OUTPUT_TAIL_LINES = 40
 
   START_USAGE = "gate_run.rb start [--profile loop] [--run-dir DIR] " \
-                "[--gate-lock DIR --campaign ID --bead ID] [--slots-dir DIR --slots N] " \
+                "[--gate-lock DIR --campaign ID --bead ID] [--slots-dir DIR [--slots N]] " \
                 "[--wait-seconds N] [--dry-run]"
+  SLOTS_HINT = "--slots-dir needs a slot count: --slots N, or machine.gate_slots in the machine config " \
+               "(~/.claude/wurk.local.json), which takes precedence when both are set"
   SUPERVISE_USAGE = "gate_run.rb supervise --run-dir DIR"
   POLL_USAGE = "gate_run.rb poll --run-dir DIR [--wait-seconds N] [--tail-lines N]"
   STATUS_USAGE = "gate_run.rb status --run-dir DIR [--tail-lines N]"
@@ -99,8 +102,8 @@ module GateRun
       "usage: gate_run.rb <start|supervise|poll|status> [options]"
     end
 
-    def usage_error!(usage_line, parser)
-      warn "usage: #{usage_line}\n\n#{parser}"
+    def usage_error!(usage_line, parser, hint: nil)
+      warn "usage: #{usage_line}\n#{hint ? "\n#{hint}\n" : ''}\n#{parser}"
       exit 2
     end
 
@@ -115,13 +118,28 @@ module GateRun
       parser, options = Cli.build(START_USAGE, options) { |opts| add_start_flags(opts, options) }
       Cli.parse!(parser, argv)
 
-      lock_specs = start_lock_specs(options)
-      usage_error!(START_USAGE, parser) if lock_specs.nil?
+      env = Envelope.new(script: "gate_run_start")
+      config = UserConfig.require!(env)
+      return env.emit(io) unless config
+
+      # The slot count follows the same precedence as lock.rb acquire:
+      # machine.gate_slots over --slots N (Lock.resolve_slot_count).
+      slots = Lock.resolve_slot_count(machine: config.machine_gate_slots, flag: options[:slots])
+      lock_specs = start_lock_specs(options, slots[:count])
+      usage_error!(START_USAGE, parser, hint: options[:slots_dir] || options[:slots] ? SLOTS_HINT : nil) if lock_specs.nil?
       if lock_specs.any? && (blank?(options[:campaign]) || blank?(options[:bead]))
         usage_error!(START_USAGE, parser)
       end
+      if lock_specs.any? { |spec| spec[:kind] == "slot" }
+        env.data[:slots] = slots[:count]
+        env.data[:slots_source] = slots[:source]
+        if slots[:overridden]
+          env.warn(code: "slots_overridden",
+                   message: "--slots #{options[:slots]} ignored: machine.gate_slots is #{slots[:count]} " \
+                            "in the machine config, which takes precedence")
+        end
+      end
 
-      env = Envelope.new(script: "gate_run_start")
       manifest = Manifest.require!(env)
       return env.emit(io) unless manifest
 
@@ -240,18 +258,20 @@ end
     end
 
     # Builds the ordered lock specs from whichever lock flags were given.
-    # Returns [] when no lock was named at all (a legitimate, lock-free
-    # start), or nil (a usage error) when exactly one of --slots-dir/--slots
-    # was given without the other.
-    def start_lock_specs(options)
+    # `slot_count` is the already-resolved pool size (machine config over
+    # --slots). Returns [] when no lock was named at all (a legitimate,
+    # lock-free start), or nil (a usage error) when --slots was given
+    # without --slots-dir, or --slots-dir was given and neither --slots nor
+    # the machine config supplied a count.
+    def start_lock_specs(options, slot_count)
       specs = []
       specs << { kind: "gate", dir: options[:gate_lock] } if options[:gate_lock]
 
       slots_named = options[:slots_dir] || options[:slots]
       if slots_named
-        return nil if blank?(options[:slots_dir]) || options[:slots].to_i <= 0
+        return nil if blank?(options[:slots_dir]) || slot_count.to_i <= 0
 
-        specs << { kind: "slot", slots_dir: options[:slots_dir], count: options[:slots] }
+        specs << { kind: "slot", slots_dir: options[:slots_dir], count: slot_count }
       end
 
       specs

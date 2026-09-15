@@ -7,6 +7,7 @@ require "fileutils"
 require_relative "lib/envelope"
 require_relative "lib/cli"
 require_relative "lib/lock"
+require_relative "lib/user_config"
 
 # LockCli is the thin wiring between Lock's pure filesystem logic and the
 # kit's envelope contract: acquire (bounded wait, fixed order, all-or-
@@ -14,14 +15,18 @@ require_relative "lib/lock"
 # and clear (refuses anything not provably stale). No manifest, no Sh - a
 # lock directory is a plain CLI argument (see the plan's "What We're NOT
 # Doing": the fleet manifest that would otherwise name these paths is out
-# of scope here).
+# of scope here). The one thing read from outside the argv is the machine
+# config's `machine.gate_slots`, which caps the slot pool for this box and
+# takes precedence over `--slots N` (Lock.resolve_slot_count).
 module LockCli
   SUBCOMMANDS = %w[acquire release status clear].freeze
   DEFAULT_STALE_AFTER_SECONDS = 1800
 
   ACQUIRE_USAGE = "lock.rb acquire [--campaign-mutex DIR] [--gate-lock DIR] [--tracker-lock DIR] " \
-                  "[--registry-lock DIR] [--slots-dir DIR --slots N] --campaign ID --bead ID " \
+                  "[--registry-lock DIR] [--slots-dir DIR [--slots N]] --campaign ID --bead ID " \
                   "[--pid N] [--purpose S] [--wait-seconds N] [--poll-seconds N]"
+  SLOTS_HINT = "--slots-dir needs a slot count: --slots N, or machine.gate_slots in the machine config " \
+               "(~/.claude/wurk.local.json), which takes precedence when both are set"
   RELEASE_USAGE = "lock.rb release --dir DIR --campaign ID --bead ID [--pid N]"
   STATUS_USAGE = "lock.rb status --dir DIR [--stale-after-seconds N]"
   CLEAR_USAGE = "lock.rb clear --dir DIR"
@@ -57,10 +62,15 @@ module LockCli
 
       usage_error!(ACQUIRE_USAGE, parser) if blank?(options[:campaign]) || blank?(options[:bead])
 
-      specs = acquire_specs(options)
-      usage_error!(ACQUIRE_USAGE, parser) if specs.nil?
-
       env = Envelope.new(script: "lock_acquire")
+      config = UserConfig.require!(env)
+      return env.emit(io) unless config
+
+      slots = Lock.resolve_slot_count(machine: config.machine_gate_slots, flag: options[:slots])
+      specs = acquire_specs(options, slots[:count])
+      usage_error!(ACQUIRE_USAGE, parser, hint: slots_hint(options)) if specs.nil?
+      report_slot_source(env, slots, options)
+
       owner = build_owner(options)
       order = specs.sort_by { |s| Lock::ORDER.fetch(s[:kind]) }.map { |s| s[:kind] }
 
@@ -116,9 +126,11 @@ end
     end
 
     # Builds the ordered lock specs from whichever lock flags were given.
-    # Returns nil (a usage error) when no lock was named at all, or when
-    # exactly one of --slots-dir/--slots was given without the other.
-    def acquire_specs(options)
+    # `slot_count` is the already-resolved pool size (machine config over
+    # --slots). Returns nil (a usage error) when no lock was named at all,
+    # when --slots was given without --slots-dir, or when --slots-dir was
+    # given and neither --slots nor the machine config supplied a count.
+    def acquire_specs(options, slot_count)
       specs = []
       specs << { kind: "campaign", dir: options[:campaign_mutex] } if options[:campaign_mutex]
       specs << { kind: "gate", dir: options[:gate_lock] } if options[:gate_lock]
@@ -127,12 +139,34 @@ end
 
       slots_named = options[:slots_dir] || options[:slots]
       if slots_named
-        return nil if blank?(options[:slots_dir]) || options[:slots].to_i <= 0
+        return nil if blank?(options[:slots_dir]) || slot_count.to_i <= 0
 
-        specs << { kind: "slot", slots_dir: options[:slots_dir], count: options[:slots] }
+        specs << { kind: "slot", slots_dir: options[:slots_dir], count: slot_count }
       end
 
       specs.empty? ? nil : specs
+    end
+
+    # The usage hint for the slot flags, only when the slot flags are what
+    # went wrong; a plain "no lock named" usage error gets none.
+    def slots_hint(options)
+      options[:slots_dir] || options[:slots] ? SLOTS_HINT : nil
+    end
+
+    # Records where the slot count came from, and warns when the machine
+    # config silently replaced the --slots value the caller passed - the
+    # caller (usually a conductor relaying a fleet manifest) should see that
+    # its number was not the one used.
+    def report_slot_source(env, slots, options)
+      return if slots[:count].nil? || blank?(options[:slots_dir])
+
+      env.data[:slots] = slots[:count]
+      env.data[:slots_source] = slots[:source]
+      return unless slots[:overridden]
+
+      env.warn(code: "slots_overridden",
+               message: "--slots #{options[:slots]} ignored: machine.gate_slots is #{slots[:count]} " \
+                        "in the machine config, which takes precedence")
     end
 
     def build_owner(options)
@@ -269,8 +303,8 @@ end
       value.to_s.strip.empty?
     end
 
-    def usage_error!(usage_line, parser)
-      warn "usage: #{usage_line}\n\n#{parser}"
+    def usage_error!(usage_line, parser, hint: nil)
+      warn "usage: #{usage_line}\n#{hint ? "\n#{hint}\n" : ''}\n#{parser}"
       exit 2
     end
   end

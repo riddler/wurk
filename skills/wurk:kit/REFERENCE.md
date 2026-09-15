@@ -85,9 +85,12 @@ return env.emit(io) unless user_config
 Schema, validation rules, and the `check` lint: `docs/machine-config.md`.
 
 The schema has a second section, `outbound_scan` - the machine-configured
-outbound-scan gate (ADR-0014). Its keys, validation, and what a script does
-with them are all documented at `docs/machine-config.md`; this file states
-only that the section exists.
+outbound-scan gate (ADR-0014) - and a third and fourth, `machine` (the
+machine's name and its gate-slot cap) and `workloads` (what this machine
+runs, for a daemon or a conductor to ask). Their keys, validation, and what
+a script does with them are all documented at `docs/machine-config.md`;
+this file states only that the sections exist, and one precedence rule
+below under `lock.rb`.
 
 ## Ruby version and syntax
 
@@ -445,9 +448,11 @@ half-written one.
 - `start`: `--profile loop` (selects the loop gate commands the way
   `gate.rb` does), `--run-dir DIR` (override the generated run directory),
   `--gate-lock DIR --campaign ID --bead ID` (acquire a gate lock before
-  spawning), `--slots-dir DIR --slots N` (acquire a machine gate slot
-  instead of or alongside the gate lock - `--slots-dir` and `--slots` must
-  be given together), `--wait-seconds N` (bounded lock-acquire wait, default
+  spawning), `--slots-dir DIR [--slots N]` (acquire a machine gate slot
+  instead of or alongside the gate lock; the slot count follows the same
+  rule as `lock.rb acquire` - the machine config's `machine.gate_slots`
+  wins, `--slots N` is the fallback, and `--slots-dir` with neither is a
+  usage error), `--wait-seconds N` (bounded lock-acquire wait, default
   600), `--dry-run`.
 - `supervise`: `--run-dir DIR` only.
 - `poll` and `status`: `--run-dir DIR`, `--wait-seconds N` (`poll` only,
@@ -530,11 +535,13 @@ an error.
 
 - **`acquire`** - takes one or more locks (`--campaign-mutex`, `--gate-lock`,
   `--tracker-lock`, `--registry-lock` DIRs, and/or a machine slot pool via
-  `--slots-dir DIR --slots N`) in one bounded wait, all or nothing: if any
+  `--slots-dir DIR [--slots N]`) in one bounded wait, all or nothing: if any
   named lock cannot be acquired before the wait elapses, every lock already
   acquired in this call is released and the call reports contention on the
   one that blocked. Requires `--campaign ID --bead ID`, recorded in the
-  owner file.
+  owner file. Loads the machine config first (`UserConfig.require!`), so an
+  invalid `~/.claude/wurk.local.json` blocks the acquire before any
+  directory is made.
 - **`release`** - releases one lock directory, refusing (`lock_not_owned`)
   unless the supplied `--campaign`/`--bead`/`--pid` match the recorded owner
   field by field. There is deliberately no `--force`: a foreign or
@@ -559,10 +566,37 @@ interleaving - it hands `acquire` every lock it wants in any order, and the
 normalization here is what turns an out-of-order request into a non-event
 instead of a deadlock.
 
+### The slot count: machine config over the flag
+
+The size of the machine slot pool - how many `slot-N` directories an
+acquire may take - has two possible sources, and one fixed precedence
+(`Lock.resolve_slot_count`, shared by `lock.rb acquire` and
+`gate_run.rb start` so the two entry points to one pool can never disagree
+about its size):
+
+1. **`machine.gate_slots` in `~/.claude/wurk.local.json`** wins when set.
+   The machine config describes the box the acquire is actually happening
+   on (ADR-0013). A fleet manifest is checked in and shared by every machine
+   that runs the fleet, so a slot count kept there can only be right for
+   one of them; a machine that has said how many gates it can run at once
+   is believed over anything relayed from a shared file.
+2. **`--slots N`** is the fallback for a machine that has not said. Today
+   this is how a conductor relays a fleet manifest's number.
+
+When both are given and disagree, the machine value is used and the
+envelope carries a `slots_overridden` warning naming both numbers, so a
+conductor that relayed the fleet's figure can see it was not the one used.
+`--slots-dir` with no count from either source is a usage error (exit 2)
+whose hint names both sources; there is deliberately no default of 1, since
+a silent default would let a slot acquire succeed on a machine nobody sized.
+`data.slots` and `data.slots_source` (`"machine_config"` or `"flag"`)
+report what was used, whenever a slot pool was named.
+
 ### `data` keys
 
 - `acquire`: `data.acquired` (the locks taken, each `{kind, dir, owner}`),
-  `data.order` (the kinds, in the fixed order), `data.waited_seconds`. On
+  `data.order` (the kinds, in the fixed order), `data.waited_seconds`, and,
+  when a slot pool was named, `data.slots` and `data.slots_source`. On
   contention, `data.acquired` is `[]` and `data.contended` carries
   `{kind, dir, probe}` for the lock that blocked, with `probe` the same
   shape `status` returns.

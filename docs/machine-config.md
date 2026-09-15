@@ -25,6 +25,15 @@ choice belongs to the project, so `~/.claude/wurk.local.json` is where it
 lives instead: a per-machine file the kit reads alongside the manifest,
 never committed anywhere.
 
+The machine's own facts are the same kind of value: what it is called, how
+many full gates it can run at once, and which workloads (checkouts, fleet
+umbrellas) it runs. One harness identity can run on two machines with
+different capacities and different workloads, and a fleet manifest - checked
+in, shared by every machine that runs the fleet - cannot carry a number that
+is right for only one of them. Those facts live here too (`machine`,
+`workloads`), so a conductor or a daemon can ask "what does this machine
+run, and how much at once" without a shared file having to guess.
+
 ## Path: HOME-anchored only
 
 The file lives at `~/.claude/wurk.local.json` - `File.join(home, ".claude",
@@ -67,7 +76,21 @@ the point.
   "outbound_scan": {                  // (opt) omit = disarmed, pushes allowed
     "patterns_file": "<path to a pattern file this operator maintains outside any repo>",
     "control_term": "<a token the pattern file is expected to match>"
-  }
+  },
+
+  "machine": {                        // (opt) facts about this box
+    "name": "<a name for this machine>",   // (opt) non-blank string; no default
+    "gate_slots": 2                   // (opt) positive integer; no default - see below
+  },
+
+  "workloads": [                      // (opt) what this machine runs; omit = []
+    {
+      "root": "<path to a checkout or fleet umbrella>",   // required; "~" expands
+      "fleet_manifest": "<path to that workload's fleet manifest>",  // (opt)
+      "enabled": true,                // (opt) default true
+      "primary": true                 // (opt) default false; at most one entry
+    }
+  ]
 }
 ```
 
@@ -178,13 +201,80 @@ the matched text, never the pattern that matched. That is the whole point
 of it, and it means a refusal tells you where to look rather than
 reproducing the thing you were trying not to publish.
 
+## `machine`
+
+Facts about the box this file lives on. Both keys are optional and neither
+has a default: an absent key means "this machine has not said", and the
+readers below treat that as exactly that rather than inventing a value.
+
+- `machine.name` (opt) - a non-blank string naming the machine for a human
+  or a journal. Not a hostname, and never defaulted to one: a caller that
+  wants the hostname asks the OS. `UserConfig#machine_name` returns it, or
+  nil.
+- `machine.gate_slots` (opt) - a positive integer: the machine-wide cap on
+  concurrent full gates and warms, which is the number of `slot-N`
+  directories `lock.rb acquire` and `gate_run.rb start` may take from a
+  slot pool. `UserConfig#machine_gate_slots` returns it, or nil. A value of
+  zero, a negative, a fraction, or a string blocks: the value becomes a
+  count of directories an acquire may create, and anything else is a pool
+  that can never grant.
+
+### `machine.gate_slots` wins over the fleet's number
+
+The slot count used to reach `lock.rb` and `gate_run.rb` only as `--slots
+N`, relayed by a conductor from a fleet manifest. It still can, and that is
+the fallback. But when this file sets `machine.gate_slots`, that value is
+used and the flag is not, because the machine config describes the box the
+acquire is actually happening on while a fleet manifest is shared by every
+machine that runs the fleet and can only be right for one of them. The
+rule lives in one place, `Lock.resolve_slot_count`, and both entry points
+to the slot pool call it, so they can never disagree about its size. The
+full statement, with the `slots_overridden` warning and the `data.slots` /
+`data.slots_source` keys that report what was used, is in
+`skills/wurk:kit/REFERENCE.md` under `lock.rb`. A fleet that carries a slot
+count in its shared manifest should move it here, one file per machine,
+and stop relaying it.
+
+## `workloads`
+
+An array of the workloads this machine runs, for a daemon or a conductor to
+ask "what does this machine run" without walking the filesystem. Absent
+means `[]`. Each entry is an object:
+
+- `root` (required) - a non-blank string, the path to a checkout or a fleet
+  umbrella. Expanded with `File.expand_path`, so `~` works and two spellings
+  of one directory count as the same root. Two entries with the same root
+  block: one workload, one entry.
+- `fleet_manifest` (opt) - a non-blank string, the path to that workload's
+  fleet manifest, when it is a fleet. Nil when absent.
+- `enabled` (opt, default `true`) - `true` or `false`. `false` keeps the
+  entry on file without offering it: "this machine knows how to run it,
+  but is not running it right now".
+- `primary` (opt, default `false`) - `true` or `false`. At most one entry
+  may be primary; two block, because "which one?" is a question this file
+  must not leave to the reader.
+
+Readers: `UserConfig#workloads` returns every entry normalized with all
+four keys present (so a caller never has to know the defaults),
+`#enabled_workloads` the subset with `enabled: true`, and
+`#primary_workload` the one primary entry or nil. Like `outbound_scan`,
+validation here is shape only - whether a root or a fleet manifest exists
+on disk is the caller's concern, not a load-time one.
+
+What is deliberately not here: anything a persona harness layers on top
+(its tracker of record for a workload, its posting targets, its own
+identity). Those belong to that harness's own config file beside this
+one; the kit reads none of them, and this schema has no slot for them.
+
 ## Absent-safe behavior
 
 No file at all is a normal, valid state: every value falls back to its
 default (`"auto"` for `tmux.permission_mode`; `outbound_scan` absent means
-disarmed), and `tmux_window.rb open` composes exactly the command line it
-always has. A new machine onboards with zero files - there is nothing to
-seed and nothing to opt into.
+disarmed; `machine.name` and `machine.gate_slots` nil, so `--slots N`
+decides the slot count as before; `workloads` empty), and `tmux_window.rb
+open` composes exactly the command line it always has. A new machine
+onboards with zero files - there is nothing to seed and nothing to opt
+into.
 
 ## Validation: block vs warn
 
@@ -202,8 +292,15 @@ asymmetry (`docs/manifest.md`'s Validation section):
   section, an empty object, or a non-string or blank `patterns_file` /
   `control_term` blocks. A section with only one of the two keys does not
   block here - see `## outbound_scan` above.
+- **`machine`, when present, must be an object**; a non-string or blank
+  `name`, or a `gate_slots` that is not a positive integer, blocks.
+- **`workloads`, when present, must be an array of objects**, each with a
+  non-blank string `root`; a blank `fleet_manifest`, a non-boolean
+  `enabled` or `primary`, a duplicated root, or more than one primary
+  blocks.
 - **An unknown key warns**, never blocks - a machine may be running an
-  older or newer kit than the file was written for.
+  older or newer kit than the file was written for. Inside a `workloads`
+  entry the warning names the entry's index (`workloads[1].nickname`).
 
 A block from `tmux_window.rb open` costs nothing: the config is validated
 before any `tmux new-window` / `tmux new-session` command is issued, and
@@ -221,7 +318,10 @@ on a valid config (including no file at all) and 1 on an invalid one.
 reading the code. `data.outbound_scan_declared` answers "is an outbound scan
 configured at all" the same way - deliberately without a
 `data.outbound_scan_patterns_file` field, since a lint envelope has no reason
-to carry even a pointer at the pattern set.
+to carry even a pointer at the pattern set. `data.machine_name`,
+`data.machine_gate_slots`, and `data.workloads` (the normalized entries)
+answer "what does this machine call itself, how many gates may it run at
+once, and what does it run".
 
 ## Not a consumer concern
 
