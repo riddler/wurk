@@ -54,11 +54,14 @@ EOF
 }
 
 # Reads stdin only when it is not a terminal, so a hand-run never hangs.
+# NULs are stripped here: bash's command substitution warns on a stray
+# NUL byte (dash drops it silently), so stripping at the source keeps
+# both shells silent.
 read_input() {
   if [ -t 0 ]; then
     printf ''
   else
-    cat 2>/dev/null || true
+    cat 2>/dev/null | tr -d '\000' || true
   fi
 }
 
