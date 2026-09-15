@@ -442,6 +442,61 @@ worktree isolation when parallel workers share directories.
   Reason: another harness measured dropped notifications in production,
   and a conductor that treats a notification as the record learns about
   a finished worker only when it happens to look.
+- **Pick the worker's model tier per dispatch, from the rubric, and
+  pass it on the Agent call.** `wurk-repo-worker`'s frontmatter says
+  `model: opus`; that is the agent's default when nothing is passed,
+  and it is not the rubric. The rubric is this bullet, and it is your
+  judgement per bead: the Agent call's `model` parameter overrides the
+  frontmatter, so every dispatch passes `model` explicitly, never
+  leaves it to the default. The tier names are the two the stage
+  contract in `/wurk:work` already uses, `sonnet` and `opus`; nothing
+  here is read from the manifest, because the only stage model that
+  differs per project is `models.direction`, and a conductor dispatch
+  is workflow policy, not a per-project value.
+
+  **`sonnet` only when every one of these holds**, and `opus` the
+  moment one does not:
+  - the change is fully specified - the bead says what to write and
+    where, and the worker has nothing left to decide about the shape;
+  - it touches tests, config, or docs, or at most three runtime
+    files, by your own reading of the bead against the tree (the
+    number is a proxy for blast radius, and a one-file change to a
+    shared contract is still `opus`);
+  - it needs no design call and no interpretation of authority,
+    consent, or policy - a bead that asks the worker to "decide the
+    right shape", or whose acceptance turns on a reading of a rule,
+    is `opus` however few files it names;
+  - success is tool-checkable: the gate, a grep, a script's envelope
+    can say it is done, so the worker never has to judge its own
+    result;
+  - it is not the first of a look-alike series. When the campaign
+    carries a run of beads that apply one pattern across N places, the
+    FIRST goes to `opus` so the pattern gets set by the stronger model,
+    and the rest may go to `sonnet` with the landed first as their
+    example. This clause comes from another harness's rubric, where
+    the first-of-series exception was the finding that paid for the
+    rest of it.
+
+  Two properties worth holding on to. The tier governs the worker's OWN
+  turns - reading the bead, weighing the dispatch, the verify pass, the
+  PR body, everything between skill invocations; each wurk skill it
+  runs pins its own model in its frontmatter for the turn it is active,
+  so a `sonnet` worker still gets `/wurk:work`'s stage tiering underneath
+  it, and an `opus` worker's implement subagents are still `sonnet`.
+  And the rubric is a floor on caution, not a budget target: a bead you
+  cannot confidently place is `opus`, and the reason you journal says
+  which clause failed, not "default".
+- **Journal the tier and the one-line reason next to the dispatch.** The
+  `[dispatch]` journal line carries the tier chosen and the reason in
+  one line, in the rubric's own terms ("sonnet: docs-only, fully
+  specified, gate-checkable" or "opus: needs a design call on the
+  manifest shape" or "opus: first of the three-bead rename series").
+  The reason is what makes the tier auditable at retro - a campaign
+  whose `sonnet` dispatches stalled can be read back against the
+  clause that let them through - and it is what the stall ladder's
+  escalation rung reads to know whether a stalled worker has a step
+  left above it. A dispatch with a tier and no reason is a
+  `[conductor-error]` on yourself.
 
 ### Worker stalls, resumes, takeovers
 
@@ -463,12 +518,30 @@ Escalation ladder:
    not dispatch new subagents."
 2. Second stall: "your wait target is dead; run it foreground/implement
    directly, no waiting, no new subagents."
-3. Third stall: retire the worker; inspect the worktree yourself;
+3. Tier escalation, once, for a `sonnet` worker only: when the worker
+   that stalled twice was dispatched at `sonnet` (the `[dispatch]`
+   line's tier says which), do not spend a third resume on it. Retire
+   it, and redispatch the SAME bead ONCE under `opus`, into the SAME
+   worktree, with the takeover brief from rung 4 - the worktree's
+   committed and uncommitted state is the escalated worker's starting
+   point, not a fresh cut. Journal it as a `[dispatch]` whose tier is
+   `opus` and whose reason names the escalation and what stalled
+   ("opus: escalated from sonnet after two stalls on the gate wait").
+   This rung has exactly one step: an `opus` worker that stalls has
+   nothing above it and goes to rung 4 directly, and the escalated
+   `opus` worker stalling again is rung 4, never a second escalation.
+   The reason is the whole point of the bound - a stall that survives
+   the stronger model is not a model problem, and rerolling tiers
+   would hide that from the retro.
+4. Third stall: retire the worker; inspect the worktree yourself;
    dispatch a FRESH worker with a takeover brief (verified worktree
    state, committed-vs-uncommitted inventory, "read uncommitted edits
    critically", "stand down any live writer first"; workers run
    /wurk:verify --unattended after implementation - it machine-checks
-   and fixes what it can, and human-only items stay deferred).
+   and fixes what it can, and human-only items stay deferred). The
+   fresh worker's tier is the rubric's answer for the bead as it now
+   stands, and a bead that has stalled a worker is by that fact no
+   longer fully specified: it goes to `opus`.
 
 After any mixed-writer episode: full gate against HEAD; provenance
 listed in the result/PR body.
@@ -521,10 +594,11 @@ assuming the worker alive OR dead. Journal the check as [stale] with
 what each probe returned.
 
 Both silent (no live agent, no movement) -> the worker is dead; take
-the escalation ladder above from rung 3 (retire, inspect, fresh worker
-with a takeover brief). One alive -> journal [stale] with the evidence
-and keep waiting; a slow gate or a long implement phase is not a dead
-worker. Resist the pull to redispatch on a stale mtime alone: a
+the escalation ladder above from rung 4 (retire, inspect, fresh worker
+with a takeover brief), or from rung 3, the one-step tier escalation,
+when the dead worker was a `sonnet` dispatch. One alive -> journal
+[stale] with the evidence and keep waiting; a slow gate or a long
+implement phase is not a dead worker. Resist the pull to redispatch on a stale mtime alone: a
 duplicate worker on a live bead is the collision Phase 3's probe exists
 to prevent, and this time you would be the peer.
 
@@ -553,9 +627,10 @@ for an hour.
 3. Redispatch only when both are silent. A bead with no report file AND
    no live worker (per the Staleness checks above) is the only bead a
    resume redispatches, and it goes through the takeover brief (rung
-   3), never a fresh Phase 3 dispatch that ignores the worktree's
-   uncommitted edits. Everything else keeps its worker and waits for
-   the next sweep.
+   4, or the one-step tier escalation at rung 3 when the dead worker
+   was a `sonnet` dispatch), never a fresh Phase 3 dispatch that
+   ignores the worktree's uncommitted edits. Everything else keeps its
+   worker and waits for the next sweep.
 
 A resume's first journal entry is a [state] render saying what was
 reconstructed and from which files, so the next resume can verify it.
@@ -676,6 +751,8 @@ campaigns) - the campaign must be resumable from the journal alone. Closed event
     [refusal] [conductor-error] [cleanup] [correction] [incident]
     [ruling-queued] [stale]
 
+`[dispatch]` carries (bead, worktree, model tier, the one-line tier
+reason from Phase 3's rubric; on an escalation, the rung it came from).
 `[complete]` carries (bead, PR-or-merge, base, sha, gate, scan,
 bead-status). `[stale]` carries (bead, minutes since last
 report/commit/journal movement, each liveness probe and what it
@@ -797,6 +874,12 @@ names from git branch --show-current. Empty output is unconfirmed -
 re-run. Prefix scratchpad files with your bead id. Never wait on
 detached background work. Halt if foreign commits appear on your branch.
 
+TIER: <the model tier this dispatch runs at, `sonnet` or `opus`, and the
+one-line reason - the same pair the [dispatch] journal line carries. On
+an escalation: "opus, escalated from a sonnet dispatch that stalled at
+<what>; the worktree below is that worker's, read its uncommitted edits
+critically.">
+
 RETURN: the wurk-repo-worker structured JSON result exactly, including
 repos_touched (audited against this dispatch's scope).
 
@@ -808,6 +891,7 @@ touch it early.
 ```
 
 Slots filled per dispatch: repo dir, bead id, ground-truth delta,
+model tier and its reason (also passed as `model` on the Agent call),
 linkage entries (fleets), policy block, mode/MR authorization, stacking
 base, moved files (or the explicit "unchanged"), gate path (short or
 long, from the measured budget), gate-semaphore details, known flakes,
