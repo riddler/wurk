@@ -72,11 +72,28 @@ class Manifest
       "the manifest value is ignored"
   }.freeze
 
+  # The external_tracker lifecycle (ADR-0018, wu-yi7.4): the bead-side events
+  # wurk skills already observe - a claim in /wurk:work, the push-and-open
+  # step in /wurk:mr, a stop-and-report from any skill or the conductor, and
+  # the close-the-beads-that-landed step in /wurk:cleanup - in the order they
+  # occur. The value is who holds the ticket after the event: status and
+  # assignee move as one atomic pair, an agent holds the ticket while it is
+  # being worked and reviewed, a human holds it whenever a decision is
+  # needed or the work is done. The kit never learns the status names
+  # themselves; they are the consumer's words, read from the manifest and
+  # handed to the consumer's transition command.
+  EXTERNAL_TRACKER_EVENTS = {
+    "claimed" => "agent",
+    "request_opened" => "agent",
+    "needs_attention" => "owner",
+    "closed" => "owner"
+  }.freeze
+
   # The known key surface, for the unknown-key warning. Nested sections list
   # their own keys; a section absent from this map is not validated further.
   KNOWN = {
     nil => %w[wurk repo beads forge gate parallelism tmux models artifacts commits changelog release judge rebase
-             mr],
+             mr external_tracker],
     "repo" => %w[default_branch],
     "beads" => %w[prefix topology sync areas],
     "beads.areas" => %w[labels lands_alone always_batchable],
@@ -94,7 +111,10 @@ class Manifest
     "changelog" => %w[mode dir],
     "judge" => %w[model registry],
     "rebase" => %w[auto_resolve_paths],
-    "mr" => %w[review_agents]
+    "mr" => %w[review_agents],
+    "external_tracker" => %w[id_pattern subject_prefix statuses assignee],
+    "external_tracker.statuses" => EXTERNAL_TRACKER_EVENTS.keys,
+    "external_tracker.assignee" => %w[agent owner]
   }.freeze
 
   # A hostname of dot-separated labels, optionally with a :port. Deliberately
@@ -676,6 +696,86 @@ class Manifest
     mr_review_agents.reject { |name| mr_review_agent_path(name, root: root, home: home) }
   end
 
+  # Whether the external_tracker section is declared at all (ADR-0018).
+  # Absent means the kit reads no external ref for any purpose, silently.
+  def external_tracker?
+    !fetch("external_tracker").nil?
+  end
+
+  # The consumer's whole-value regex over a bead's external_ref, or nil when
+  # the section is absent or the source is not a compilable non-empty
+  # string - a safety valve like mr_review_agents, since a malformed value
+  # already blocks in validate_external_tracker. Anchored `\A(?:src)\z` so a
+  # consumer writes the id shape and not the anchors, the same convention
+  # beads.prefix follows for the bead id.
+  def external_tracker_id_pattern
+    source = fetch("external_tracker.id_pattern")
+    return nil unless source.is_a?(String) && !source.empty?
+
+    Regexp.new("\\A(?:#{source})\\z")
+  rescue RegexpError
+    nil
+  end
+
+  def external_tracker_subject_prefix?
+    fetch("external_tracker.subject_prefix") == true
+  end
+
+  # The wurk-event -> tracker-status-name map, restricted to KNOWN events
+  # with non-empty string values. {} when absent or malformed - a malformed
+  # value already blocks in validate_external_tracker, so this is a safety
+  # valve for a caller reading it after a failed load.
+  def external_tracker_statuses
+    value = fetch("external_tracker.statuses")
+    return {} unless value.is_a?(Hash)
+
+    value.select { |event, status| EXTERNAL_TRACKER_EVENTS.key?(event) && status.is_a?(String) && !status.empty? }
+  end
+
+  # {"agent" => ..., "owner" => ...}, or nil when absent or malformed.
+  def external_tracker_assignee
+    value = fetch("external_tracker.assignee")
+    return nil unless value.is_a?(Hash)
+
+    agent = value["agent"]
+    owner = value["owner"]
+    return nil unless agent.is_a?(String) && !agent.empty? && owner.is_a?(String) && !owner.empty?
+
+    { "agent" => agent, "owner" => owner }
+  end
+
+  # One entry per event present in external_tracker_statuses, in
+  # EXTERNAL_TRACKER_EVENTS declaration order (the lifecycle order), each
+  # {event, status, holder, assignee}. `assignee` is the declared id for
+  # that event's holder, or nil when no assignee is declared. [] when the
+  # section is absent - this is what /wurk:work, /wurk:mr, /wurk:cleanup,
+  # and a conductor read instead of parsing extension prose.
+  def external_tracker_lifecycle
+    statuses = external_tracker_statuses
+    assignee = external_tracker_assignee
+
+    EXTERNAL_TRACKER_EVENTS.map do |event, holder|
+      status = statuses[event]
+      next nil unless status
+
+      { "event" => event, "status" => status, "holder" => holder, "assignee" => assignee && assignee[holder] }
+    end.compact
+  end
+
+  # The resolved section, string-keyed so the envelope serializes it as-is.
+  # nil when absent.
+  def external_tracker
+    return nil unless external_tracker?
+
+    {
+      "id_pattern" => fetch("external_tracker.id_pattern"),
+      "subject_prefix" => external_tracker_subject_prefix?,
+      "statuses" => external_tracker_statuses,
+      "assignee" => external_tracker_assignee,
+      "lifecycle" => external_tracker_lifecycle
+    }
+  end
+
   # The only paths a rebase conflict may be auto-resolved in. Empty - the
   # default - means the feature is off, which is where every consumer starts.
   # Same matching rule as the gate path lists (see lib/gate_paths.rb): a
@@ -788,6 +888,7 @@ class Manifest
     validate_judge
     validate_rebase
     validate_mr
+    validate_external_tracker
     validate_gate_timeout_seconds
     validate_gate_long_timeout_seconds
     validate_parallelism_timeout_seconds
@@ -1218,6 +1319,82 @@ class Manifest
               "instance of the same agent is another run, not another opinion"
   end
 
+  # Present-or-absent, never half-present, the same rule gate.sabotage,
+  # judge, rebase, and mr follow (ADR-0018 section 2). id_pattern is
+  # required when the section is present; subject_prefix, statuses, and
+  # assignee are each independently optional, except assignee requires
+  # statuses - the assignee moves only as the pair of a status transition.
+  def validate_external_tracker
+    section = fetch("external_tracker")
+    return if section.nil?
+
+    unless section.is_a?(Hash)
+      errors << "#{path}: external_tracker must be an object (see wurk docs/manifest.md)"
+      return
+    end
+
+    validate_external_tracker_id_pattern(section)
+    validate_external_tracker_subject_prefix
+    validate_external_tracker_statuses(section)
+    validate_external_tracker_assignee(section)
+  end
+
+  def validate_external_tracker_id_pattern(section)
+    source = section["id_pattern"]
+    unless source.is_a?(String) && !source.empty?
+      errors << "#{path}: external_tracker.id_pattern must be a non-empty regex source string matched " \
+                "against the whole ref (omit the external_tracker section entirely to run without an " \
+                "external tracker)"
+      return
+    end
+
+    Regexp.new(source)
+  rescue RegexpError => e
+    errors << "#{path}: external_tracker.id_pattern is not a valid regular expression (#{e.message})"
+  end
+
+  def validate_external_tracker_subject_prefix
+    value = dig_raw("external_tracker.subject_prefix")
+    return if value.nil? || value == true || value == false
+
+    errors << "#{path}: external_tracker.subject_prefix must be true or false, got #{value.inspect}"
+  end
+
+  def validate_external_tracker_statuses(section)
+    statuses = section["statuses"]
+    return if statuses.nil?
+
+    unless statuses.is_a?(Hash) && !statuses.empty?
+      errors << "#{path}: external_tracker.statuses must be a non-empty object mapping wurk events to " \
+                "the tracker's status names (omit the key to move no ticket status)"
+      return
+    end
+
+    statuses.each do |event, status|
+      next unless EXTERNAL_TRACKER_EVENTS.key?(event)
+      next if status.is_a?(String) && !status.empty?
+
+      errors << "#{path}: external_tracker.statuses.#{event} must be a non-empty string, got #{status.inspect}"
+    end
+  end
+
+  def validate_external_tracker_assignee(section)
+    assignee = section["assignee"]
+    return if assignee.nil?
+
+    valid_shape = assignee.is_a?(Hash) &&
+                  %w[agent owner].all? { |key| assignee[key].is_a?(String) && !assignee[key].empty? }
+    unless valid_shape
+      errors << "#{path}: external_tracker.assignee must be an object with non-empty string ids under " \
+                "agent and owner (omit the key to leave the ticket's assignee alone)"
+    end
+
+    return unless section["statuses"].nil?
+
+    errors << "#{path}: external_tracker.assignee is declared but external_tracker.statuses is not; " \
+              "the assignee moves only as the pair of a status transition (see wurk docs/manifest.md)"
+  end
+
   def validate_regex_lists
     REGEX_LIST_FIELDS.each do |dotted|
       value = fetch(dotted)
@@ -1346,6 +1523,12 @@ module ManifestCli
       # and empty when the consumer declares none.
       env.data[:mr_review_agents] = manifest.mr_review_agents
       env.data[:artifacts_adr] = manifest.adr_dir
+
+      # The external tracker lifecycle (ADR-0018, wu-yi7.4): null when the
+      # section is absent. /wurk:work, /wurk:mr, /wurk:cleanup, and a
+      # conductor read data.external_tracker.lifecycle from here rather than
+      # from a consumer's extension prose.
+      env.data[:external_tracker] = manifest.external_tracker
 
       warn_local_mode_with_dolt_remote(env, manifest)
       block_unresolved_review_agents(env, manifest)
