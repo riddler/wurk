@@ -170,7 +170,25 @@ defaults are listed under "Defaults" below.
       "wurk-diff-critic",             // Bare agent names: the repo's own
       "convention-reviewer"           // .claude/agents/<name>.md, or wurk's
     ]                                 // installed roster; see "mr.review_agents"
-  }
+  },
+
+  "external_tracker": {                // (opt) omit = the kit reads no
+                                       // external ref for any purpose
+    "id_pattern": "[A-Z][A-Z0-9]+-[0-9]+",  // required when present; a
+                                       // Ruby regex over the whole ref
+    "subject_prefix": false,          // (opt) default false; commit
+                                       // subjects must begin with the ref
+    "statuses": {                     // (opt) wurk event -> the tracker's
+      "claimed": "In Progress",       // status name; a partial map is
+      "request_opened": "In Review",  // legal - the missing events move
+      "needs_attention": "Needs Attention", // no ticket status
+      "closed": "Done"
+    },
+    "assignee": {                     // (opt) requires statuses; the
+      "agent": "bot-account-id",      // tracker's user ids
+      "owner": "human-account-id"
+    }
+  }                                    // see "external_tracker" below
 }
 ```
 
@@ -529,6 +547,74 @@ result: the round would have failed to spawn them.
 which is how `/wurk:mr` and `wurk-repo-worker` read the round without
 parsing the manifest themselves - empty when the consumer declares none.
 
+## `external_tracker`
+
+The tracker outside beads - Jira, Linear, Notion - that a consumer following
+`docs/two-tracker-pattern.md` decides and reads tickets in, while beads
+stays the system of record for engineering state (ADR-0007). ADR-0018
+accepted this section; wu-yi7.4 added `statuses` and `assignee`. The kit
+never learns which tracker it is, never calls its API, and never learns its
+state vocabulary - see ADR-0018 section 4. What follows is the schema; the
+kit paths that read `external_ref` and check its shape (`bead.rb show`,
+`commit_message.rb`, `bead.rb external-refs`) are tracked separately in
+ADR-0018 section 3.
+
+- **`id_pattern`** - required when the section is present, a non-empty
+  string that must compile as a Ruby regex. The kit matches it against the
+  **whole ref** (`\A(?:pattern)\z`), so a consumer writes the id shape and
+  not the anchors, the same convention `beads.prefix` follows for the bead
+  id. A missing, empty, non-string, or uncompilable value blocks on load,
+  naming the field.
+- **`subject_prefix`** - optional, default `false`. When `true`, a commit
+  subject carrying `--external-ref` must begin with the ref exactly (see
+  ADR-0018 section 3b). Anything other than `true` or `false` blocks.
+- **`statuses`** - optional: a map from a wurk event to the tracker's own
+  status name. The keys are the four lifecycle events below; a partial map
+  is legal, and a missing event simply moves no ticket status for that
+  event. Present, it must be a non-empty object, and every value under a
+  known event must be a non-empty string.
+- **`assignee`** - optional: the tracker's own user ids, `"agent"` for the
+  id that holds a ticket while an agent is working it, `"owner"` for the id
+  that holds it whenever a human decision is needed. Requires `statuses` -
+  the assignee moves only as the pair of a status transition, so declaring
+  who without declaring when is a schema error.
+
+### The lifecycle
+
+| Event | Observed by | Ticket status | Holder after the event | Precondition |
+|---|---|---|---|---|
+| `claimed` | `/wurk:work`, its get-a-claimed-bead step (`/wurk:next --auto` claims through the same script) | `statuses.claimed` | agent | - |
+| `request_opened` | `/wurk:mr`, its push-and-open step | `statuses.request_opened` | agent | the request URL goes on the ticket |
+| `needs_attention` | any skill, a worker, or a conductor when a bead stops-and-reports: blocked, an open question, a gate failure outside scope | `statuses.needs_attention` | owner | the decision context is written on the ticket body BEFORE the status and assignee move - what was asked, what was found, the options, and what the owner is being asked to decide; a hand-off with no context is a dropped ticket, not a hand-off |
+| `closed` | `/wurk:cleanup`, its close-the-beads-that-landed step, once every bead carrying the ref is closed | `statuses.closed` | owner | - |
+
+Two rules follow from the table:
+
+- **Status and assignee move as one atomic pair.** A transition sets both
+  from the same lifecycle entry, never one without the other, and an agent
+  never assigns a human without the `needs_attention` or `closed` context.
+- **Skills read the lifecycle from the manifest, not from extension
+  prose.** `/wurk:work`, `/wurk:mr`, `/wurk:cleanup`, and a conductor read
+  `data.external_tracker.lifecycle` from `manifest.rb check`; a consumer's
+  extension prose keeps only the tracker's identity and the command that
+  performs a transition, and passes the status name and assignee id from
+  the envelope into it. An extension that spells a status name or an
+  account id in its own prose is carrying a manifest value in prose, which
+  is exactly the duplication this section exists to remove.
+
+A partial `statuses` map means the missing events move nothing: `/wurk:mr`
+observing `request_opened` with no entry for it in the resolved `lifecycle`
+performs no transition for that event and says nothing about it. An event
+name outside the four above is an unknown key and warns, never blocks - the
+same forward-compatibility rule every other section follows.
+
+**Absent means the kit reads no external ref for any purpose, silently.**
+Present-or-absent, never half-present, the same rule `gate.sabotage`,
+`judge`, `rebase`, and `mr` follow. `manifest.rb check` reports the
+resolved section as `data.external_tracker` (`null` when absent), with the
+resolved `lifecycle` included, so a skill reads the answer from the
+envelope rather than parsing the manifest.
+
 ## `gate.cwd`
 
 The repo-root-relative directory the five consumer gate commands
@@ -808,6 +894,7 @@ is already handled there.
 | commits.style | s-form | s-form | conventional + package map |
 | changelog.mode | fragments | keep-a-changelog (direct) | keep-a-changelog per package |
 | release | null (2.0.0-dev) | hex recipe | xcode-app recipe |
+| external_tracker | absent | absent | absent |
 
 The `gate.sabotage` column for predicator-ex describes this schema's
 intent, not yet that repo's own manifest: predicator-ex has the narrow
@@ -890,7 +977,9 @@ false, `missing` always `[]`, no `git diff` shelled out for it), no `judge`
 section means `judge?` is `false` and the judge never runs, no `rebase`
 section (or an empty `auto_resolve_paths`) means rebase auto-resolution is
 off - see "`rebase.auto_resolve_paths`" above, no `mr` section means
-`/wurk:mr` runs no pre-request review round and says nothing about it, and
+`/wurk:mr` runs no pre-request review round and says nothing about it, no
+`external_tracker` section means the kit reads no external ref and the
+lifecycle is empty, and
 no `artifacts.adr` means the docs agents locate decision records by
 convention and say so, and
 no `gate.cwd` means the gate commands run at the root of the checkout being
@@ -929,6 +1018,19 @@ gated.
   list all block. Whether the name resolves to `.claude/agents/<name>.md` is
   checked by `manifest.rb check` only, and blocks there. See
   "`mr.review_agents`" above.
+- **`external_tracker.id_pattern` must be a non-empty, compilable regex
+  source string** when the `external_tracker` section is present. Missing,
+  empty, non-string, and uncompilable values all block, naming the field.
+- **`external_tracker.subject_prefix` must be `true` or `false`** when
+  present. Anything else blocks; absent is legal and means `false`.
+- **`external_tracker.statuses` must be a non-empty object** when present,
+  mapping wurk events to non-empty tracker status name strings; a
+  non-string value under a known event blocks naming that event. A partial
+  map (some of the four events, not all) is legal.
+- **`external_tracker.assignee` must be an object with non-empty string
+  ids under `agent` and `owner`** when present, and requires `statuses` to
+  also be declared - the assignee moves only as the pair of a status
+  transition. See "`external_tracker`" above.
 - **`forge.host` must be a bare hostname**, optionally with a port, when the
   field is present. A scheme, a path, a trailing slash, an empty string, and
   a non-string all block; the shape is checked without any DNS or

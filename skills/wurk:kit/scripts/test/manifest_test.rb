@@ -1196,6 +1196,38 @@ class ManifestCliTest < Minitest::Test
     assert_equal ["manifest_unavailable"], env["blocked"].map { |b| b["code"] }
   end
 
+  def test_check_reports_null_external_tracker_when_absent
+    code, env = run_cli(["check", "--file", ManifestFixtures.path("valid")])
+    assert_equal 0, code
+    assert_nil env["data"]["external_tracker"]
+  end
+
+  def test_check_reports_the_resolved_external_tracker_including_lifecycle
+    Dir.mktmpdir do |dir|
+      raw = JSON.parse(File.read(ManifestFixtures.path("valid")))
+      raw["external_tracker"] = {
+        "id_pattern" => "[A-Z]+-[0-9]+",
+        "subject_prefix" => true,
+        "statuses" => { "claimed" => "Todo", "closed" => "Done" },
+        "assignee" => { "agent" => "bot-account-1", "owner" => "human-account-1" }
+      }
+      manifest = File.join(dir, "wurk.json")
+      File.write(manifest, JSON.generate(raw))
+
+      code, env = run_cli(["check", "--file", manifest])
+      assert_equal 0, code
+      section = env["data"]["external_tracker"]
+      refute_nil section
+      assert_equal "[A-Z]+-[0-9]+", section["id_pattern"]
+      assert_equal true, section["subject_prefix"]
+      assert_equal({ "claimed" => "Todo", "closed" => "Done" }, section["statuses"])
+      assert_equal({ "agent" => "bot-account-1", "owner" => "human-account-1" }, section["assignee"])
+      assert_equal %w[claimed closed], section["lifecycle"].map { |e| e["event"] }
+      assert_equal "bot-account-1", section["lifecycle"].first["assignee"]
+      assert_equal "human-account-1", section["lifecycle"].last["assignee"]
+    end
+  end
+
   # In the donor repo this checked that repo's own .claude/wurk.json - the
   # one place the suite was allowed to read a real manifest. Wurk is not a
   # consumer and ships no wurk.json, so the check that survives the move is
@@ -1477,6 +1509,170 @@ class ManifestMrReviewAgentsTest < Minitest::Test
     m = with_mr(%w[nothing-ships-this-agent])
     assert m.valid?, "validate! must not touch the filesystem: #{m.errors.inspect}"
     assert_empty m.warnings
+  end
+end
+
+# external_tracker (ADR-0018 section 2 and wu-yi7.4's statuses/assignee
+# addition). Two properties under test throughout: present-or-absent, never
+# half-present, and the kit never learns the tracker's status vocabulary -
+# it only carries the consumer's strings through to the lifecycle array.
+class ManifestExternalTrackerTest < Minitest::Test
+  def with_external_tracker(overrides)
+    ManifestFixtures.load_with("valid", { "external_tracker" => overrides })
+  end
+
+  # sabotage: warn on the absent section -> red. Silence is the contract.
+  def test_an_absent_section_is_silent
+    m = ManifestFixtures.load("valid")
+    assert m.valid?
+    assert_empty m.warnings
+    refute m.external_tracker?
+    assert_nil m.external_tracker
+    assert_empty m.external_tracker_lifecycle
+  end
+
+  def test_minimal_present_section_is_valid_with_defaults
+    m = with_external_tracker({ "id_pattern" => "[A-Z]+-[0-9]+" })
+    assert m.valid?, m.errors.inspect
+    assert_empty m.warnings
+    assert m.external_tracker?
+    refute m.external_tracker_subject_prefix?
+    assert_empty m.external_tracker_statuses
+    assert_empty m.external_tracker_lifecycle
+  end
+
+  def test_missing_id_pattern_blocks
+    m = ManifestFixtures.load_with("valid", { "external_tracker" => { "subject_prefix" => true } })
+    refute m.valid?
+    assert_match(/external_tracker\.id_pattern must be a non-empty regex source string/, m.errors.join("\n"))
+    assert_match(/omit the external_tracker section entirely/, m.errors.join("\n"))
+  end
+
+  def test_empty_id_pattern_blocks
+    m = with_external_tracker({ "id_pattern" => "" })
+    refute m.valid?
+    assert_match(/external_tracker\.id_pattern must be a non-empty regex source string/, m.errors.join("\n"))
+  end
+
+  def test_non_string_id_pattern_blocks
+    m = with_external_tracker({ "id_pattern" => 3 })
+    refute m.valid?
+    assert_match(/external_tracker\.id_pattern must be a non-empty regex source string/, m.errors.join("\n"))
+  end
+
+  def test_uncompilable_id_pattern_blocks_naming_the_regexp_error
+    m = with_external_tracker({ "id_pattern" => "[" })
+    refute m.valid?
+    assert_match(/external_tracker\.id_pattern/, m.errors.join("\n"))
+  end
+
+  def test_id_pattern_is_anchored_over_the_whole_value
+    m = with_external_tracker({ "id_pattern" => "[A-Z]+-[0-9]+" })
+    assert m.valid?, m.errors.inspect
+    assert m.external_tracker_id_pattern.match?("ABC-12")
+    refute m.external_tracker_id_pattern.match?("xABC-12y")
+  end
+
+  def test_subject_prefix_string_true_blocks
+    m = with_external_tracker({ "id_pattern" => "X-[0-9]+", "subject_prefix" => "true" })
+    refute m.valid?
+    assert_match(/external_tracker\.subject_prefix must be true or false/, m.errors.join("\n"))
+  end
+
+  def test_subject_prefix_true_is_read
+    m = with_external_tracker({ "id_pattern" => "X-[0-9]+", "subject_prefix" => true })
+    assert m.valid?, m.errors.inspect
+    assert m.external_tracker_subject_prefix?
+  end
+
+  def test_partial_statuses_map_is_valid_and_lifecycle_carries_declared_events_in_order
+    m = with_external_tracker(
+      "id_pattern" => "X-[0-9]+",
+      # JSON order deliberately reversed from EXTERNAL_TRACKER_EVENTS order.
+      "statuses" => { "closed" => "Done", "claimed" => "Todo" }
+    )
+    assert m.valid?, m.errors.inspect
+    assert_equal %w[claimed closed], m.external_tracker_lifecycle.map { |e| e["event"] }
+    assert_equal "Todo", m.external_tracker_lifecycle.first["status"]
+    assert_equal "agent", m.external_tracker_lifecycle.first["holder"]
+    assert_equal "owner", m.external_tracker_lifecycle.last["holder"]
+  end
+
+  def test_empty_statuses_blocks
+    m = with_external_tracker({ "id_pattern" => "X-[0-9]+", "statuses" => {} })
+    refute m.valid?
+    assert_match(/external_tracker\.statuses must be a non-empty object/, m.errors.join("\n"))
+  end
+
+  def test_statuses_non_string_value_blocks_naming_the_event
+    m = with_external_tracker({ "id_pattern" => "X-[0-9]+", "statuses" => { "claimed" => 3 } })
+    refute m.valid?
+    assert_match(/external_tracker\.statuses\.claimed must be a non-empty string/, m.errors.join("\n"))
+  end
+
+  def test_unknown_status_event_warns_without_blocking
+    m = with_external_tracker(
+      "id_pattern" => "X-[0-9]+",
+      "statuses" => { "claimed" => "Todo", "abandoned" => "Wontfix" }
+    )
+    assert m.valid?, m.errors.inspect
+    assert_match(/unknown key external_tracker\.statuses\.abandoned/, m.warnings.join("\n"))
+  end
+
+  def test_assignee_with_both_ids_yields_lifecycle_assignee_by_holder
+    m = with_external_tracker(
+      "id_pattern" => "X-[0-9]+",
+      "statuses" => { "claimed" => "Todo", "request_opened" => "In Review",
+                      "needs_attention" => "Needs Attention", "closed" => "Done" },
+      "assignee" => { "agent" => "bot-account-1", "owner" => "human-account-1" }
+    )
+    assert m.valid?, m.errors.inspect
+    by_event = m.external_tracker_lifecycle.to_h { |e| [e["event"], e["assignee"]] }
+    assert_equal "bot-account-1", by_event["claimed"]
+    assert_equal "bot-account-1", by_event["request_opened"]
+    assert_equal "human-account-1", by_event["needs_attention"]
+    assert_equal "human-account-1", by_event["closed"]
+  end
+
+  def test_assignee_missing_owner_blocks
+    m = with_external_tracker(
+      "id_pattern" => "X-[0-9]+",
+      "statuses" => { "claimed" => "Todo" },
+      "assignee" => { "agent" => "bot-account-1" }
+    )
+    refute m.valid?
+    assert_match(/external_tracker\.assignee must be an object with non-empty string ids under agent and owner/, m.errors.join("\n"))
+  end
+
+  def test_assignee_non_hash_blocks
+    m = with_external_tracker(
+      "id_pattern" => "X-[0-9]+",
+      "statuses" => { "claimed" => "Todo" },
+      "assignee" => "bot-account-1"
+    )
+    refute m.valid?
+    assert_match(/external_tracker\.assignee must be an object with non-empty string ids under agent and owner/, m.errors.join("\n"))
+  end
+
+  def test_assignee_without_statuses_blocks
+    m = with_external_tracker(
+      "id_pattern" => "X-[0-9]+",
+      "assignee" => { "agent" => "bot-account-1", "owner" => "human-account-1" }
+    )
+    refute m.valid?
+    assert_match(/external_tracker\.assignee is declared but external_tracker\.statuses is not/, m.errors.join("\n"))
+  end
+
+  def test_non_object_section_blocks
+    m = ManifestFixtures.load_with("valid", { "external_tracker" => ["X-[0-9]+"] })
+    refute m.valid?
+    assert_match(/external_tracker must be an object/, m.errors.join("\n"))
+  end
+
+  def test_unknown_key_under_external_tracker_warns_without_blocking
+    m = with_external_tracker({ "id_pattern" => "X-[0-9]+", "priority" => "high" })
+    assert m.valid?, m.errors.inspect
+    assert_match(/unknown key external_tracker\.priority/, m.warnings.join("\n"))
   end
 end
 

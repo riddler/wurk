@@ -134,6 +134,14 @@ in progress, claim it:
 ruby ~/.claude/skills/wurk:kit/scripts/bead.rb claim <id>
 ```
 
+When `ruby ~/.claude/skills/wurk:kit/scripts/lib/manifest.rb check` reports
+a non-null `data.external_tracker` whose `lifecycle` carries a `claimed`
+entry, the claim is also the ticket's `claimed` transition: the consumer's
+`.claude/wurk/work.md` step performs it with that entry's `status` and
+`assignee` taken from the envelope (status and assignee move together, per
+`docs/manifest.md`'s "`external_tracker`" section), and never with a status
+name or account id written in the extension itself.
+
 The claim is the lock. An epic is not workable: report it, point at its
 children, and stop.
 

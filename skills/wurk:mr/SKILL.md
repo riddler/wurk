@@ -424,6 +424,14 @@ change:
    only ever subtract a push; nothing in a dispatch can add one under
    `local`.
 
+   When `manifest.rb check` reports a non-null `data.external_tracker`
+   whose `lifecycle` carries a `request_opened` entry, this step is also
+   the ticket's `request_opened` transition: the consumer's
+   `.claude/wurk/mr.md` step performs it with that entry's `status` and
+   `assignee` taken from the envelope, alongside the request URL just
+   recorded, and never with a status name or account id written in the
+   extension itself (`docs/manifest.md`'s "`external_tracker`" section).
+
    Leave the bead in progress. Do not close it.
 
 10. **Report.**
