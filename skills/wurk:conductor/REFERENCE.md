@@ -1,11 +1,12 @@
 # wurk:conductor reference
 
-Companion to SKILL.md. Two contracts the skill relies on when a project
-runs more than one campaign or links work across repos: the
-multi-campaign protocol and the linkage-ledger schema. Both were
-extracted from a consumer fleet's `.claude/fleet/` docs after surviving
-twenty-odd campaigns; the consumer keeps its own copies with its own
-history notes. Nothing here is consumer-specific.
+Companion to SKILL.md. Three contracts the skill relies on: the
+multi-campaign protocol and the linkage-ledger schema, both extracted
+from a consumer fleet's `.claude/fleet/` docs after surviving twenty-odd
+campaigns (the consumer keeps its own copies with its own history
+notes), and the campaign-file schema that `campaign_state.rb` reads so a
+scheduler can pick an armed campaign without parsing markdown. Nothing
+here is consumer-specific.
 
 The fleet manifest (`.claude/wurk-fleet.json`) is not yet documented or
 linted by wurk; the field names used below (`multiCampaign`,
@@ -114,6 +115,117 @@ unclear.
 Worktree dirs are per-repo (the manifest's `parallelism.worktrees_dir`)
 and branch names carry bead ids, so disjoint footprints cannot collide.
 Do not relax either convention.
+
+## Campaign files and `campaign_state.rb`
+
+A campaign is a directory of markdown files, `.claude/campaigns/` by
+default (excluded from git via `.git/info/exclude`, per SKILL.md's
+"Campaign state lives outside what the campaign publishes"; a fleet may
+keep it elsewhere and passes that path). The kit script
+`campaign_state.rb` (`ruby ~/.claude/skills/wurk:kit/scripts/campaign_state.rb`)
+reads this directory and answers, in one JSON envelope, the question a
+scheduler asks before it may start a campaign unattended: which
+campaigns are ARMED, what they cover, whether their consent is adopted,
+and whether one is already running. It is the machine-readable side of
+the registry statuses in rule 1 above. What it never does: invoke the
+conductor, take or release a lock, or write a consent file.
+
+### The files it reads
+
+| File | Role | How it is recognized |
+|---|---|---|
+| `<id>.md` | the plan | a top-level `*.md` whose first H1 is exactly `# Campaign <id>`, with `<id>` equal to the file's basename |
+| `<id>-consent.md` | the consent, a human artifact | by name, next to the plan; its H1 is `# Campaign <id> consent` so it is never mistaken for a plan |
+| `<locks-dir>/campaign-<id>/` | the campaign mutex | a `lock.rb` directory (`--campaign-mutex`); `<locks-dir>` defaults to `<campaigns dir>/locks`, a fleet passes `multiCampaign.locksDir` as `--locks-dir` |
+
+Reports (`<id>-report.md`), journals (`journal/`), and any other document
+under the directory are ignored because their H1 does not name their own
+basename as a campaign - there is no exclusion list to maintain.
+
+### The Status line - the plan's front matter
+
+The plan's front matter is one line, the first line of the file that
+starts with `Status:`, in the shape the conductor already writes by hand:
+
+    Status: ARMED 2026-09-14 18:41 -0600 (consent adopted verbatim in the conductor session). Arming was ...
+
+The grammar is `Status: <WORD> [<stamp>] <anything>`. `<WORD>` is one of
+`DRAFTED`, `ARMED`, `WRAPPED`; `<stamp>` is a date, optionally with a
+time and zone offset (`2026-09-14`, `2026-09-14 18:41 -0600`); everything
+after the stamp is prose. A plan with no Status line reads as `status:
+null` and is treated as DRAFTED. A word outside the vocabulary is
+reported verbatim with an `unknown_status` warning and is never treated
+as armed. There is no YAML front matter and no second schema: the
+Status line the conductor has always flipped by hand is the schema, and
+the script edits exactly that line.
+
+`RUNNING` is deliberately not a Status word. A campaign is running when
+its mutex directory is held by a live holder (`lock.rb`'s probe, not
+stale); that is a fact about the lock dir, not something a file can claim
+about itself, so the script derives it and the file never records it.
+
+The consent file carries the same line shape with the words `DRAFTED` and
+`ADOPTED`. Only `ADOPTED` counts.
+
+### Subcommands
+
+Every subcommand takes `--dir DIR` (repeatable; default `.claude/campaigns`
+under the current directory) and `--locks-dir DIR`.
+
+- **`list`** - read-only, always exits 0. `data.campaigns[]` carries one
+  record per plan (below), sorted by id; `data.runnable` is the list of ids
+  a scheduler may start: `armed && consent.adopted && !running`. A missing
+  directory is an empty list plus a `campaigns_dir_missing` warning, not a
+  block - "nothing is armed" is a complete answer.
+- **`show ID`** - the same record for one campaign, under `data.campaign`.
+  Blocks `campaign_not_found` when no plan matches.
+- **`arm ID`** - rewrites the Status word and stamp to `ARMED <now>`,
+  keeping the rest of the line; inserts a Status line after the H1 when
+  the plan has none. Refuses `consent_not_adopted` (needs: human) when the
+  consent file is missing or not ADOPTED - arming is the permission a
+  scheduler acts on, and the script never manufactures the consent that
+  makes it legitimate. Refuses `campaign_wrapped`. Already armed: ok,
+  `changed: false`, warning `already_armed`. `--dry-run` reports the
+  rewrite in `commands` and touches nothing.
+- **`disarm ID`** - rewrites the Status to `DRAFTED <now>` the same way.
+  Refuses `campaign_running` while the mutex is live-held: the conductor
+  holding it has already read ARMED and the file flip would only mislead
+  the next reader. Not armed: ok, `changed: false`, warning `not_armed`.
+  `--dry-run` as for `arm`. The consent file is never touched.
+
+Both mutations write via a sibling temp file and rename, so a concurrent
+`list` sees the old file or the new one.
+
+### The campaign record
+
+```json
+{
+  "id": "260914-example",
+  "path": "/repo/.claude/campaigns/260914-example.md",
+  "title": "# Campaign 260914-example",
+  "status": "ARMED",
+  "status_stamp": "2026-09-14 18:41 -0600",
+  "armed": true,
+  "running": false,
+  "runnable": true,
+  "mode": "MR mode. Each bead ends in /wurk:mr with an open PR.",
+  "scope": "In scope (2): zz-1 zz-2\nExplicitly out: every other open bead.",
+  "consent": { "path": "...-consent.md", "exists": true, "status": "ADOPTED", "status_stamp": "2026-09-14 18:41 -0600", "adopted": true },
+  "mutex": { "dir": "/repo/.claude/campaigns/locks/campaign-260914-example", "held": false, "owner": null, "age_seconds": null, "holder_alive": null, "stale": false, "staleness_reason": null }
+}
+```
+
+`mode` and `scope` are the bodies of the plan's `## Mode` and `## Scope`
+sections (heading prefix match, blank lines trimmed at both ends,
+indentation kept), or `null` when absent. `mutex` is `lock.rb status`'s
+payload plus `dir`. `arm` and `disarm` add `data.before`, `data.after`
+(the Status words), `data.changed`, and `data.dry_run`, and re-read the
+record after a real write so `data.campaign` reflects the file.
+
+Warnings a caller should surface: `consent_missing` (ARMED with no
+consent file), `stale_mutex` (held but provably stale - not counted as
+running; `lock.rb clear` is the tool for that, never this script),
+`unknown_status`.
 
 ## Linkage-ledger schema
 
