@@ -8,6 +8,7 @@ require "fileutils"
 require "time"
 require_relative "../campaign_state"
 require_relative "../lib/lock"
+require_relative "support/home_guard"
 
 # Every fixture here is built in a tmpdir by the test itself. The kit's own
 # campaign directory is live state for whatever campaign is running while
