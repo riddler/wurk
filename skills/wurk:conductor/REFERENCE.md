@@ -156,3 +156,17 @@ Rules:
 - One entry per downstream/upstream pair; a second override on the same
   pair reopens the entry (new `opened`, status back to `active`) rather
   than duplicating it.
+
+## Staleness threshold and report files
+
+`policy.stalenessMinutes` (fleet manifest, optional, integer minutes,
+default 50) is the fleet-wide default for the campaign file's
+`staleness_minutes`; the campaign file wins when both are set.
+`campaignState.reports` (fleet manifest, optional, path) is the reports
+dir; default `.claude/campaigns/reports/<campaign-id>/` under the same
+`.git/info/exclude` treatment the journal gets. Per-bead file
+`<bead-id>-report.md` holds the worker's JSON result; written last by
+the worker, swept on every wake by the conductor (SKILL.md, "Sweep on
+every wake" and "Staleness"). `campaignState` and `policy` are already
+among the field names the skill reads (top of this file); both keys
+live under them rather than under a new top-level key.
