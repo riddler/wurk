@@ -57,11 +57,14 @@ R1_REASON="spin loop: a while/until loop with no sleep burns CPU while it waits.
 R2_REASON="backgrounded loop: a loop started with & outlives this tool call and nothing stops it. Fix: run it in the foreground with a bound, or add trap 'kill \$!' EXIT so it dies with the shell."
 R3_REASON="pgrep -f inside a loop matches this shell's own command line, so it never sees the process exit. Fix: exclude yourself (pgrep -f PATTERN | grep -vx \$\$) or poll a pid file / 'kill -0 PID' instead."
 
+# NULs are stripped here: bash's command substitution warns on a stray
+# NUL byte (dash drops it silently), so stripping at the source keeps
+# both shells silent.
 read_input() {
   if [ -t 0 ]; then
     printf ''
   else
-    cat 2>/dev/null || true
+    cat 2>/dev/null | tr -d '\000' || true
   fi
 }
 
