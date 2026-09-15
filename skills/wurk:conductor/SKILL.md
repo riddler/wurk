@@ -264,6 +264,17 @@ the campaign scope. Output: topologically ordered work list with
 blocked-by annotations. Re-render after every completion or discovery
 and journal the render ("N done / N running / N blocked; next: ...").
 
+A bead the invocation pre-decides as superseding or absorbing an
+out-of-scope blocker (a pre-decided contract fork, per Invocation) is
+never in `bd ready`: the tracker still sees an open blocker and lists
+the bead as blocked, however the operator decided. For such a bead the
+graph comes from the campaign file's scope plus the journaled
+pre-decision, not from `bd ready`, and the render carries it with its
+blocked-by annotation and the pre-decision named beside it, so a reader
+of the journal sees why a bd-blocked bead was dispatched. The
+pre-decision is the ONLY thing that overrides a tracker edge; a
+bd-blocked bead with no journaled pre-decision stays blocked.
+
 ## Phase 3 - Dispatch loop
 
 For each ready bead, spawn a wurk-repo-worker with the dispatch template
@@ -684,7 +695,8 @@ merge method from Phase 0 and never with one the forge disallows;
 without such a carve-out the operator merges (the mode's default) and
 the conductor only verifies. Either way: verify merge via the forge,
 pull, close bead (queue the close if the tracker links it to work
-elsewhere), remove worktree, delete the remote branch only where the
+elsewhere; a pre-decided supersede/absorb lands as supersede-then-close,
+below), remove worktree, delete the remote branch only where the
 forge left one, run the manifest's outbound scan over the full
 tracker export (see Outbound content - the push unit is the whole db,
 not the beads this campaign touched), push tracker with confirmed
@@ -693,6 +705,20 @@ output - but only where the repo's `beads.sync` is `git` or
 `local`) there is no tracker push at all: journal "tracker is local-only,
 nothing pushed" and land the rest. The conductor owning tracker pushes
 never means it may make one the repo's manifest forbids.
+
+Supersede-then-close, both modes: the tracker enforces its edges at
+close time - `bd close` on a bead with an open blocker is refused
+("blocked by open <id>") no matter what the invocation decided, so a
+bead dispatched on a pre-decided supersede/absorb fork cannot land as a
+plain close. Resolve the edge first, exactly as the journaled
+pre-decision named it: `bd supersede <blocker> --with <bead>` (closes
+the blocker with a reference to its replacement), or the absorb
+resolution the pre-decision spelled out; then close the bead. The
+pre-decision must already be in the journal verbatim (the Invocation
+section requires it before the first dependent dispatch); a supersede
+with no journaled pre-decision behind it is stop-and-queue, never a
+conductor judgement, because closing someone else's bead is a decision
+the operator makes. Journal the supersede as its own landing line.
 
 When Phase 0 journaled that the forge deletes merged branches, "remote
 ref does not exist" against a request the forge reports merged is the
