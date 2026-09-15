@@ -674,13 +674,16 @@ the process cwd):
     rebase collision validation (pure string comparison)
   gate.sabotage.test_roots / exempt_prefixes, as prefix filters over
     untracked paths - gate.rb sabotage_untracked_unverifiable
-resolved on the filesystem or handed to git as a pathspec (root-relative,
-resolved against the manifest's checkout root, never the process cwd):
-  gate.guard_ledger existence - gate.rb gate_guard_from
+resolved on the filesystem or handed to git as a pathspec, against the root
+of the WORKING TREE the kit is standing in (`git rev-parse --show-toplevel`,
+see lib/work_tree.rb) - which is the manifest's checkout root only when the
+working tree carries its own .claude/wurk.json:
   gate.sabotage.test_roots / exempt_prefixes as `git diff` pathspecs -
     gate.rb sabotage_diff_args
   the working-tree file reads behind the `# sabotage:` note check -
     gate.rb's default sabotage file reader
+resolved against the manifest's checkout root, never the process cwd:
+  gate.guard_ledger existence - gate.rb gate_guard_from
 ```
 
 ## `tmux`

@@ -364,7 +364,12 @@ in_tmp_repo("valid") { ... }   # a scratch dir that carries .claude/wurk.json,
 
 `in_tmp_repo` rather than a bare `mktmpdir` for anything that walks up to
 find its manifest: inside a bare one the walk-up finds nothing and falls
-through to `git rev-parse`, which `FakeSh` correctly refuses.
+through to `git rev-parse`, which `FakeSh` correctly refuses. `in_tmp_worktree`
+is the worktree counterpart: it installs the manifest in a sibling (or, with
+`nested: true`, ancestor) checkout and yields a working directory that
+carries no manifest of its own, so `Manifest#checkout_root` and the working
+tree are different paths - the shape `in_tmp_repo` cannot express, and the
+one a work-tree-anchor test needs (wu-1zu).
 
 ## `gate.rb`: the quality-gate wrapper
 
@@ -376,6 +381,13 @@ Each of the five runs in `gate.cwd` when the manifest declares one (default
 the checkout root); `data.gate_cwd` reports the resolved directory. See
 `docs/manifest.md`.
 
+- `data.work_tree_root` reports the absolute path of the git working tree
+  this run measured (`git rev-parse --show-toplevel`, resolved once per
+  invocation; see `lib/work_tree.rb`) - the tree the sabotage scan diffs and
+  reads files from. It is the manifest's checkout root only when the working
+  tree carries its own `.claude/wurk.json`; a `work_tree_unresolved` warning
+  means `--show-toplevel` did not answer and this field is the manifest's
+  checkout root as a fallback, not git's own answer (wu-1zu).
 - `data.skipped_stages` always stays in the payload, for every skip. Whether
   a skip *blocks*, and whether it belongs in what you report, follows a
   three-way `classification`:
