@@ -523,6 +523,16 @@ Tests to add:
       therefore `checkout_root` are the same from any invocation directory -
       but it is the one property whose breakage no test in either phase would
       catch, so check it by hand here rather than assuming it
+
+      **Later (2026-09-15):** the structural guarantee stated here - "`path`
+      and therefore `checkout_root` are the same from any invocation
+      directory" - holds only for invocation directories inside ONE checkout.
+      Across git worktrees it is false whenever the worktree carries no
+      `.claude/wurk.json` of its own, and `gate.rb` was silently gating the
+      wrong checkout as a result (wu-1zu). The subdirectory property this
+      item checks is unchanged and still wanted; `gate.rb` now gets it from
+      `git rev-parse --show-toplevel` (`lib/work_tree.rb`), which is
+      invariant across subdirectories and also per-worktree correct.
 - [ ] `worktree_create.rb --dry-run` in that scratch repo renders the
       `gate.loop` preview as `(cd <worktree>/sub && ...)`, and a real run
       executes there

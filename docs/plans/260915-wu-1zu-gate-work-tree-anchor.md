@@ -787,25 +787,25 @@ per-worktree correct.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] The kit suite passes: `ruby skills/wurk:kit/scripts/test/run.rb`, 0
+- [x] The kit suite passes: `ruby skills/wurk:kit/scripts/test/run.rb`, 0
       failures, 0 errors, 0 skips, and a run count above the 1293 baseline.
-- [ ] `test_sabotage_diff_and_file_reads_resolve_against_the_worktree_not_the_manifests_checkout`
+- [x] `test_sabotage_diff_and_file_reads_resolve_against_the_worktree_not_the_manifests_checkout`
       fails when the sabotage diff's `chdir:` is reverted to
       `manifest.checkout_root` (the mutation its `# sabotage:` note names).
-- [ ] `test_sabotage_anchor_is_the_worktree_when_the_walk_up_finds_an_ancestors_manifest`
+- [x] `test_sabotage_anchor_is_the_worktree_when_the_walk_up_finds_an_ancestors_manifest`
       passes with no `git rev-parse --git-common-dir` expectation registered,
       proving the nested case is reached through the walk-up.
-- [ ] The sibling-worktree test calls `@fake.verify!` and passes, proving
+- [x] The sibling-worktree test calls `@fake.verify!` and passes, proving
       its `git rev-parse --git-common-dir` expectation was actually consumed
       - i.e. `Manifest.locate` really took the fallback branch and the
       walk-up did not escape the fixture to some manifest above `Dir.tmpdir`.
-- [ ] The renamed subdirectory test passes, i.e. the wu-9fb case still works:
+- [x] The renamed subdirectory test passes, i.e. the wu-9fb case still works:
       invoked from `<root>/sub`, the sabotage diff's recorded `chdir` is
       `<root>`.
-- [ ] `contract_test.rb` passes unchanged - `lib/work_tree.rb`'s shell-out
+- [x] `contract_test.rb` passes unchanged - `lib/work_tree.rb`'s shell-out
       goes through `Sh.run` with `envelope: env`, and `gate.rb` acquires no
       write path.
-- [ ] `ruby skills/wurk:kit/scripts/gate.rb` run in this repo emits
+- [x] `ruby skills/wurk:kit/scripts/gate.rb` run in this repo emits
       `data.work_tree_root` equal to this worktree's root, and its `commands`
       trail contains `git rev-parse --show-toplevel`.
 
