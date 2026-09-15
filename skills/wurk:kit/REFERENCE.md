@@ -92,6 +92,17 @@ a script does with them are all documented at `docs/machine-config.md`;
 this file states only that the sections exist, and one precedence rule
 below under `lock.rb`.
 
+## The fleet manifest is not a script input
+
+A project that runs campaigns over several repos may carry a third file,
+`.claude/wurk-fleet.json`, read by the `/wurk:conductor` skill and the
+`wurk-fleet-scout` agent - never by a kit script on its own behalf. The
+kit's part is the lint, `lib/fleet_manifest.rb check [--file PATH]`, which
+follows the manifest's asymmetry (unknown keys warn, malformed values
+block) and reports the resolved campaign-state paths and the package
+topological order in `data`. Schema, validation rules, and the lint's two
+filesystem checks: `docs/fleet-manifest.md`.
+
 ## Ruby version and syntax
 
 **System Ruby 2.6.10 only** (`/usr/bin/ruby` on macOS). A consumer repo's

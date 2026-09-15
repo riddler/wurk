@@ -1,0 +1,50 @@
+{
+  "fleet": "example",
+  "description": "A three-repo example fleet. Placeholder names only.",
+  "_note": "Annotation keys start with an underscore and are never warned about.",
+  "repos": [
+    { "dir": "alpha", "package": "alpha", "beadsPrefix": "aa", "note": "the base library" },
+    { "dir": "beta", "package": "beta", "beadsPrefix": "bb" },
+    { "dir": "gamma-app", "package": "gamma", "beadsPrefix": "gg", "note": "an app, never published" }
+  ],
+  "dependsOn": {
+    "alpha": [],
+    "beta": ["alpha"],
+    "gamma": ["beta", "alpha"],
+    "_note": "Package-level edges; default topological order for campaigns."
+  },
+  "ownership": {
+    "parser": "alpha",
+    "runtime": "beta",
+    "example-host": "gamma-app",
+    "_note": "A discovered dependency is filed in the owning repo."
+  },
+  "policy": {
+    "merge": "never",
+    "stalenessMinutes": 40,
+    "customRule": "relayed verbatim to every worker; never interpreted by the kit"
+  },
+  "depOverride": {
+    "ledger": ".claude/fleet/linkage-ledger.json",
+    "localStage": "path override to a sibling worktree; must never reach a commit",
+    "pushedStage": "committed dependency pinned to a pushed SHA; downstream MR stays DRAFT"
+  },
+  "campaignState": {
+    "dir": ".claude/fleet/campaigns",
+    "journalDir": ".claude/fleet/journal",
+    "reports": ".claude/fleet/reports"
+  },
+  "multiCampaign": {
+    "protocol": ".claude/fleet/multi-campaign-protocol.md",
+    "registry": ".claude/fleet/campaigns/ACTIVE.md",
+    "locksDir": ".claude/fleet/locks",
+    "machineGateSlots": 2,
+    "_machineGateSlots_note": "A fallback; the machine config's machine.gate_slots wins."
+  },
+  "stacking": {
+    "sameRepo": "sequential branches, each cut from its parent; DRAFT while upstream unmerged",
+    "crossRepo": "independent branches from the default branch, linked via depOverride",
+    "decision": "operator, 2026-01-01"
+  },
+  "landingCheck": ["make", "deps-sort"]
+}

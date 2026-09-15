@@ -922,6 +922,18 @@ other consumer that has not opted in. wurk's own `.claude/wurk.json` sets it
 to `["docs/plan.md"]` - the narrowest useful value, the exact file from the
 incident that motivated ADR-0010, and nothing wider.
 
+## The fleet manifest is a separate file
+
+`.claude/wurk-fleet.json` - the roster of repos a campaign may span, the
+package edges between them, the ownership map, and where campaign state
+lives - is a different file with a different reader (the `/wurk:conductor`
+skill and the `wurk-fleet-scout` agent, never a kit script), and it has
+its own schema document and its own lint: `docs/fleet-manifest.md` and
+`lib/fleet_manifest.rb check`. Nothing in this file is read from the
+fleet manifest, and the fleet manifest never overrides a field here: a
+repo's bead prefix, forge, and gate stay in that repo's `.claude/wurk.json`
+even when it is one of a fleet.
+
 ## Resolution
 
 Settled in phase 1 step 2. `lib/manifest.rb` locates the manifest in two

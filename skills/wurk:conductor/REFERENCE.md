@@ -8,9 +8,12 @@ notes), and the campaign-file schema that `campaign_state.rb` reads so a
 scheduler can pick an armed campaign without parsing markdown. Nothing
 here is consumer-specific.
 
-The fleet manifest (`.claude/wurk-fleet.json`) is not yet documented or
-linted by wurk; the field names used below (`multiCampaign`,
-`depOverride`, `campaignState`, `policy`) are the ones the skill reads.
+The fleet manifest (`.claude/wurk-fleet.json`) is documented at
+`docs/fleet-manifest.md` in the wurk repo and linted by
+`ruby ~/.claude/skills/wurk:kit/scripts/lib/fleet_manifest.rb check`;
+the field names used below (`multiCampaign`, `depOverride`,
+`campaignState`, `policy`) are the ones the skill reads, and that
+document names the reader of every field.
 
 ## Multi-campaign protocol
 
