@@ -1,6 +1,6 @@
 # ADR-0019: Agent definitions are generated from templates and shared blocks
 
-Status: proposed (2026-09-14)
+Status: accepted (2026-09-15)
 
 ## Context
 
