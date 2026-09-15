@@ -542,11 +542,12 @@ module Gate
     # base command this script appends a profile flag to. Composing argv
     # here would mean this script knowing one gate tool's flag surface,
     # which is exactly the coupling docs/gate-contract.md exists to avoid.
-    def run_quality(env, manifest, loop_mode)
+    def run_quality(env, manifest, loop_mode, root)
       reporting = loop_mode ? manifest.gate_report_loop : manifest.gate_report
       argv = reporting || (loop_mode ? manifest.gate_loop : manifest.gate_full)
 
-      res = Sh.run(argv, chdir: manifest.gate_chdir, envelope: env, timeout: manifest.gate_timeout_seconds)
+      res = Sh.run(argv, chdir: manifest.gate_chdir(root: root), envelope: env,
+                          timeout: manifest.gate_timeout_seconds)
       return [res, nil] unless reporting
 
       report = begin
@@ -761,7 +762,7 @@ module Gate
       # Rule 5: the before-snapshot is taken only once the gate command is
       # certain to run, so the carve-out path above shells out nothing new.
       tree_before = TreeSnapshot.take(manifest.checkout_root, envelope: env)
-      res, report = run_quality(env, manifest, loop_mode)
+      res, report = run_quality(env, manifest, loop_mode, root)
 
       # The gate command itself never got a chance to run: a typo'd gate.cwd
       # or a gate command missing from PATH (Sh::Result#start_failed?, see
@@ -783,7 +784,7 @@ module Gate
         env.data[:verdict] = nil
         env.data[:summary] = nil
         env.data[:gate_guard] = gate_guard_from([], ledger_path, root)
-        env.data[:gate_cwd] = manifest.gate_chdir
+        env.data[:gate_cwd] = manifest.gate_chdir(root: root)
         env.data[:tree_changed] = nil
         env.data[:tree_changed_allowed] = nil
         env.data[:attested] = false
@@ -818,7 +819,7 @@ module Gate
       # project gates from its checkout root. The `commands` trail already
       # shows it via Sh.render; this makes it machine-readable for the
       # skills.
-      env.data[:gate_cwd] = manifest.gate_chdir
+      env.data[:gate_cwd] = manifest.gate_chdir(root: root)
       # Populated only on a tier-0 failure (below); nil otherwise so the key is
       # always present. Tier 1 already carries its failure in data.stages.
       env.data[:gate_output] = nil
@@ -827,7 +828,7 @@ module Gate
         env.data[:attested] = false
         env.data[:attestation_message] = nil
       elsif manifest.gate_attest
-        verify_res = Sh.run(manifest.gate_attest, chdir: manifest.gate_chdir, envelope: env,
+        verify_res = Sh.run(manifest.gate_attest, chdir: manifest.gate_chdir(root: root), envelope: env,
                             timeout: manifest.gate_timeout_seconds)
         if verify_res.start_failed?
           # Same misconfiguration class as the quality-run case above, just

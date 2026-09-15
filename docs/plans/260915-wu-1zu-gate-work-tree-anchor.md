@@ -1147,9 +1147,9 @@ invariant across subdirectories too.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] The kit suite passes: `ruby skills/wurk:kit/scripts/test/run.rb`, 0
+- [x] The kit suite passes: `ruby skills/wurk:kit/scripts/test/run.rb`, 0
       failures, 0 errors, 0 skips.
-- [ ] `rg -nP "manifest\.gate_chdir(?!\(root:)"` over
+- [x] `rg -nP "manifest\.gate_chdir(?!\(root:)"` over
       `skills/wurk:kit/scripts/gate.rb` and
       `skills/wurk:kit/scripts/gate_run.rb`
       returns nothing: every call through the accessor names its root, and
@@ -1160,18 +1160,18 @@ invariant across subdirectories too.
       notes at `gate_test.rb:1651` and `:1678` name
       `chdir: manifest.gate_chdir` as a mutation and deliberately keep that
       wording.
-- [ ] `test_gate_chdir_requires_an_explicit_root` fails if `root:` is given a
+- [x] `test_gate_chdir_requires_an_explicit_root` fails if `root:` is given a
       default again.
-- [ ] `test_the_gate_command_runs_under_the_worktree_when_gate_cwd_is_declared`
+- [x] `test_the_gate_command_runs_under_the_worktree_when_gate_cwd_is_declared`
       fails when the anchor is reverted to `manifest.checkout_root`.
-- [ ] `test_the_detached_gate_runs_in_the_worktree_and_records_beside_the_manifest`
+- [x] `test_the_detached_gate_runs_in_the_worktree_and_records_beside_the_manifest`
       passes, and asserts both halves (gate `chdir` under the work tree,
       `run_dir` under the manifest's checkout).
-- [ ] `ruby skills/wurk:kit/scripts/manifest.rb check` is clean in this repo -
+- [x] `ruby skills/wurk:kit/scripts/manifest.rb check` is clean in this repo -
       the accessor change did not break the lint.
-- [ ] `ruby skills/wurk:kit/scripts/gate_run.rb start --dry-run` in this repo
+- [x] `ruby skills/wurk:kit/scripts/gate_run.rb start --dry-run` in this repo
       reports a `chdir` consistent with `data.work_tree_root`.
-- [ ] `contract_test.rb` passes unchanged, including its `--dry-run` check on
+- [x] `contract_test.rb` passes unchanged, including its `--dry-run` check on
       `gate_run.rb`.
 
 #### Manual Verification:
