@@ -1,6 +1,16 @@
 # frozen_string_literal: true
 
-require_relative "manifest"
+# No `require_relative "manifest"` here, on purpose. lib/manifest.rb
+# requires this file, and `Manifest` is only named below as a call-time
+# default argument, so a load-time require back to manifest.rb would add
+# nothing but a cycle - and a require cycle is exactly what Ruby cannot
+# dedupe when the file at its head is the main script: `ruby
+# lib/manifest.rb check` is never registered as a loaded feature, so the
+# cycle re-executes the whole file and every constant in it warns "already
+# initialized". Through the ~/.claude symlink the two loads even carry
+# different paths (wu-cvi). Every caller that can reach these predicates
+# has a manifest loaded already; test/load_graph_test.rb keeps the require
+# graph acyclic so the cycle cannot come back by another route.
 
 # Two related predicates that are deliberately *not* the same question. Both
 # read their path lists from the manifest (`gate.build_paths` and
