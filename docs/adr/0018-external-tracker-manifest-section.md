@@ -211,6 +211,17 @@ without teaching the cleanup script a second job.
   `bd jira`. Whether a consumer uses `bd jira sync` is invisible to the
   kit by design (see 5).
 
+**Amended (2026-09-15):** the third bullet is narrowed. wu-yi7.4 (PR #82)
+added `external_tracker.statuses` - a map from four wurk events
+(`claimed`, `request_opened`, `needs_attention`, `closed`) to the
+tracker's own status names - and `external_tracker.assignee` (the two
+user ids), so the manifest now DOES name the transition names, and
+skills read them from `manifest.rb check` instead of from each
+extension's prose. The rest of the bullet stands: no manifest field
+names the sync direction or the script that performs a transition, and
+the kit still never calls the tracker. The lifecycle table is in
+`docs/manifest.md`, section `external_tracker`.
+
 ### 5. `bd jira sync` and the pattern
 
 The pattern document's reading is confirmed, and narrowed by one flag.
