@@ -782,9 +782,11 @@ class ContractTest < Minitest::Test
   # The agents wurk ships are instruction text end to end, like a SKILL.md,
   # and a consumer may name any of them in mr.review_agents; a consumer
   # constant in one would run against every repo that does. Same scan,
-  # same rule.
+  # same rule. The templates and shared blocks the agents are generated
+  # from (build_agents.rb, ADR-0019) are scanned alongside the generated
+  # files, so a hit is reported at the file a person edits.
   def test_no_consumer_vocabulary_in_shipped_agents
-    files = Dir.glob(File.join(REPO_ROOT, "agents", "*.md")).sort
+    files = %w[*.md *.md.in blocks/*.md].flat_map { |g| Dir.glob(File.join(REPO_ROOT, "agents", g)) }.sort
     refute_empty files, "no shipped agents found - this scan would be vacuous"
     offenders = []
     files.each do |file|

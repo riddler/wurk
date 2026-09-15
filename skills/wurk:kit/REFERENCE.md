@@ -642,6 +642,35 @@ argument. The file schema, the campaign record's keys, and every
 without an ADOPTED consent file and never writes one, because consent is
 a human artifact and this script only ever edits the plan's Status line.
 
+## `build_agents.rb`: agent definitions from templates and blocks
+
+Renders every `<name>.md` in an agents directory (`--dir`, default
+`agents`) from `<name>.md.in` plus the shared blocks under `blocks/` that
+`routing.yml` routes to it, and lints the routing first (ADR-0019,
+proposed). A template is frontmatter followed by prose in which a line
+`@include <block>` stands for `blocks/<block>.md`; the generated file is
+the template with one `DO NOT EDIT` banner after the frontmatter and each
+include replaced by its block. `routing.yml` is `blocks: {<block>:
+[<name>, ...]}` and is the authority on who carries what: an include the
+file does not route to that agent, a routed agent whose template lacks
+the include, a block with no entry, an entry with no block or no
+template, a block containing an include, a template without frontmatter,
+and a `<name>.md` with no template are each a `blocked` code
+(`unauthorized_include`, `missing_include`, `orphan_block`,
+`dangling_route`, `unknown_agent`, `nested_include`, `no_frontmatter`,
+`ungenerated_agent`; `dangling_include` for an include with no block), and
+any of them refuses the build before a file is written.
+
+`--check` compares instead of writing and adds `stale_generated` and
+`missing_generated`; `test/build_agents_test.rb` runs it against this
+repo's `agents/`, so the kit suite is where a stale generated file is
+caught. Without `--check`, files that differ are rewritten (through a
+sibling temp file and a rename); `--dry-run` lists them under `commands`
+and writes nothing. Like `campaign_state.rb` it takes no manifest and
+runs no `Sh`. `data.agents[]` carries `{name, path, status}` with status
+`current`, `stale`, or `missing`; `data.blocks[]` carries each routing
+entry.
+
 ## `judge.rb`: the merge-time prose judge
 
 The mechanism ADR-0008 decided on: a merge-time model judge over

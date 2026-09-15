@@ -13,7 +13,8 @@ optional extension files; they do not copy skills.
   skills/wurk:*/SKILL.md      generic skills: judgment, sequencing, reporting
   skills/wurk:kit/            shared foundation: REFERENCE.md + scripts/
   agents/*.md                 eight read-only research agents, plus the campaign
-                              pair wurk-repo-worker and wurk-fleet-scout
+                              pair wurk-repo-worker and wurk-fleet-scout -
+                              generated from agents/*.md.in + agents/blocks/
 
 ~/.claude/
   wurk.local.json             the machine config: settings the machine or the
@@ -142,6 +143,13 @@ The same split applies to agents: wurk ships the shared roster (the
 `wurk-*` agents), and a consumer repo's `.claude/agents/` holds domain
 agents that would never generalize (a sabotage auditor, an ISA-drift
 checker). Wurk skills tolerate project agents but never depend on one.
+
+The shipped agents are generated, not hand-edited (ADR-0019, proposed):
+each `agents/<name>.md` is built from `agents/<name>.md.in` plus the shared
+blocks under `agents/blocks/` that `agents/routing.yml` routes to it, by
+`skills/wurk:kit/scripts/build_agents.rb`. Edit the template or the block,
+rerun the build, commit both; the kit suite runs the build's `--check`, so
+a generated file edited in place or left stale turns the gate red.
 
 ## Authority model
 
