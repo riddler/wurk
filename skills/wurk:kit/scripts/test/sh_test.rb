@@ -213,16 +213,15 @@ class ShTest < Minitest::Test
 
       pid = Sh.spawn_detached(["/bin/sh", "-c", "echo hello"], out_path: out_path)
 
-      begin
-        _, status = Process.waitpid2(pid)
-        assert status.success?
-        assert_equal "hello\n", File.read(out_path)
-      rescue Errno::ECHILD
-        # Process.detach already reaped it - the assertion above on the
-        # written file is the meaningful one regardless.
-        sleep 0.2
-        assert_equal "hello\n", File.read(out_path)
-      end
+      # Never waitpid this child: spawn_detached hands it to Process.detach,
+      # whose reaper thread races any waitpid the test could do. Whichever
+      # side won used to pick the code path (a success? assert on the win,
+      # an ECHILD rescue on the loss), so the suite's assertion count moved
+      # by one between green runs - the wobble wu-bvv chased. Wait on the
+      # observable effect instead and assert the same things on every run.
+      assert_kind_of Integer, pid
+      assert_operator pid, :>, 0
+      assert_equal "hello\n", wait_for_file_content(out_path, "hello\n")
     end
   end
 
@@ -361,6 +360,19 @@ class ShTest < Minitest::Test
       sleep 0.05
     end
     nil
+  end
+
+  # Polls path until it reads exactly `expected` or the deadline passes,
+  # then returns whatever is there so the caller's assert_equal reports the
+  # actual content on a miss instead of a bare timeout.
+  def wait_for_file_content(path, expected, deadline_seconds: 2)
+    deadline = Time.now + deadline_seconds
+    loop do
+      content = File.exist?(path) ? File.read(path) : ""
+      return content if content == expected || Time.now >= deadline
+
+      sleep 0.05
+    end
   end
 
   def alive?(pid)
