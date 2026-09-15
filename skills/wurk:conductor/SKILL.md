@@ -230,6 +230,14 @@ is not ready to be dispatched into. This one run is a budget
 measurement, not proof the suite is deterministic - Phase L's
 post-landing repeat is what actually tests that.
 
+**Record the text you run on, when the campaign can rewrite it.** A
+campaign whose scope includes the repo that installs the conductor
+skill, the worker agent, or the kit (a dogfooding campaign) will land
+changes to the very files it runs on. Journal, before the first
+dispatch, the commit the installed conductor prose was loaded from,
+so a reader can later tell which text governed which dispatch; Phase
+L's adoption rule builds on this line.
+
 **Read the forge's merge policy, once, per repo, in MR mode.** Ask the
 forge - not the campaign file, not memory of an earlier campaign - two
 facts: which merge methods the repo allows, and whether it deletes a
@@ -666,7 +674,10 @@ for an hour.
    worker and waits for the next sweep.
 
 A resume's first journal entry is a [state] render saying what was
-reconstructed and from which files, so the next resume can verify it.
+reconstructed and from which files, so the next resume can verify it -
+and, in a dogfooding campaign, the commit its conductor prose was
+loaded from, because a resume is the moment a landed skill change
+actually takes effect (Phase L's adoption rule).
 
 ## Phase 4 - Linkage (fleets only)
 
@@ -753,6 +764,41 @@ time (other worker gates, another campaign's landing) alongside the
 result, since a concurrency-shaped flake only shows up under load a
 single clean run never sees.
 
+**Adoption, when a landing rewrites the running conductor.** In a
+dogfooding campaign (Phase 0 recorded the text in force) a merge can
+change the conductor skill, the worker agent definition, or a kit
+script under the campaign that merged it, and each of the three takes
+effect at a different moment whether or not anyone decides, because
+each is read differently. Skill prose is loaded into the conductor's
+context at invocation and never re-read, so a landed skill change
+governs the NEXT campaign, or the next session that resumes this one
+(Resume from state), not this session. An agent definition is read by
+the harness at every Agent call, so a landed agent change governs the
+NEXT DISPATCH, with no opt-out. A kit script is read at every
+shell-out, so a landed script change governs the NEXT SHELL-OUT, with
+no opt-out. The conductor does not choose these moments; it names
+them. Every landing that touches one of the three files gets its own
+`[adoption]` journal line (Journal and morning report) saying what
+landed, the sha, which of the three kinds it is, and the moment it
+takes effect - so the journal never shows two dispatch formats, or
+two gate protocols, without a line between them that explains the
+switch. The one choice the conductor has is skill prose: it may adopt
+a landed skill change for the remainder of this campaign BY HAND,
+following the merged diff it just read at landing, when the change
+adds a discipline it can follow from that diff alone (a new check, a
+new journal line, a tighter landing rule); the `[adoption]` line then
+says "this campaign, by hand, from here" and every later step that
+follows it cites that line. A landed change that loosens what the
+loaded text says - drops a check, widens a default, removes a stop -
+is never adopted by hand; it waits for the next campaign, because a
+running conductor relaxing its own rules from a diff it merged is the
+self-widening the consent quote exists to stop. Applying a landed
+discipline by hand without the `[adoption]` line is the failure this
+rule closes: the behavior changed, and no reader can tell from which
+dispatch onward. The dispatch template in the appendix is skill
+prose, so it follows the same rule - one template per campaign unless
+an `[adoption]` line marks the switch.
+
 ## Outbound content
 
 Before ANY push, MR, or tracker push: run the project's outbound scan
@@ -821,7 +867,7 @@ campaigns) - the campaign must be resumable from the journal alone. Closed event
 
     [dispatch] [complete] [state] [discovery] [scope] [operator]
     [refusal] [conductor-error] [cleanup] [correction] [incident]
-    [ruling-queued] [stale]
+    [ruling-queued] [stale] [adoption]
 
 `[dispatch]` carries (bead, worktree, model tier, the one-line tier
 reason from Phase 3's rubric; on an escalation, the rung it came from).
@@ -830,8 +876,13 @@ bead-status). `[stale]` carries (bead, minutes since last
 report/commit/journal movement, each liveness probe and what it
 returned, decision). `[operator]` records mid-campaign operator
 instructions with the scope you gave them; when it is a consent
-carve-out, quote it. An event fitting no type: nearest type + a retro
-schema-gap entry.
+carve-out, quote it. `[adoption]` carries (what landed, sha, kind:
+skill prose / agent definition / kit script, moment: next campaign /
+next dispatch / next shell-out / this campaign by hand from here) for
+every landing that rewrites a file the running conductor depends on
+(Phase L's adoption rule); a resume's first `[state]` render names the
+commit its prose was loaded from for the same reason. An event
+fitting no type: nearest type + a retro schema-gap entry.
 
 **Campaign state lives outside what the campaign publishes.** The
 journal, the morning report, scratch files and any status doc the
