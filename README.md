@@ -98,4 +98,4 @@ adoption guidance rather than part of the reading order above.
 ## Testing
 
 The kit's minitest suite is this repo's quality gate, standalone on system
-Ruby: `ruby skills/wurk:kit/scripts/test/run.rb`.
+Ruby: `/usr/bin/ruby skills/wurk:kit/scripts/test/run.rb`.

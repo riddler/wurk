@@ -37,11 +37,14 @@ TodoWrite for this repo's work.
 No toolchain beyond system Ruby. The gate is the kit test suite:
 
 ```bash
-ruby skills/wurk:kit/scripts/test/run.rb
+/usr/bin/ruby skills/wurk:kit/scripts/test/run.rb
 ```
 
-Run it before any commit that touches scripts. Doc-only changes have no gate;
-commit on review of the diff.
+The path is spelled out on purpose: the floor's bundled minitest (5.11.3)
+behaves differently from a newer one on PATH, and running under the wrong
+interpreter is exactly the failure wu-tms found. Run it before any commit
+that touches scripts. Doc-only changes have no gate; commit on review of the
+diff.
 
 ## Conventions
 

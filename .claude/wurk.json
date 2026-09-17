@@ -25,8 +25,8 @@
   },
 
   "gate": {
-    "full": ["ruby", "skills/wurk:kit/scripts/test/run.rb"],
-    "loop": ["ruby", "skills/wurk:kit/scripts/test/run.rb"],
+    "full": ["/usr/bin/ruby", "skills/wurk:kit/scripts/test/run.rb"],
+    "loop": ["/usr/bin/ruby", "skills/wurk:kit/scripts/test/run.rb"],
     "build_paths": ["skills/wurk:kit/scripts/"],
     "also_gated_paths": [],
     "moving_files": []

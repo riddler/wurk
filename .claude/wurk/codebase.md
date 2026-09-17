@@ -23,10 +23,10 @@ state, because wurk is orienting agents to itself.
 
 ## Suites
 
-One: `skills/wurk:kit/scripts/test/run.rb`, minitest on system Ruby, no
-other toolchain. `contract_test.rb` enforces the script contract (envelope
-shape, banned operations, `--dry-run`) and is the first place to look when a
-script change fails the gate.
+One: `/usr/bin/ruby skills/wurk:kit/scripts/test/run.rb`, minitest on system
+Ruby, no other toolchain. `contract_test.rb` enforces the script contract
+(envelope shape, banned operations, `--dry-run`) and is the first place to
+look when a script change fails the gate.
 
 ## Module families worth mining
 
