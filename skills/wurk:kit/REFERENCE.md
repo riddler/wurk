@@ -777,6 +777,20 @@ wrong in a way that still looks plausible:
   stall manufactures signals, while the opposite error only withholds one.
   A subagent's records are agent records whatever session surrounds them.
 
+**The classification guard.** `promptSource` and `isSidechain` are written
+by the transcript writer, not by this kit, and the conservative default
+above means their disappearance is silent: every session would read
+interactive, every agent stall would vanish, and `signals` would answer
+with the same empty list a genuinely healthy window produces. When a
+window holds at least 5 transcripts and NOT ONE of them carries either
+field, the envelope takes the `agent_classification_unavailable` warning,
+naming the field and the transcript count and saying to re-verify the
+classification rule against a current transcript. It is a warning and
+never a block - the counts are still true, it is only the classification
+that has nothing behind it - and the minimum sample is there for the same
+reason the failure rate has one: a handful of unmarked transcripts is
+ordinary, and a guard that cries on them is a guard nobody reads.
+
 **Cost** is tokens times a per-model price table read from the machine
 config (`metrics.prices`, `docs/machine-config.md`). The kit ships no
 prices: an absent table means cost is `null`, never a guess, and one

@@ -31,11 +31,27 @@ module SessionFixtures
   # is not reading every other fixture in the tree.
   def with_root(*pairs)
     Dir.mktmpdir("wurk-sessions-") do |dir|
-      pairs.each do |project, name|
-        FileUtils.mkdir_p(File.join(dir, project))
-        FileUtils.cp(fixture(project, name), File.join(dir, project, "#{name}.jsonl"))
-      end
+      copy_fixtures(dir, pairs)
       yield dir
+    end
+  end
+
+  # A root holding EVERY fixture in `project`, plus any extra [project, name]
+  # pairs. The classification-availability guard only speaks over a window
+  # of several transcripts, so its tests need a whole project rather than a
+  # pair or two.
+  def with_project_root(project, *pairs)
+    all = Dir.glob(File.join(ROOT, project, "*.jsonl")).sort.map { |p| [project, File.basename(p, ".jsonl")] }
+    Dir.mktmpdir("wurk-sessions-") do |dir|
+      copy_fixtures(dir, all + pairs)
+      yield dir
+    end
+  end
+
+  def copy_fixtures(dir, pairs)
+    pairs.each do |project, name|
+      FileUtils.mkdir_p(File.join(dir, project))
+      FileUtils.cp(fixture(project, name), File.join(dir, project, "#{name}.jsonl"))
     end
   end
 
@@ -159,6 +175,112 @@ class SessionMetricsClassificationTest < Minitest::Test
     summary = session("agent-project", "agent-stall")
     assert_equal 1, summary["agent_stalls"]
     assert_equal 0, summary["interactive_stalls"]
+  end
+end
+
+# Rule 3 can go blind without failing: the fields it classifies on are
+# written by the transcript writer, not by this kit.
+class SessionMetricsClassificationAvailabilityTest < Minitest::Test
+  include SessionFixtures
+  include UserConfigHelper
+
+  # sabotage: check the VALUE of promptSource rather than its presence ->
+  # red. An agent session's "system" prompt source is evidence that the
+  # writer still emits the field, which is the only thing being asked.
+  def test_any_prompt_source_at_all_counts_as_evidence
+    assert SessionMetrics.classification_evidence?([{ "promptSource" => "system" }])
+    assert SessionMetrics.classification_evidence?([{ "promptSource" => "typed" }])
+  end
+
+  def test_a_sidechain_marker_counts_as_evidence
+    assert SessionMetrics.classification_evidence?([{ "isSidechain" => true }])
+    refute SessionMetrics.classification_evidence?([{ "isSidechain" => false }])
+  end
+
+  def test_a_transcript_with_neither_field_carries_no_evidence
+    records = [{ "type" => "user", "message" => { "content" => [{ "type" => "text" }] } }]
+    refute SessionMetrics.classification_evidence?(records)
+  end
+
+  # sabotage: drop the guard, or emit it as a signal item instead of a
+  # warning -> red. `signals` answers a blind window with the same empty
+  # list a healthy one produces, and this warning is the only thing in the
+  # envelope that tells those two apart.
+  def test_a_window_with_no_classification_evidence_warns_on_signals
+    with_user_config(nil) do
+      with_project_root("blind-project") do |dir|
+        code, envelope = run_cli(["signals", "--dir", dir])
+        assert_equal 0, code
+        assert envelope["ok"]
+        assert_equal [], envelope["data"]["signals"]
+        warning = envelope["warnings"].find { |w| w["code"] == "agent_classification_unavailable" }
+        refute_nil warning
+        assert_match(/5 transcripts/, warning["message"])
+        assert_match(/promptSource/, warning["message"])
+        assert_match(/re-verify the classification rule/, warning["message"])
+      end
+    end
+  end
+
+  def test_the_same_window_warns_on_report
+    with_user_config(nil) do
+      with_project_root("blind-project") do |dir|
+        _code, envelope = run_cli(["report", "--dir", dir])
+        assert_includes envelope["warnings"].map { |w| w["code"] }, "agent_classification_unavailable"
+      end
+    end
+  end
+
+  # sabotage: warn when SOME transcript lacks the field rather than when
+  # none carries it -> red. One transcript that still carries promptSource
+  # proves the writer is emitting it, whatever the rest of the window looks
+  # like.
+  def test_one_transcript_carrying_the_field_suppresses_the_warning
+    with_user_config(nil) do
+      with_project_root("blind-project", %w[agent-project agent-stall]) do |dir|
+        _code, envelope = run_cli(["signals", "--dir", dir])
+        refute_includes envelope["warnings"].map { |w| w["code"] }, "agent_classification_unavailable"
+      end
+    end
+  end
+
+  def test_an_interactive_transcript_also_suppresses_the_warning
+    with_user_config(nil) do
+      with_project_root("blind-project", %w[clean-project interactive-clean]) do |dir|
+        _code, envelope = run_cli(["report", "--dir", dir])
+        refute_includes envelope["warnings"].map { |w| w["code"] }, "agent_classification_unavailable"
+      end
+    end
+  end
+
+  # sabotage: drop the minimum-sample guard -> red. A window of one or two
+  # unmarked transcripts is ordinary - an old file, a hand-made one - and
+  # warning on it would make the guard noise that gets ignored exactly when
+  # it fires for real.
+  def test_a_window_under_the_minimum_sample_does_not_warn
+    assert_equal 5, SessionMetrics::CLASSIFICATION_MIN_TRANSCRIPTS
+    with_user_config(nil) do
+      with_root(%w[blind-project blind-1], %w[blind-project blind-2]) do |dir|
+        _code, envelope = run_cli(["signals", "--dir", dir])
+        refute_includes envelope["warnings"].map { |w| w["code"] }, "agent_classification_unavailable"
+      end
+    end
+  end
+
+  # sabotage: fold the evidence into the per-session summary -> red. The
+  # next reader of this data shape is a rollup that has no use for it, and
+  # the guard's answer is about the transcript writer rather than about any
+  # window's numbers.
+  def test_the_evidence_pass_leaves_the_session_summary_shape_alone
+    summary = SessionMetrics.read_session(fixture("blind-project", "blind-1"), evidence: [])
+    refute_includes summary.keys, "classification_evidence"
+  end
+
+  def test_the_evidence_array_gets_one_entry_per_transcript_read
+    evidence = []
+    SessionMetrics.read_session(fixture("blind-project", "blind-1"), evidence: evidence)
+    SessionMetrics.read_session(fixture("agent-project", "agent-stall"), evidence: evidence)
+    assert_equal [false, true], evidence
   end
 end
 
