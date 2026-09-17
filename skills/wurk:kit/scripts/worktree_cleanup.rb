@@ -143,8 +143,14 @@ module WorktreeCleanup
       survey_env = JSON.parse(survey_io.string)
       env.commands.concat(survey_env["commands"] || [])
 
-      unless survey_env["ok"]
-        message = (survey_env["blocked"] || []).map { |b| b["message"] }.join("; ")
+      # An advisory block (WorktreeSurvey::ADVISORY_BLOCKED_CODES) must not
+      # stop this sweep: closed_bead_worktree names THIS script as its fix, so
+      # relaying it as fatal here would wall off the one remedy the refusal
+      # offers. It rides along as a warning; the merged-request gate below is
+      # still what decides whether anything is removed.
+      fatal = WorktreeSurvey.absorb_advisories(survey_env, env)
+      unless fatal.empty?
+        message = fatal.map { |b| b["message"] }.join("; ")
         return [nil, { code: "survey_failed", message: message.empty? ? "worktree_survey failed" : message }]
       end
 

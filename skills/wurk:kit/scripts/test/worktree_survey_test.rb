@@ -200,6 +200,106 @@ class WorktreeSurveyTest < Minitest::Test
     assert_equal true, wt["ancestor_of_origin_main"]
   end
 
+  # The porcelain + bd stubs behind the closed-bead check, parameterized on
+  # the status the tracker reports for the one worktree's bead. `status: nil`
+  # stands for a tracker that cannot answer at all (bd exits nonzero).
+  def stub_one_worktree(status)
+    porcelain = <<~TXT
+      worktree /repos/myrepo
+      HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      branch refs/heads/main
+
+      worktree /repos/zz-worktrees/zz-abc-exit-sets
+      HEAD bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      branch refs/heads/zz-abc-exit-sets
+    TXT
+
+    @fake.expect(%w[git worktree list --porcelain], out: porcelain)
+    @fake.expect(%w[git status --porcelain], out: "")
+    @fake.expect(%w[git merge-base --is-ancestor origin/main HEAD], exitstatus: 0)
+    if status
+      @fake.expect(
+        %w[bd show zz-abc --json],
+        out: %([{"id":"zz-abc","labels":["area:interpreter"],"status":"#{status}"}])
+      )
+    else
+      @fake.expect(%w[bd show zz-abc --json], exitstatus: 1, err: "bd: command not found\n")
+    end
+    @fake.expect(
+      ["gh", "pr", "list", "--state", "merged", "--head", "zz-abc-exit-sets",
+       "--json", "number,mergedAt,headRefOid", "--jq", ".[0]"],
+      out: "null\n"
+    )
+  end
+
+  # The incident: four consecutive campaigns (260910-p1-ready,
+  # 260910-retro-backlog, 260914-autonomy-seams, 260915-conductor-hygiene)
+  # each surveyed one worktree whose bead had been closed days earlier, each
+  # journaled it as unrelated dirt, and each left it; an operator ruling
+  # removed it five days after the first sighting.
+  #
+  # sabotage: drop the CLOSED_BEAD_STATUSES check from worktree_survey.rb's
+  # run (or report the status only as a field) -> the survey exits 0 with an
+  # empty blocked[] -> red on the first two assertions.
+  def test_blocks_on_a_worktree_whose_bead_is_closed
+    stub_one_worktree("closed")
+
+    code, env = run_survey
+
+    assert_equal 1, code
+    entry = env["blocked"].find { |b| b["code"] == "closed_bead_worktree" }
+    refute_nil entry
+    assert_equal "human", entry["needs"]
+    assert_includes entry["message"], "/repos/zz-worktrees/zz-abc-exit-sets"
+    assert_includes entry["message"], "zz-abc"
+    assert_includes entry["message"], "Fix:"
+    assert_includes entry["message"], "worktree_cleanup.rb zz-abc-exit-sets"
+
+    # The safety property the classification turns on: a worktree can hold
+    # unpushed work, so the check reports and never removes. Asserted against
+    # every command the run actually issued, not against the message.
+    removals = @fake.calls.map(&:argv).select do |argv|
+      argv.first == "git" && (argv.include?("remove") || argv.include?("-D") || argv.include?("prune"))
+    end
+    assert_empty removals
+
+    # The survey is still a survey: the worktree is reported, with its status.
+    wt = env["data"]["worktrees"].first
+    assert_equal "closed", wt["bead_status"]
+    assert_equal ["area:interpreter"], wt["areas"]
+  end
+
+  # sabotage: widen CLOSED_BEAD_STATUSES to include "in_progress" -> this test
+  # goes red while the closed-bead test stays green, which is the false-alarm
+  # half a guard has to prove.
+  def test_an_open_beads_worktree_is_not_blocked
+    stub_one_worktree("in_progress")
+
+    code, env = run_survey
+
+    assert_equal 0, code
+    assert_empty env["blocked"]
+    assert_equal "in_progress", env["data"]["worktrees"].first["bead_status"]
+  end
+
+  # Absent-safe: a machine with no tracker still gets a survey. The check
+  # cannot read a status it never received, and a guard that blocked on its
+  # own blindness would stop every run on such a machine.
+  #
+  # sabotage: block instead of warning when bead_record reports
+  # available: false -> code 1 and a nonempty blocked[] -> red.
+  def test_an_unavailable_tracker_warns_and_does_not_block
+    stub_one_worktree(nil)
+
+    code, env = run_survey
+
+    assert_equal 0, code
+    assert_empty env["blocked"]
+    assert_equal "tracker_unavailable", env["warnings"].first["code"]
+    assert_nil env["data"]["worktrees"].first["bead_status"]
+    assert_equal [], env["data"]["worktrees"].first["areas"]
+  end
+
   def test_git_worktree_list_failure_blocks
     @fake.expect(%w[git worktree list --porcelain], exitstatus: 1, err: "fatal: not a git repository\n")
 

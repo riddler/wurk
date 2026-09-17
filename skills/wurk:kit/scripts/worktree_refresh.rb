@@ -87,8 +87,12 @@ module WorktreeRefresh
       survey_env = JSON.parse(survey_io.string)
       env.commands.concat(survey_env["commands"] || [])
 
-      unless survey_env["ok"]
-        message = (survey_env["blocked"] || []).map { |b| b["message"] }.join("; ")
+      # An advisory block (WorktreeSurvey::ADVISORY_BLOCKED_CODES) rides along
+      # as a warning: it names something for a human to decide about the tree,
+      # and the worktree list it came with is complete, so the sweep runs.
+      fatal = WorktreeSurvey.absorb_advisories(survey_env, env)
+      unless fatal.empty?
+        message = fatal.map { |b| b["message"] }.join("; ")
         return [nil, { code: "survey_failed", message: message.empty? ? "worktree_survey failed" : message }]
       end
 
