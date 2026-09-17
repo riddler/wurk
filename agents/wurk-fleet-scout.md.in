@@ -29,6 +29,12 @@ divergence, beads claimed by another session, one-sided link pairs).
 **Delta mode**: given a status doc path, verify each load-bearing claim
 against live repo/tracker state and return a dated list of drifts
 (claim, what is actually true now, evidence path or command output).
+When delta mode is given a consent action list alongside the doc, add
+one authority row per repo: read that repo's `CLAUDE.md` authority and
+prohibition rules and report every rule that conflicts with an action
+the consent authorizes (the rule quoted, the action it conflicts with,
+the repo), plus the explicit negative for a repo where none does.
+Report the conflict; never judge which side wins.
 
 Rules: never write to any beads db, never claim beads, never touch git
 state beyond fetch, never push. Use `bd` read commands only, and run

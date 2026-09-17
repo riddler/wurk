@@ -367,6 +367,106 @@ delta; workers get pointed at the delta, not a stale doc. When ground
 truth is minutes old you may overlap this with an unambiguous first
 wave; skipping it is never an option.
 
+**Verify the campaign FILE's own claims too, not only its bead
+claims.** The delta above is about BEAD state - open, blocked, claimed,
+still in scope. A campaign file also asserts things about the TREE and
+the world around it: its Hazards list, the foreign requests it names,
+what it says a test or a kit script enforces, the file lengths and the
+paths its closing invariant quotes. None of that is bead state, so
+none of it is checked by the paragraph above, and nothing else in this
+skill checks it either. Read every hazard and every named external
+fact in the campaign file as a CLAIM. Check each against the tree, the
+forge, or the script itself, journal each as confirmed, stale or
+wrong, and correct a stale one IN THE AFFECTED DISPATCH before that
+dispatch goes out - a claim that contradicts the file is
+`[premise-corrected]`, and its sibling field is what tells you whether
+the other hazards rest on the same belief.
+
+This is where the false hazards live, and they are cheap to catch and
+expensive to inherit. One campaign's hazard said "the contract test
+bans push inside scripts" when the test bans a named list of commands
+that the tracker's own sync-push was never on; another named a
+conflicting foreign request that had already been closed; a third
+asserted a file length that was 75 lines out before the first dispatch
+and 400 out by the last wave, and its closing invariant listed a path
+that had become a generated artifact while omitting a path its own
+beads named. Every one of those was found by accident, while checking
+something else, and every one of them had already shaped a dispatch.
+The checks are `wc -l`, `git log` on the path, the request's state read
+from the forge, a grep for what the test actually asserts. The reading
+is yours and no exit status carries it: "the hazard is true but no
+longer matters", "the hazard was never true", and "the hazard is true
+and worse than stated" are three different journal entries and three
+different dispatches.
+
+**A campaign's closing invariant must be a predicate over paths, and
+the bead that checks it CLASSIFIES rather than confirms.** The closing
+invariant is the campaign file's largest tree-facing claim, so it gets
+its own rule. An invariant written as a summary of the change's SHAPE -
+"at the last step the diff shows ONLY (a) the re-home, (b) the docs
+set, (c) the pickers; anything else is a defect" - is not checkable by
+anything, and taken literally it was false of the branch it described.
+Require instead a predicate a reader can evaluate path by path. The
+form that has held: **every path in the diff is attributable to a
+campaign bead by its `Refs:` trailer, or to the default branch's own
+movement.** Reject a prose invariant at Phase 1 the way you reject a
+stale hazard, and restate it in that form; an invariant no one can
+evaluate is a rubber stamp with a checkmark next to it.
+
+Then ask the verifying bead to CLASSIFY every path into the
+invariant's buckets plus an explicit `unexplained` bucket, never to
+CONFIRM the invariant. This is what turns the step from a rubber stamp
+into a finding, and it is the whole difference in practice: the
+campaign that classified found 363 paths, zero unexplained, and 63
+outside its three named buckets - none of them a consent violation,
+all of them the campaign's own scoped work, and all of them invisible
+to a confirm. The audit lands as a `[verify]` entry (Journal and
+morning report), which is the type for the conductor's own re-check of
+a claim; where the campaign dispatches the audit as a bead, that bead
+is `[verify]` work and its dispatch says classify, not confirm.
+
+Two mechanics that cost a campaign each to learn, so pass them into
+the audit rather than leaving them to be rediscovered. Run the diff
+with `--no-renames`: rename detection prints only the destination path
+and silently hides the source side, which mis-buckets a large
+directory move as a pile of unexplained additions and hides the
+deletions entirely. And a "HEAD equals the default branch" test cannot
+catch a path where the branch is BEHIND the default branch rather than
+equal to it; that needs blob identity against the branch point, not a
+ref comparison.
+
+**Authority pre-scan, at wave zero, before any dispatch.** The
+dispatch template's AUTHORITY block tells every worker that the repo's
+`CLAUDE.md` and manifest are authoritative inside its subtree and that
+campaign policy only restricts further. That sentence is a promise the
+conductor has to keep, and it can only keep it by reading those files
+BEFORE it dispatches. So for each repo in the campaign's footprint,
+read its `CLAUDE.md` authority and prohibition rules - the hard-rule
+list, the "never do X" rows, whatever that repo calls them - and hold
+each against the action list the consent actually authorizes. One grep
+per repo is usually the whole cost.
+
+Every conflict surfaces HERE. A repo row saying "version bumps are
+forbidden, no exception" under a consent that authorizes a
+release-prep lane is not a puzzle for the worker at commit time; it is
+either queued as a ruling (`[ruling-queued]`) or patched by the
+operator before the lane runs. The failure mode this closes is
+specific: the conflict is discovered by a worker that has already done
+the work, at the moment it tries to commit, with no authority to
+resolve it and a dispatch that told it the repo's own rules win. That
+worker's only correct move is to stop and report, so the campaign pays
+for the work twice and learns the conflict late.
+
+Journal the pre-scan per repo, including the negative - "no conflict
+between the consent's action list and the repo's prohibitions" -
+because a reader resuming from the journal cannot otherwise tell a
+clean scan from a skipped one. Reading a prohibition against a consent
+is a judgement and stays yours: a rule that restricts HOW something is
+done is not the same as one that forbids it, and a rule whose wording
+leaves you unsure which it is goes up as a ruling rather than being
+read generously. Never resolve a conflict by deciding the consent
+wins; that is the self-widening the consent quote exists to stop.
+
 ## Phase 2 - Graph
 
 Ready-graph: `bd ready` + open beads, joined with dependency edges and
@@ -466,13 +566,59 @@ worktree isolation when parallel workers share directories.
   nothing moved, say that - for the same reason a non-contending gate
   gets an explicit negative: a worker that sees no slot cannot tell
   "nothing moved" from "the conductor did not check".
-- **Worktrees**: create via the wurk:kit script
-  (`worktree_create.rb`, `--base <integration-branch>` for stacked/
-  local-only work) - not raw git; the kit warms. (The tmux seed is
-  `/wurk:branch`'s own step, which a dispatched worker skips with
-  `--no-seed`.) Do not run
+- **Worktrees**: create via the wurk:kit script (`worktree_create.rb`,
+  `--base <ref>` to cut the branch from anything other than the
+  default branch) - not raw git; the kit warms. `--base` is not a
+  local-only feature, and reading it as one costs a campaign its
+  stacking: in MR MODE nothing lands mid-campaign, so a lane step cut
+  from the default branch writes against text its predecessor already
+  superseded, and its request then diffs the predecessor's work as if
+  this step had made it. Cut each successor from its PREDECESSOR'S
+  branch with `--base`, and open the request against the default
+  branch anyway. Take what the flag can do from `worktree_create.rb
+  --help` and the envelope it returns, not from this sentence. (The
+  tmux seed is `/wurk:branch`'s own step, which a dispatched worker
+  skips with `--no-seed`.) Do not run
   many warms concurrently with a live gate - warms include a full test
   run and will contend (DB sandbox failures at 4x on one machine).
+- **A second worker into a checkout that already has one gets a
+  worktree, never coordination.** The manifest's `parallelism.model`
+  decides where a bead's branch lives (docs/manifest.md): under
+  `worktree-per-issue` each bead gets its own directory and this
+  cannot arise, and under `branch-in-place` the branch is cut in the
+  current checkout - one bead at a time, which is the model's own
+  stated shape, not a limit to work around. So when a repo has a LIVE
+  worker holding a shared checkout, adding a second worker to that
+  repo requires worktree isolation for the newcomer. There is no
+  advisory form of this. Instructions to "coordinate", to "leave HEAD
+  alone", or to "check before switching branches" are not isolation:
+  git gives one checkout one HEAD and one index, so the second
+  worker's branch switch moves the first worker's working tree under
+  it between two of its own tool calls, and nothing warns either side.
+  In the incident (campaign 007) the conductor dispatched worker A
+  branch-in-place as "sole worker in this repo", then dispatched B
+  into the same checkout with coordination language; HEAD switched
+  under A and A's commit landed on B's branch. Both recovered, which
+  is luck, not a mechanism.
+
+  What this means for you at dispatch time: a repo whose manifest
+  selects `branch-in-place` is a repo you dispatch into ONE bead at a
+  time, and the graph's parallelism there is zero however independent
+  the beads look. If the campaign needs two workers in such a repo,
+  that is a decision to make before either is spawned - the second
+  dispatch names a worktree, or it is `[held]` behind the first - and
+  never a decision made after a worker is already live. Rewriting a
+  live worker's workspace out from under it is not available to you:
+  you cannot move a running worker into a worktree, so a conductor
+  that dispatched the first one branch-in-place has already spent the
+  choice. And note the kit does not backstop this for you.
+  `/wurk:branch` currently REFUSES `branch-in-place` outright
+  (`blocked wrong_parallelism_model`), so a branch-in-place worker in
+  such a repo is one that branched by hand or through a consumer's own
+  path - which is exactly the case where no script is checking. Verify
+  which model the repo declares and whether a worker is live in its
+  checkout by reading the manifest and probing, not by assuming a
+  worktree exists because most repos use them.
 - **Gate semaphore - first decide whether gates contend at all.** A
   semaphore exists because concurrent gate runs INTERFERE: they
   saturate the CPU, bind the same fixed port, share one database
@@ -580,6 +726,14 @@ worktree isolation when parallel workers share directories.
 - **Correction broadcast**: when a dispatch-time assumption dies,
   SendMessage every affected in-flight worker with a [correction] and
   journal it. Consent changes reach workers ONLY this way.
+- **Carry the invariant block by file, the consent by paste.** Fill
+  and paste the appendix's block ONCE per campaign into
+  `invariant-block.md` beside the journal, and have each dispatch
+  carry the consent paragraph inline plus `cat <that absolute path>`
+  first; it is binding. The per-dispatch slots stay inline and stay
+  per-dispatch. The rule and the split are in the appendix's
+  "Carrying the block" section; read it before wave zero, because
+  the file has to exist before the first dispatch does.
 - **Name a report file in every dispatch.** Fill the appendix's REPORT
   slot with an absolute per-bead path `<reports dir>/<bead-id>-report.json`.
   The reports dir sits inside the campaign state dir (Journal and
@@ -893,6 +1047,27 @@ outside scope is a [incident] even when the work was useful (campaign
 consent; the fix was wanted, the authority chain was broken, and the
 conductor double-dispatched the same problem).
 
+**A bead you file carries its area labels.** In a repo whose manifest
+declares `beads.areas.labels`, every bead this campaign files gets its
+labels at filing time, chosen from that declared vocabulary and never
+invented. Derive them from the FILES the work will touch, not from the
+bead's topic: the labels are a collision prediction, `select_batch.rb`
+consumes them to pick pairwise-disjoint batches, and so an unlabeled
+bead silently degrades every future batching decision that includes
+it. The second half is not decoration - across two campaigns five
+beads carried one shared area label and touched four different files,
+so a topic-derived label is a weak prediction even when it is present,
+and predicting the files is the work the label is asking for. This is
+also judgement rather than lookup, and it is cheapest HERE: the filing
+conductor has just read the code or the prose the bead is about, and
+nobody downstream will ever know the files this well again. One
+campaign filed nine beads without labels and the next campaign, an
+hour later, had to label all nine by hand before it could plan a wave.
+Where you genuinely cannot predict the files, label the areas you can
+and say in the bead which part is unpredicted, rather than leaving the
+field empty - an empty field reads as "not applicable", and a stated
+gap reads as a gap.
+
 ## Phase L - Landing
 
 MR mode: where the operator's consent quotes a carve-out letting the
@@ -1143,6 +1318,27 @@ dispatch onward. The dispatch template in the appendix is skill
 prose, so it follows the same rule - one template per campaign unless
 an `[adoption]` line marks the switch.
 
+**A landed kit script falsifies prose the conductor cannot see.** The
+script kind has a second effect the other two do not. A script that
+GAINS a capability breaks nothing: every skill that documented a
+workaround for its absence keeps describing a detour that still works,
+no check fails, and the next reader follows the detour. One conductor's
+stacked-mode section still said "until wurk:branch grows `--base`, cut
+a stacked branch manually: `git worktree add ...`" the day after the
+flag landed; the conductor followed its own prose, hand-cut the
+worktree, and bypassed the kit's envelope and its preflight. So when a
+landing adds or widens a kit script's flags, the `[adoption]` line
+names the flag, and the conductor greps for prose the flag obsoletes -
+in the skills it runs on and in the consumer skills that wrap them -
+filing what it finds as a defect bead (Phase 6) rather than editing
+skill prose mid-campaign, which the paragraph above already forbids.
+The grep is the conductor's own judgement of what a flag obsoletes; no
+envelope reports that. And where the choice is yours, prefer prose that
+sends the reader to a script's `--help` and its envelope for what the
+script can do over prose that restates a flag list this campaign will
+outlive - restated capabilities drift the moment the script improves,
+and they drift silently.
+
 ## Outbound content
 
 Before ANY push, MR, or tracker push: run the project's outbound scan
@@ -1165,6 +1361,36 @@ literal. Both halves matter: a journal that omits the refusal is not
 resumable, and a literal written into the scanned tree is the leak the
 scan exists to stop. See Journal and morning report for where campaign
 state lives.
+
+**Never transcribe the SCAN ITSELF into a committed artifact.** The
+rule above is about one matched literal. The scan's own definition -
+its pattern, its term list, whatever file enumerates what it looks
+for - is a different and larger object, because it enumerates the
+whole private vocabulary rather than the one word that tripped. Copying
+it into a tracked file publishes everything the scan was built to
+withhold, all at once, in an artifact that scans CLEAN by construction
+on the very term its author was being careful about. Not a
+hypothetical: a worker's committed plan document quoted a
+terminology-firewall pattern verbatim, and the quotation was itself the
+leak the firewall existed to prevent (caught before the push; the
+history had to be rewritten locally).
+
+The form is: reference the scan by PATH, never inline its contents.
+"The outbound scan at `<path>` refuses this" is publishable, and
+resolvable by anyone who can already read the scan; the pattern pasted
+into a plan, an ADR, a research document, a commit message, a bead
+description or a request body is not. The temptation is strongest
+exactly where an author is being conscientious - documenting why a
+step exists, explaining a refusal, writing the runbook for the next
+person - so the rule has to be held there rather than only where
+someone is careless. It holds in a dispatch too: a worker told to run
+the scan is told where the scan LIVES, never what it matches. Relay it
+to any worker whose bead touches the scan at all, because the author
+who is careful about the term is the same author who reaches for the
+pattern to explain the care. Judging whether a passage describes the
+scan or reproduces it is yours, and the test is whether a reader who
+could not already read the scan file learns from your artifact what
+the scan looks for.
 
 **Scan what the push would publish, not what the campaign touched.**
 Deciding what the publish set IS for a given channel is a judgement call
@@ -1374,6 +1600,17 @@ the journal is the one failure the operator cannot discover from the
 report itself. The audit costs one read per bead and it is what caught
 the suppressed-output failure in Confirming your own commands.
 
+The same read is where an unlabeled bead gets caught. For every bead
+this campaign FILED, in a repo whose manifest declares
+`beads.areas.labels`, check that it carries at least one label from
+that vocabulary (Phase 5). A bead that does not is an item in the
+report, named, so the omission is inherited by an operator who can see
+it rather than by the next campaign's wave planning. Label it now if
+you can still say what files it will touch; where you decided not to,
+that decision is recorded with its reason, because "we could not
+predict the files" and "we forgot" are the same empty field to
+everyone downstream.
+
 Final act: the morning report - what landed (branch, SHA, gate,
 PR/merge), graph end state, discovered beads, the queue with required
 ordering, judgement calls, deferred verification items - plus the Phase
@@ -1384,9 +1621,43 @@ ordering, judgement calls, deferred verification items - plus the Phase
 Three lists appended to the report: (1) skill/agent defects - quote the
 passage, say what you improvised; (2) each improvisation tagged
 project-specific vs generalizes; (3) journal schema gaps with proposed
-extensions. When the operator has a harness-improvement tracker (e.g.
-the wurk repo's wu- db), file beads for defects as they surface, not
-just in the retro.
+extensions. When the operator has a harness-improvement tracker, file
+beads for defects as they surface, not just in the retro. Which
+tracker that is is a project value, so take it from where the campaign
+gets its other project values - the campaign file's policy block, or
+the project's fleet manifest - and never from a name carried over from
+another project.
+
+**Both halves, and neither replaces the other.** File as you go AND
+synthesize at the end; they catch different things. Incremental filing
+catches the detail: a defect noticed in wave one is otherwise written
+down four hours later, by which point the specifics have to be
+reconstructed from the journal. The end-of-campaign synthesis catches
+what is only visible in aggregate, and some of the best findings are
+only visible there - that eighteen consecutive beads had reported an
+empty verify backlog as a pass is not a finding any single wave could
+have produced. A mid-campaign retro cannot see the campaign's shape,
+so pulling the retro earlier is not the fix; filing early and
+synthesizing late is.
+
+**A retro bead carries its concrete incident, not only the generalized
+defect.** Write into the bead, at filing time, the thing that actually
+happened: the passage you were following, what you improvised, the
+bead or dispatch it happened under, the journal entry a reader can go
+back to. The reason is mechanical. The next worker on that bead will
+not have this campaign in context, and a bead that names only a
+category gets prose aimed at the category. One campaign's retro
+produced nine beads that became the next campaign's entire scope, and
+it worked only because the next campaign ran immediately, in the same
+session, with the first campaign's context still loaded - the
+conductor could brief each worker with the incident behind its
+abstract bead, and in at least one case that briefing is what made the
+resulting prose aim at a real mistake rather than a category. Queue
+the same bead for a cold session a week later and the bead survives
+while the reasoning that made it well-specified does not, unless it
+was written down here. Judging which detail is load-bearing is yours,
+and the test is whether a reader with no access to this campaign could
+tell what went wrong from the bead alone.
 
 ## Appendix - dispatch template
 
@@ -1479,6 +1750,53 @@ and the bead notes, and after killing your own children by PID. The
 file is the record; your returned message is a hint. Never create or
 touch it early.
 ```
+
+### Carrying the block - once per campaign, not once per dispatch
+
+The block above is long, and a conductor that re-fills it per dispatch
+re-fills it wrong. One campaign filled and pasted it six times in an
+afternoon, about a hundred lines each time; earlier, two workers
+dropped parts of it when they relayed it onward to subagents, which is
+the failure the block exists to prevent. So paste the FILLED block
+once, at wave zero and before the first dispatch, into
+`invariant-block.md` beside the journal - campaign state, excluded,
+never committed (Journal and morning report) - and have each dispatch
+carry three things:
+
+- **The CONSENT paragraph, pasted inline, verbatim, every time.** The
+  consent quote is never referenced and never summarized, not in a
+  dispatch and not in a relay to a subagent. A worker holding a
+  paraphrase cannot quote the authority it acted under and cannot test
+  an edge case against it; that is an observed failure, not a
+  hypothetical one, and the paste costs a paragraph.
+- **`cat <absolute path to invariant-block.md>` first; it is
+  binding.** Absolute, so the worker reads it without guessing, and
+  "binding" said plainly, so it is not taken for background reading.
+- **Every PER-DISPATCH slot, filled inline**: bead id, repo dir,
+  ground-truth delta, the moved-files slot or its explicit negative,
+  the per-repo hazard slot, the model tier and its one-line reason,
+  the stacking base, the mode/MR authorization, and the report file
+  path.
+
+What goes IN the file is only what is genuinely constant for the whole
+campaign: the AUTHORITY preamble, the gate path chosen from the Phase
+0 budget, the gate-semaphore slot, the known-flake slot, the MECHANICS
+block, and the RETURN shape. What stays OUT is anything that differs
+per bead. Freezing a per-dispatch slot into the file is worse than
+having no file at all, and the moved-files slot is the sharp case: its
+whole purpose is that the tree moved between two dispatches, so a
+frozen one tells every worker after the first that nothing has
+changed - which is the exact error the slot was added to stop. Read
+the list above as the boundary, and when a slot's value turns out to
+be the same for every bead in a campaign, that is a coincidence of
+that campaign and not a reason to move it into the file.
+
+The file is skill prose's equivalent for the campaign: pinned when the
+campaign starts. A mid-campaign change to it needs an `[adoption]`
+line marking the switch, exactly as the template itself does (Phase
+L's adoption rule), because dispatches before the line ran under the
+old file and a reader of the journal alone must be able to tell which
+ran under which.
 
 Slots filled per dispatch: repo dir, bead id, ground-truth delta,
 model tier and its reason (also passed as `model` on the Agent call),

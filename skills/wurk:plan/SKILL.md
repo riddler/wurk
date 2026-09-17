@@ -401,6 +401,19 @@ are the loop's state channel, and review chatter dilutes it.
    STOP and resolve it - research it or ask. The plan must be complete and
    actionable before it is presented.
 
+7. **Reference an outbound scan by path; never inline its pattern**: a plan
+   is a committed artifact, and a project's outbound-content scan (a
+   terminology firewall is the common instance, ADR-0014) is defined by a
+   pattern or term list that enumerates the vocabulary the scan exists to
+   withhold. Quoting that definition into the plan publishes the whole
+   vocabulary, in a document that then scans clean on the term its author
+   was being careful about - one plan did exactly this and the quotation was
+   the leak. Write "the outbound scan at `<path>` refuses this" and stop
+   there, in the plan body, its success criteria and its References section
+   alike. This is a judgement about your own prose, not something the
+   structural validator can decide: the test is whether a reader who cannot
+   already read the scan file learns from your plan what the scan matches.
+
 ## Success criteria guidelines
 
 Always separate success criteria into two categories:
