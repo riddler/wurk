@@ -1,0 +1,4 @@
+{"timestamp":"2026-09-16T16:00:00.000Z","level":"error","tool":"Bash"}
+{"timestamp":"2026-09-16T16:05:00.000Z","is_error":true,"tool":"Read"}
+{"timestamp":"2026-09-16T16:06:00.000Z","level":"info","tool":"Read"}
+this line is not json

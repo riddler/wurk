@@ -90,7 +90,19 @@ the point.
       "enabled": true,                // (opt) default true
       "primary": true                 // (opt) default false; at most one entry
     }
-  ]
+  ],
+
+  "metrics": {                        // (opt) omit = no prices, no sink
+    "prices": {                       // (opt) omit = cost is null, never a guess
+      "<a model id>": {               // USD per MILLION tokens
+        "input": 0,                   // (opt) non-negative number
+        "output": 0,                  // (opt) non-negative number
+        "cache_write": 0,             // (opt) non-negative number
+        "cache_read": 0               // (opt) non-negative number
+      }
+    },
+    "error_events": "<path to this machine's telemetry sink>"  // (opt)
+  }
 }
 ```
 
@@ -268,12 +280,61 @@ What is deliberately not here: anything a persona harness layers on top
 identity). Those belong to that harness's own config file beside this
 one; the kit reads none of them, and this schema has no slot for them.
 
+## `metrics`
+
+Two values `session_metrics.rb` reads when it turns session transcripts into
+harness metrics: what a token costs on this account, and where this machine's
+telemetry sink lives. Both are machine facts, not project facts - the price
+a model bills differs per account, and the sink is a path on one box.
+
+### `metrics.prices`
+
+A map from a model id to that model's prices, each in **US dollars per
+million tokens**. Absent means `{}`.
+
+- `input`, `output`, `cache_write`, `cache_read` (all opt) - non-negative
+  numbers. `cache_write` prices the cache-creation bucket and `cache_read`
+  the cache-read bucket.
+- A component name outside those four **warns** and is ignored: a newer kit
+  may bill something this one does not count, and the price of a bucket
+  nobody reads is inert.
+- A value that is not a non-negative number **blocks**. The asymmetry is
+  the point: an unknown component cannot mislead anyone, but a price that
+  is a string or negative would travel into a dollar figure a human reads
+  and believes.
+- An entry that quotes no component at all blocks, because it reads as
+  "this model is priced" while pricing nothing.
+
+**The kit ships no prices, and never will.** Prices move, they differ per
+account, and a table checked into a repo is a table that is silently wrong
+some months later without anything going red. So an absent table means
+reported cost is `null` - never an estimate, never a stale number - and a
+model the table does not cover makes the whole total `null` rather than
+quietly pricing part of a window and presenting the result as the window's
+cost.
+
+Read it with `UserConfig#metrics_prices` (a hash, `{}` when absent) and
+`#metrics_prices?`.
+
+### `metrics.error_events`
+
+A non-blank path to this machine's telemetry sink: a JSONL file that an
+opt-in hook appends error events to, one JSON object per line. Absent means
+no sink, and a configured path that **does not exist yet is normal** - the
+hook that writes it is a separate, later opt-in, so every reader of this
+value is absent-safe and a missing file reads as zero events rather than as
+a fault.
+
+Read it with `UserConfig#metrics_error_events_path` (nil when absent).
+
 ## Absent-safe behavior
 
 No file at all is a normal, valid state: every value falls back to its
 default (`"auto"` for `tmux.permission_mode`; `outbound_scan` absent means
 disarmed; `machine.name` and `machine.gate_slots` nil, so `--slots N`
-decides the slot count as before; `workloads` empty), and `tmux_window.rb
+decides the slot count as before; `workloads` empty; `metrics.prices` empty,
+so reported cost is null, and `metrics.error_events` nil, so the sink reads
+as zero events), and `tmux_window.rb
 open` composes exactly the command line it always has. A new machine
 onboards with zero files - there is nothing to seed and nothing to opt
 into.
@@ -300,6 +361,10 @@ asymmetry (`docs/manifest.md`'s Validation section):
   non-blank string `root`; a blank `fleet_manifest`, a non-boolean
   `enabled` or `primary`, a duplicated root, or more than one primary
   blocks.
+- **`metrics`, when present, must be an object**; a `prices` that is not an
+  object of per-model objects, an empty price entry, a price component that
+  is not a non-negative number, or a non-string or blank `error_events`
+  blocks. An unrecognized price component warns - see `## metrics` above.
 - **An unknown key warns**, never blocks - a machine may be running an
   older or newer kit than the file was written for. Inside a `workloads`
   entry the warning names the entry's index (`workloads[1].nickname`).
@@ -323,7 +388,12 @@ configured at all" the same way - deliberately without a
 to carry even a pointer at the pattern set. `data.machine_name`,
 `data.machine_gate_slots`, and `data.workloads` (the normalized entries)
 answer "what does this machine call itself, how many gates may it run at
-once, and what does it run".
+once, and what does it run". `data.metrics_priced_models` lists the model
+ids the price table covers and `data.metrics_error_events_declared` says
+whether a sink is configured - the model ids, not the prices, and a boolean,
+not the sink path, for the same reason `patterns_file` is absent above: a
+lint envelope has no reason to carry the operator's numbers or a pointer at
+a file on their disk.
 
 ## Not a consumer concern
 

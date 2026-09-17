@@ -1,0 +1,7 @@
+not json at all
+[1, 2, 3]
+
+{"type":"user","uuid":"m1","sessionId":"malformed","timestamp":"2026-09-16T15:00:00.000Z","promptSource":"typed","aFieldThisKitHasNeverSeen":{"nested":true},"message":{"role":"user","content":[{"type":"text","text":"(redacted)"}]}}
+{"type":"assistant","uuid":"m2","sessionId":"malformed","timestamp":"not-a-timestamp","message":{"role":"assistant","model":"test-model-a","usage":{"input_tokens":42,"output_tokens":7,"someNewCounter":"nonsense"},"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}},{"type":"aBlockKindFromTheFuture"}]}}
+{"type":"assistant","uuid":"m3","sessionId":"malformed","timestamp":"2026-09-16T15:00:20.000Z","message":{"role":"assistant","content":"a plain string body"}}
+{"type":"weird-record-kind","uuid":"m4","timestamp":"2026-09-16T15:00:30.000Z"}

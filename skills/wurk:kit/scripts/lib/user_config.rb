@@ -41,13 +41,23 @@ class UserConfig
   # from this map is not validated further.
   # A key ending in "[]" describes the object elements of an array under
   # that key; collect_unknown_keys walks into each element with it.
+  # `metrics.prices` is deliberately absent from this map: its keys are model
+  # ids, which are data and not schema, so the walk stops at `metrics` and a
+  # new model never warns as an unknown key.
   KNOWN = {
-    nil => %w[wurk tmux outbound_scan machine workloads],
+    nil => %w[wurk tmux outbound_scan machine workloads metrics],
     "tmux" => %w[permission_mode],
     "outbound_scan" => %w[patterns_file control_term],
     "machine" => %w[name gate_slots],
-    "workloads[]" => %w[root fleet_manifest enabled primary]
+    "workloads[]" => %w[root fleet_manifest enabled primary],
+    "metrics" => %w[prices error_events]
   }.freeze
+
+  # The components a per-model price entry may quote, each in US dollars per
+  # million tokens. A component outside this list warns rather than blocks:
+  # a newer kit may bill something this one does not know how to count, and
+  # the price of a bucket nobody reads is harmless.
+  PRICE_COMPONENTS = %w[input output cache_write cache_read].freeze
 
   # Per-entry defaults for workloads[]. `root` has none: an entry without
   # one is an error, because the root is what identifies the workload.
@@ -225,6 +235,33 @@ class UserConfig
     workloads.find { |w| w["primary"] == true }
   end
 
+  # The per-model price table, as `{ "<model id>" => { "input" => 3.0, ... } }`
+  # in US dollars per million tokens, or `{}` when the machine names none.
+  # The kit ships no prices and has no defaults here on purpose: prices move,
+  # they differ per account, and a number checked into a repo is a number
+  # that is silently wrong later. A caller with an empty table reports cost
+  # as null - it never guesses. See session_metrics.rb.
+  def metrics_prices
+    section = raw["metrics"]
+    return {} unless section.is_a?(Hash)
+
+    prices = section["prices"]
+    prices.is_a?(Hash) ? prices : {}
+  end
+
+  # Whether the machine quotes any price at all.
+  def metrics_prices?
+    !metrics_prices.empty?
+  end
+
+  # The path to this machine's telemetry sink - a JSONL file an opt-in hook
+  # appends error events to - or nil when none is configured. A path that
+  # does not exist yet is normal and every reader of it is absent-safe: the
+  # config may name a sink before anything writes one.
+  def metrics_error_events_path
+    fetch("metrics.error_events")
+  end
+
   # Dotted lookup with defaults applied. Returns nil for an absent optional
   # key that has no default.
   def fetch(dotted)
@@ -244,6 +281,7 @@ class UserConfig
     validate_outbound_scan
     validate_machine
     validate_workloads
+    validate_metrics
     collect_unknown_keys(raw, nil)
   end
 
@@ -384,6 +422,66 @@ class UserConfig
     errors << "#{path}: workloads marks #{primaries} entries primary; at most one may be" if primaries > 1
   end
 
+  # Shape validation of the metrics section. `prices` maps a model id to an
+  # object of price components, each a non-negative number in dollars per
+  # million tokens; `error_events` is a non-blank path string.
+  #
+  # A malformed price BLOCKS rather than warns, unlike an unknown component
+  # name. The two are different failures: a component this kit cannot spend
+  # is inert, but a price that is a string, or negative, would travel into a
+  # dollar figure that a human reads and believes. A cost metric is only
+  # worth emitting if a wrong one cannot be emitted quietly.
+  def validate_metrics
+    return unless raw.key?("metrics")
+
+    section = raw["metrics"]
+    unless section.is_a?(Hash)
+      errors << "#{path}: metrics must be a JSON object, got #{section.class}"
+      return
+    end
+
+    validate_prices(section["prices"]) if section.key?("prices")
+
+    return unless section.key?("error_events")
+
+    sink = section["error_events"]
+    if !sink.is_a?(String)
+      errors << "#{path}: metrics.error_events must be a string, got #{sink.class}"
+    elsif sink.strip.empty?
+      errors << "#{path}: metrics.error_events must not be blank"
+    end
+  end
+
+  def validate_prices(prices)
+    unless prices.is_a?(Hash)
+      errors << "#{path}: metrics.prices must be a JSON object, got #{prices.class}"
+      return
+    end
+
+    prices.each do |model, entry|
+      label = "metrics.prices.#{model}"
+      unless entry.is_a?(Hash)
+        errors << "#{path}: #{label} must be a JSON object, got #{entry.class}"
+        next
+      end
+
+      if entry.empty?
+        errors << "#{path}: #{label} is present but quotes no price component"
+        next
+      end
+
+      entry.each do |component, value|
+        unless PRICE_COMPONENTS.include?(component)
+          warnings << "#{path}: unknown key #{label}.#{component} (ignored)"
+          next
+        end
+        next if value.is_a?(Numeric) && !value.negative?
+
+        errors << "#{path}: #{label}.#{component} must be a non-negative number, got #{value.inspect}"
+      end
+    end
+  end
+
   # Forward compatibility: a key this kit does not know about is a warning,
   # never an error - same reasoning as Manifest#collect_unknown_keys. An
   # array under a key with a "<key>[]" entry in KNOWN is walked element by
@@ -441,6 +539,10 @@ module UserConfigCli
       env.data[:machine_name] = config.machine_name
       env.data[:machine_gate_slots] = config.machine_gate_slots
       env.data[:workloads] = config.workloads
+      # Model ids, not the prices themselves: what this machine can price is
+      # the useful answer, and the numbers are the operator's business.
+      env.data[:metrics_priced_models] = config.metrics_prices.keys.sort
+      env.data[:metrics_error_events_declared] = !config.metrics_error_events_path.nil?
 
       config.warnings.each { |w| env.warn(code: "unknown_key", message: w) }
       config.errors.each { |e| env.block!(code: "invalid", message: e) }
