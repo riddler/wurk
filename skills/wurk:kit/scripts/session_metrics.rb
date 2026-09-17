@@ -85,6 +85,17 @@ module SessionMetrics
   # be reclassified as automation on the strength of a missing key.
   HUMAN_PROMPT_SOURCES = %w[typed suggestion_accepted].freeze
 
+  # Rule 3's blind spot, and the minimum sample that makes it legible. The
+  # classifier reads fields this kit does not own, and the conservative
+  # reading of an absent `promptSource` is indistinguishable from the
+  # reading of a transcript writer that stopped emitting it: every session
+  # classifies interactive, every agent stall disappears, and the window
+  # reports healthy because it is blind. Below this many transcripts, a
+  # window carrying no classification evidence at all is ordinary - a
+  # handful of old files, or one hand-made fixture - so the guard needs a
+  # sample for the same reason the failure rate does.
+  CLASSIFICATION_MIN_TRANSCRIPTS = 5
+
   # The tool whose calls name a skill, and the input key carrying the name.
   SKILL_TOOL = "Skill"
   SKILL_INPUT_KEY = "skill"
@@ -131,7 +142,12 @@ module SessionMetrics
     # Reads one transcript into a summary hash. Never raises on content: a
     # line that is not JSON, or is JSON but not an object, is counted in
     # `malformed_lines` and skipped.
-    def read_session(path, since: nil)
+    # `evidence`, when given, is an array the classification-availability
+    # pass appends one boolean to per transcript read. It rides beside the
+    # summary rather than inside it: the question it answers is about the
+    # WRITER of the file, not about the window's numbers, and the summary
+    # shape is read by callers that have no use for it.
+    def read_session(path, since: nil, evidence: nil)
       records = []
       malformed = 0
 
@@ -146,6 +162,7 @@ module SessionMetrics
         records << record
       end
 
+      evidence << classification_evidence?(records) unless evidence.nil?
       summarize(path, records, malformed, since)
     end
 
@@ -219,6 +236,22 @@ module SessionMetrics
 
       automation = starts.any? || records.any? { |r| r["isSidechain"] == true }
       automation ? "agent" : "interactive"
+    end
+
+    # Whether this transcript carries anything the classifier can read at
+    # all. `promptSource` and `isSidechain` are written by the transcript
+    # writer, not by this kit, and the classifier's conservative default
+    # means their DISAPPEARANCE is silent: every session would read
+    # interactive and every agent stall would vanish, leaving a window that
+    # looks healthy because nothing in it could be measured. Presence is
+    # what is checked, not value - a `promptSource` of any kind proves the
+    # writer still emits the field, which is the only thing this answers.
+    #
+    # The whole file is checked, not the `--since` slice: "does the writer
+    # emit this field" is a fact about the file, and a narrow window that
+    # happens to contain no turn start says nothing either way.
+    def classification_evidence?(records)
+      records.any? { |r| r.key?("promptSource") || r["isSidechain"] == true }
     end
 
     # --- rule 2: turn boundary ----------------------------------------------
@@ -589,7 +622,8 @@ module SessionMetricsCli
       paths = resolve_paths(env, options)
       return env.emit(io) if paths == :invalid
 
-      sessions = read_sessions(env, paths, since)
+      evidence = []
+      sessions = read_sessions(env, paths, since, evidence)
       events = SessionMetrics.error_events(user_config.metrics_error_events_path, since: since)
 
       env.data[:window] = {
@@ -606,6 +640,7 @@ module SessionMetricsCli
 
       warn_about_prices(env, env.data[:cost])
       warn_about_malformed(env, totals)
+      warn_about_classification(env, evidence)
 
       case subcommand
       when "report" then add_report(env, sessions, options)
@@ -648,11 +683,11 @@ module SessionMetricsCli
       :invalid
     end
 
-    def read_sessions(env, paths, since)
+    def read_sessions(env, paths, since, evidence = nil)
       sessions = []
       paths.each do |path|
         begin
-          sessions << SessionMetrics.read_session(path, since: since)
+          sessions << SessionMetrics.read_session(path, since: since, evidence: evidence)
         rescue SystemCallError, IOError => e
           env.warn(code: "transcript_unreadable", message: "#{path}: #{e.class}")
         end
@@ -687,6 +722,26 @@ module SessionMetricsCli
 
       env.warn(code: "malformed_lines",
                message: "#{totals['malformed_lines']} transcript lines did not parse and were skipped")
+    end
+
+    # The agent-vs-interactive rule reads fields this kit does not own, so
+    # it can go blind without failing: if the transcript writer stops
+    # emitting promptSource, every session classifies interactive, every
+    # agent stall disappears, and `signals` answers with the same empty
+    # list a genuinely healthy window produces. This is the one thing that
+    # tells those two empty lists apart, which is why it warns rather than
+    # blocks - the counts in the envelope are still true, it is only the
+    # classification that has nothing behind it.
+    def warn_about_classification(env, evidence)
+      return if evidence.length < SessionMetrics::CLASSIFICATION_MIN_TRANSCRIPTS
+      return if evidence.any?
+
+      env.warn(code: "agent_classification_unavailable",
+               message: "none of the #{evidence.length} transcripts in this window carries promptSource " \
+                        "or isSidechain, so every session classified interactive and no agent stall can " \
+                        "be reported; the transcript writer may no longer emit promptSource - re-verify " \
+                        "the classification rule against a current transcript before trusting an empty " \
+                        "signals list")
     end
   end
 end
