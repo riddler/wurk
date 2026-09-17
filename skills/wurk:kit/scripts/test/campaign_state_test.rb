@@ -654,6 +654,51 @@ class CampaignStateQueueTest < Minitest::Test
     assert_equal ["043"], env["data"]["runnable"]
   end
 
+  # An aborted predecessor stopped on something still in the environment;
+  # promoting the successor sends it into the same wall (measured: two
+  # campaigns aborted on one stray file, minutes apart).
+  #
+  # sabotage: satisfy the queue on any terminal word (WRAPPED or ABORTED)
+  # -> red here, green in test_queued_promotes_when_the_predecessor_wraps.
+  def test_queued_holds_when_the_predecessor_aborted
+    queue_fixture(predecessor_status: "ABORTED")
+    _, env = run_cli(["list", "--dir", @dir])
+    q = env["data"]["campaigns"].find { |c| c["id"] == "043" }
+    refute q["armed"], "an ABORTED predecessor must hold the queue"
+    refute q["queue"]["satisfied"]
+    assert_equal "ABORTED", q["queue"]["predecessor_status"]
+    assert env["warnings"].any? { |w| w["code"] == "queue_predecessor_aborted" }, env["warnings"].inspect
+    assert_equal [], env["data"]["runnable"], "neither the aborted plan nor its successor is runnable"
+  end
+
+  def test_aborted_is_a_known_status_that_is_not_armed
+    write_plan(@dir, "042", status: "ABORTED 2026-09-16 22:10 -0600 (kit preflight refused)")
+    write_consent(@dir, "042")
+    _, env = run_cli(["list", "--dir", @dir])
+    c = env["data"]["campaigns"].first
+    assert_equal "ABORTED", c["status"]
+    refute c["armed"]
+    refute c["runnable"]
+    refute env["warnings"].any? { |w| w["code"] == "unknown_status" }, env["warnings"].inspect
+  end
+
+  # Unlike WRAPPED, ABORTED is re-armable by the script: that is the
+  # operator's path back once the fault is cleared.
+  #
+  # sabotage: refuse ABORTED alongside WRAPPED in run_arm -> red.
+  def test_arm_re_arms_an_aborted_campaign_with_a_warning
+    path = write_plan(@dir, "042", status: "ABORTED 2026-09-16 22:10 -0600 (kit preflight refused)")
+    write_consent(@dir, "042")
+
+    code, env = run_cli(["arm", "042", "--dir", @dir])
+
+    assert_equal 0, code
+    assert_equal "ABORTED", env["data"]["before"]
+    assert_equal "ARMED", env["data"]["after"]
+    assert env["warnings"].any? { |w| w["code"] == "re_armed_after_abort" }, env["warnings"].inspect
+    assert_match(/^Status: ARMED 2026-09-14 20:00 -0600 \(kit preflight refused\)/, File.read(path))
+  end
+
   def test_queued_holds_while_the_wrapped_predecessors_mutex_is_still_held
     queue_fixture(predecessor_status: "WRAPPED")
     hold_mutex(@dir, "042")

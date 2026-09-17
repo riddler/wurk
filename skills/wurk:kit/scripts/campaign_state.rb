@@ -30,14 +30,21 @@ module CampaignState
 
   # The plan's Status vocabulary. RUNNING is deliberately absent: a running
   # campaign is one whose mutex is held, which is a fact about the lock dir
-  # and not something a file can claim about itself.
-  PLAN_STATUSES = %w[DRAFTED QUEUED ARMED WRAPPED].freeze
+  # and not something a file can claim about itself. ABORTED is the wrap of
+  # a run that stopped on an environment fault before landing anything: it
+  # is not armed (the scheduler will not restart it into the same fault),
+  # it does NOT satisfy a successor's queue (WRAPPED alone does - one
+  # measured night, an aborted predecessor promoted its successor straight
+  # into the identical fault), and unlike WRAPPED it may be re-armed by
+  # `arm` once the operator has cleared the fault.
+  PLAN_STATUSES = %w[DRAFTED QUEUED ARMED WRAPPED ABORTED].freeze
   CONSENT_STATUSES = %w[DRAFTED ADOPTED].freeze
   ADOPTED = "ADOPTED"
   ARMED = "ARMED"
   DRAFTED = "DRAFTED"
   WRAPPED = "WRAPPED"
   QUEUED = "QUEUED"
+  ABORTED = "ABORTED"
 
   # `Status: WORD [stamp]` at the start of a line. The stamp is a date with an
   # optional time and zone offset, in the shape the conductor writes by hand
@@ -218,8 +225,10 @@ module CampaignState
     # live-held: WRAPPED is flipped while the conductor still holds the
     # mutex, and the successor must not start inside that window. A missing
     # or invalid predecessor is never satisfied - a typo must hold the
-    # queue, not release it. Only the predecessor's own Status word is
-    # read, so a chain (C after B after A) advances one wrap at a time.
+    # queue, not release it. An ABORTED predecessor is never satisfied
+    # either: whatever stopped it is still there. Only the predecessor's
+    # own Status word is read, so a chain (C after B after A) advances one
+    # wrap at a time.
     def inspect_queue(dir, after, locks_dir:)
       return { after: nil, satisfied: false, predecessor_status: nil, predecessor_exists: false } unless after
 
@@ -352,6 +361,12 @@ module CampaignStateCli
         return env.emit(io)
       end
 
+      # ABORTED is the one terminal word arm accepts: re-arming after the
+      # operator cleared the fault is exactly what the status exists for.
+      if campaign[:status] == CampaignState::ABORTED
+        env.warn(code: "re_armed_after_abort", message: "#{id} was ABORTED (#{campaign[:status_stamp]}); re-arming assumes the fault it stopped on is cleared")
+      end
+
       unless campaign[:consent][:adopted]
         state = campaign[:consent][:exists] ? "Status #{campaign[:consent][:status].inspect}" : "missing"
         env.block!(
@@ -440,6 +455,9 @@ module CampaignStateCli
       end
       if campaign[:queued] && campaign[:queued_after] && !campaign[:queue][:predecessor_exists]
         env.warn(code: "queue_predecessor_missing", message: "#{id}: queued after #{campaign[:queued_after]}, but no such campaign plan exists; the queue holds until it does")
+      end
+      if campaign[:queued] && campaign[:queue][:predecessor_status] == CampaignState::ABORTED
+        env.warn(code: "queue_predecessor_aborted", message: "#{id}: queued after #{campaign[:queued_after]}, which ABORTED; the queue holds until the operator re-arms #{campaign[:queued_after]} and it WRAPS")
       end
       if campaign[:armed] && !campaign[:consent][:exists]
         env.warn(code: "consent_missing", message: "#{id} is ARMED but has no consent file at #{campaign[:consent][:path]}")
