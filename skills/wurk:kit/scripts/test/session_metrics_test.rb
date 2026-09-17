@@ -696,3 +696,157 @@ class SessionMetricsUserConfigTest < Minitest::Test
     end
   end
 end
+
+# A session id does not identify a transcript: a parent session and the
+# sidechain files its subagents write all claim the same sessionId. The
+# transcript path on each signal and the rollup keyed by session id are the
+# two halves of making that legible to a reader keying on either one.
+class SessionMetricsTranscriptIdentityTest < Minitest::Test
+  include SessionFixtures
+  include UserConfigHelper
+
+  SIDECHAIN_PAIR = [%w[sidechain-project sidechain], %w[sidechain-project sidechain-sub]].freeze
+
+  # sabotage: drop the `--dir` root from the relative_transcript call, or
+  # return the path untouched -> red. An absolute path names a directory on
+  # one machine; the reader of a signal wants the transcript, and the root
+  # is what makes the name the same everywhere.
+  def test_a_path_under_the_root_is_reported_relative_to_it
+    assert_equal "p/a.jsonl", SessionMetrics.relative_transcript("/root/p/a.jsonl", "/root")
+    assert_equal "p/a.jsonl", SessionMetrics.relative_transcript("/root/p/a.jsonl", "/root/")
+  end
+
+  # sabotage: build the relative path with a `..` walk instead of leaving a
+  # foreign path alone -> red. A path outside the root cannot be named
+  # relative to it, and a walk that pretends otherwise identifies nothing.
+  def test_a_path_outside_the_root_is_left_as_it_came_in
+    assert_equal "/elsewhere/a.jsonl", SessionMetrics.relative_transcript("/elsewhere/a.jsonl", "/root")
+    assert_equal "/elsewhere/a.jsonl", SessionMetrics.relative_transcript("/elsewhere/a.jsonl", nil)
+    assert_nil SessionMetrics.relative_transcript(nil, "/root")
+  end
+
+  # sabotage: drop "transcript" from the agent_stall item -> red. This is
+  # the defect the bead names: two items, one session id, and nothing in
+  # either one saying which file it was measured from.
+  def test_two_transcripts_of_one_session_produce_distinguishable_signals
+    with_user_config(nil) do
+      with_root(*SIDECHAIN_PAIR) do |dir|
+        _code, envelope = run_cli(["signals", "--dir", dir])
+        stalls = envelope["data"]["signals"].select { |s| s["kind"] == "agent_stall" }
+        assert_equal 2, stalls.length
+        assert_equal ["sidechain"], stalls.map { |s| s["session"] }.uniq
+        assert_equal ["sidechain-project/sidechain-sub.jsonl", "sidechain-project/sidechain.jsonl"],
+                     stalls.map { |s| s["transcript"] }.sort
+      end
+    end
+  end
+
+  # sabotage: key the rollup on the transcript path rather than the session
+  # id -> red. Two rows for one session is exactly what a recurrence bar
+  # counting independent runs must not see.
+  def test_a_shared_session_id_rolls_up_to_one_row
+    with_user_config(nil) do
+      with_root(*SIDECHAIN_PAIR) do |dir|
+        _code, envelope = run_cli(["signals", "--dir", dir])
+        rollup = envelope["data"]["sessions_by_id"]
+        assert_equal 1, rollup.length
+        row = rollup.first
+        assert_equal "sidechain", row["session"]
+        assert_equal 2, row["transcript_count"]
+        assert_equal 2, row["agent_stalls"]
+      end
+    end
+  end
+
+  # sabotage: sum the per-transcript counts away instead of nesting them ->
+  # red. The reader who needs to know WHICH file a number came from is the
+  # other half of the contract.
+  def test_the_rollup_nests_the_per_transcript_detail
+    with_user_config(nil) do
+      with_root(*SIDECHAIN_PAIR) do |dir|
+        _code, envelope = run_cli(["report", "--dir", dir])
+        row = envelope["data"]["sessions_by_id"].first
+        assert_equal ["sidechain-project/sidechain-sub.jsonl", "sidechain-project/sidechain.jsonl"],
+                     row["transcripts"].map { |t| t["transcript"] }.sort
+        assert_equal [1, 1], row["transcripts"].map { |t| t["agent_stalls"] }
+        assert_equal "2026-09-16T16:00:00Z", row["first_seen"]
+        assert_equal "2026-09-16T16:15:15Z", row["last_seen"]
+      end
+    end
+  end
+
+  # sabotage: roll a single `kind` up onto the row -> stays green here, and
+  # that is the point of the assertion: rule 3 classifies per transcript,
+  # and a session-level kind would have to invent a tie-break between a
+  # parent that reads interactive and a sidechain file that need not.
+  def test_the_rollup_keeps_classification_per_transcript
+    with_user_config(nil) do
+      with_root(*SIDECHAIN_PAIR) do |dir|
+        _code, envelope = run_cli(["report", "--dir", dir])
+        row = envelope["data"]["sessions_by_id"].first
+        refute_includes row.keys, "kind"
+        assert_equal %w[interactive interactive], row["transcripts"].map { |t| t["kind"] }
+      end
+    end
+  end
+
+  # sabotage: build the report rollup from the untruncated session list ->
+  # red. That puts back exactly the rows --max-sessions just removed, which
+  # is the envelope-size promise the cap exists to keep.
+  def test_the_report_rollup_obeys_the_max_sessions_cap
+    with_user_config(nil) do
+      with_root(*SIDECHAIN_PAIR) do |dir|
+        _code, envelope = run_cli(["report", "--dir", dir, "--max-sessions", "1"])
+        assert_equal 1, envelope["data"]["sessions"].length
+        row = envelope["data"]["sessions_by_id"].first
+        assert_equal 1, row["transcript_count"]
+        assert_equal 1, row["transcripts"].length
+      end
+    end
+  end
+
+  # sabotage: roll every session up under `signals` rather than the ones the
+  # emitted items name -> red. `signals` carries no per-session rows, so a
+  # rollup over the whole window would smuggle the report's bulk into the
+  # subcommand a scheduler polls.
+  def test_the_signals_rollup_covers_only_the_sessions_that_signalled
+    with_user_config(nil) do
+      with_root(%w[clean-project interactive-clean], %w[agent-project agent-stall]) do |dir|
+        _code, envelope = run_cli(["signals", "--dir", dir])
+        assert_equal ["agent-stall"], envelope["data"]["sessions_by_id"].map { |r| r["session"] }
+      end
+    end
+  end
+
+  def test_a_clean_window_rolls_up_to_nothing
+    with_user_config(nil) do
+      with_root(%w[clean-project interactive-clean]) do |dir|
+        _code, envelope = run_cli(["signals", "--dir", dir])
+        assert_equal [], envelope["data"]["signals"]
+        assert_equal [], envelope["data"]["sessions_by_id"]
+      end
+    end
+  end
+
+  # sabotage: report a relative path under --file anyway -> red. There is no
+  # root to be relative to, and inventing one names a file that is not there.
+  def test_a_named_file_reports_the_path_as_given
+    with_user_config(nil) do
+      path = fixture("agent-project", "agent-stall")
+      _code, envelope = run_cli(["signals", "--file", path])
+      assert_equal path, envelope["data"]["signals"].first["transcript"]
+      assert_equal path, envelope["data"]["sessions_by_id"].first["transcripts"].first["transcript"]
+    end
+  end
+
+  # sabotage: index a session summary's "path" without a nil guard -> red.
+  # `signals` is called directly with hand-made summaries in this suite and
+  # by any caller that builds one, and a missing path is not a crash.
+  def test_a_summary_with_no_path_still_signals
+    summary = { "tool_results" => 10, "tool_errors" => 5, "tool_failure_rate" => 0.5,
+                "stalls" => [], "session" => "s", "project" => "p" }
+    item = SessionMetrics.signals([summary], "count" => 0).first
+    assert_equal "tool_failure_rate", item["kind"]
+    assert_nil item["transcript"]
+  end
+end
