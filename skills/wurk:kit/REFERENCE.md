@@ -754,6 +754,27 @@ thresholds: a session failure rate at or above 0.20 over at least 5 tool
 results, any agent-session stall, and any error event in the machine's
 telemetry sink. Everything else is `report`'s job.
 
+**A session id does not identify a transcript.** A parent session and the
+sidechain files its subagents write all carry the same `sessionId`, so one
+window can produce several signal items under one id with different numbers
+behind them. Each item is accurate per transcript, and a reader keying on
+the id reads the set as one finding sighted twice - which matters where a
+recurrence bar counts INDEPENDENT runs, because two items off one session
+are not two runs. So both keys are named: every session-derived signal item
+carries a `transcript` beside its `session`, reported relative to the
+transcripts root (a path outside the root, and every path under `--file`
+which has no root, is reported exactly as it came in), and
+`data.sessions_by_id` carries one row per session id - its counts summed
+across the transcripts that claim the id, the per-transcript detail nested
+under `transcripts`. A reader keying on either gets one row per key, and neither
+has to know about the other's. The row deliberately has no `kind`: rule 3
+classifies per transcript by construction, and rolling it up would mean
+inventing a tie-break between a parent and a sidechain file that classify
+differently. The rollup is built from what the envelope already carries -
+under `report` the rows that survived `--max-sessions`, under `signals` the
+sessions the emitted items name - so it never pushes an envelope past the
+size the cap was set to hold.
+
 **The three measurement rules**, each of which a naive gap metric gets
 wrong in a way that still looks plausible:
 

@@ -527,8 +527,21 @@ module SessionMetrics
     end
 
     # --- signals -------------------------------------------------------------
+    #
+    # A session id does NOT identify a transcript. A parent session and the
+    # sidechain files its subagents write all carry the same `sessionId`, so
+    # one window can produce several signal items keyed alike with different
+    # numbers behind them. Each item is accurate per transcript, and a reader
+    # keying on the session id reads the set as one finding sighted twice -
+    # which matters, because a recurrence bar counts INDEPENDENT runs and
+    # two items off one session are not two runs.
+    #
+    # So an item names both: the session id it belongs to and the transcript
+    # it was measured from, and `sessions_by_id` below gives the reader who
+    # keys on the session id exactly one row. Neither reader has to know
+    # about the other's key.
 
-    def signals(sessions, events)
+    def signals(sessions, events, root: nil)
       items = []
 
       sessions.each do |s|
@@ -536,6 +549,7 @@ module SessionMetrics
           items << {
             "kind" => "tool_failure_rate",
             "session" => s["session"],
+            "transcript" => relative_transcript(s["path"], root),
             "project" => s["project"],
             "results" => s["tool_results"],
             "errors" => s["tool_errors"],
@@ -549,6 +563,7 @@ module SessionMetrics
         items << {
           "kind" => "agent_stall",
           "session" => s["session"],
+          "transcript" => relative_transcript(s["path"], root),
           "project" => s["project"],
           "count" => agent.length,
           "longest_seconds" => agent.map { |g| g["seconds"] }.max,
@@ -561,6 +576,79 @@ module SessionMetrics
       end
 
       items
+    end
+
+    # A transcript path as the reader should quote it: relative to the
+    # transcripts root, which is the form that is stable across machines and
+    # short enough to sit in a signal item. Anything outside the root - and
+    # everything under `--file`, which has no root - is left exactly as it
+    # came in rather than rewritten into a `../..` walk that identifies
+    # nothing. A summary with no path at all answers nil.
+    def relative_transcript(path, root)
+      return nil unless path.is_a?(String)
+      return path unless root.is_a?(String) && !root.empty?
+
+      prefix = root.end_with?(File::SEPARATOR) ? root : root + File::SEPARATOR
+      path.start_with?(prefix) ? path[prefix.length..] : path
+    end
+
+    # One row per session id, with the per-transcript detail nested inside
+    # it. The row's counts are the session's - summed across every transcript
+    # that claims the id - so a reader keying on the session id gets one row
+    # and one set of numbers, and a reader who needs to know which file a
+    # number came from reads the nested list.
+    #
+    # Deliberately NOT rolled up: `kind`. Rule 3's classification is per
+    # transcript by construction (a sidechain file classifies differently
+    # from the parent it belongs to), and a session-level `kind` would have
+    # to invent a tie-break that no caller asked for. The agent and
+    # interactive stall counts are already reported apart, which is what a
+    # caller actually reads.
+    #
+    # Rows keep the order of the sessions handed in, which the CLI has
+    # already sorted, so two runs over one window are byte-identical.
+    def sessions_by_id(sessions, root: nil)
+      rows = {}
+
+      sessions.each do |s|
+        row = rows[s["session"]] ||= {
+          "session" => s["session"],
+          "project" => s["project"],
+          "transcript_count" => 0,
+          "records" => 0,
+          "tool_results" => 0,
+          "tool_errors" => 0,
+          "agent_stalls" => 0,
+          "interactive_stalls" => 0,
+          "transcripts" => []
+        }
+
+        row["transcript_count"] += 1
+        row["records"] += s["records"].to_i
+        row["tool_results"] += s["tool_results"].to_i
+        row["tool_errors"] += s["tool_errors"].to_i
+        row["agent_stalls"] += s["agent_stalls"].to_i
+        row["interactive_stalls"] += s["interactive_stalls"].to_i
+        row["transcripts"] << {
+          "transcript" => relative_transcript(s["path"], root),
+          "kind" => s["kind"],
+          "records" => s["records"],
+          "tool_results" => s["tool_results"],
+          "tool_errors" => s["tool_errors"],
+          "agent_stalls" => s["agent_stalls"],
+          "first_seen" => s["first_seen"],
+          "last_seen" => s["last_seen"]
+        }
+      end
+
+      rows.each_value do |row|
+        seen = row["transcripts"]
+        row["tool_failure_rate"] = rate(row["tool_errors"], row["tool_results"])
+        row["first_seen"] = seen.map { |t| t["first_seen"] }.compact.min
+        row["last_seen"] = seen.map { |t| t["last_seen"] }.compact.max
+      end
+
+      rows.values
     end
 
     # --- small helpers -------------------------------------------------------
@@ -642,9 +730,11 @@ module SessionMetricsCli
       warn_about_malformed(env, totals)
       warn_about_classification(env, evidence)
 
+      root = options[:file] ? nil : root_for(options)
+
       case subcommand
-      when "report" then add_report(env, sessions, options)
-      when "signals" then env.data[:signals] = SessionMetrics.signals(sessions, events)
+      when "report" then add_report(env, sessions, options, root)
+      when "signals" then add_signals(env, sessions, events, root)
       end
 
       env.emit(io)
@@ -695,14 +785,29 @@ module SessionMetricsCli
       sessions.sort_by { |s| [s["last_seen"].to_s, s["session"].to_s] }.reverse
     end
 
-    def add_report(env, sessions, options)
+    # The rollup is built from the rows that are already in the envelope -
+    # here the ones that survived the cap, in `add_signals` the sessions the
+    # emitted items name - so it can never push an envelope past the size
+    # `--max-sessions` was set to hold. A rollup over the untruncated list
+    # would put back exactly the rows the cap just removed.
+    def add_report(env, sessions, options, root)
       limit = options[:max_sessions].to_i
       shown = limit.positive? ? sessions.first(limit) : sessions
       env.data[:sessions] = shown
+      env.data[:sessions_by_id] = SessionMetrics.sessions_by_id(shown, root: root)
       return unless shown.length < sessions.length
 
       env.warn(code: "sessions_truncated",
                message: "showing #{shown.length} of #{sessions.length} sessions; pass --max-sessions 0 for all")
+    end
+
+    def add_signals(env, sessions, events, root)
+      items = SessionMetrics.signals(sessions, events, root: root)
+      env.data[:signals] = items
+
+      ids = items.map { |item| item["session"] }.compact
+      signalling = sessions.select { |s| ids.include?(s["session"]) }
+      env.data[:sessions_by_id] = SessionMetrics.sessions_by_id(signalling, root: root)
     end
 
     def warn_about_prices(env, cost)
