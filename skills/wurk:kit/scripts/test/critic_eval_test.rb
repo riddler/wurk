@@ -58,6 +58,70 @@ class CriticEvalLibTest < Minitest::Test
     refute_includes bodies.first, "smaller nit"
   end
 
+  # The first real trust-bar run (2026-09-17) scored every clean output a
+  # false positive: the mandated summary line names exactly one severity,
+  # so it satisfied the one-severity-per-line rule and counted as a
+  # blocking finding even while reporting zero of them.
+  # sabotage: drop the verdict_summary? guard -> this goes red
+  def test_the_mandated_verdict_summary_line_is_not_a_finding
+    assert_empty CriticEval.findings("**Verdict**: 2 findings (0 must-fix)\n")
+    assert_empty CriticEval.findings("Verdict: 3 findings (1 must-fix)\n")
+  end
+
+  # The exemption is the summary line's shape, not the word "Verdict". A
+  # count reports how many findings carry a rank; anything else on that
+  # line is asserting one, and an over-broad exemption would hide it.
+  # sabotage: exempt any Verdict-labeled line -> this goes red
+  def test_a_verdict_line_that_asserts_a_rank_is_still_a_finding
+    findings = CriticEval.findings("**Verdict**: must-fix - the rescue swallows the error path\n")
+
+    assert_equal ["must-fix"], findings.map { |f| f[:severity] }
+  end
+
+  def test_a_verdict_label_elsewhere_in_a_line_is_not_exempt
+    assert_equal 1, CriticEval.findings("The bead's verdict: 1 must-fix below\n").length
+  end
+
+  # Same run, second artifact: a finding whose body quotes the code it is
+  # about was cut off at the first `#` comment inside the fence, before the
+  # sentence that named the defect.
+  # sabotage: stop treating fenced lines as opaque in body_end -> red
+  def test_a_comment_inside_a_fenced_block_does_not_end_a_findings_body
+    text = <<~OUT
+      1. lib/a.rb:4 - must-fix
+         Both of these still read the old name:
+
+      ```ruby
+      # line 40, the drain loop
+      reader.pending.each { |row| row }
+      ```
+
+      Neither of those callers was updated.
+
+      ## Checks that passed
+    OUT
+
+    body = CriticEval.findings(text).first[:body]
+
+    assert_includes body, "callers"
+    refute_includes body, "Checks that passed"
+  end
+
+  # sabotage: drop the fenced check in the starts scan -> this goes red
+  def test_a_severity_named_inside_a_fenced_block_is_not_a_finding
+    text = "1. lib/a.rb:4 - must-fix\n   Quoting the old output:\n\n```\nSeverity: should-fix\n```\n"
+
+    assert_equal ["must-fix"], CriticEval.findings(text).map { |f| f[:severity] }
+  end
+
+  # A fence closes on its own marker, so a ``` quoted inside a ~~~ block
+  # does not reopen the document to headings partway through a body.
+  def test_a_fence_closes_only_on_its_own_marker
+    text = "1. lib/a.rb:4 - must-fix\n   Quoting:\n\n~~~\n```\n# not a heading\n~~~\n\nthe callers are stale.\n"
+
+    assert_includes CriticEval.findings(text).first[:body], "callers"
+  end
+
   def test_a_findings_body_stops_at_the_next_heading
     text = "1. lib/a.rb:4 - must-fix\n   The rescue swallows it.\n\n## Checks that passed\n\n- nothing else\n"
 
@@ -163,6 +227,8 @@ class CriticEvalCliTest < Minitest::Test
   FIXTURES = File.expand_path(File.join(__dir__, "fixtures", "critic_eval"))
   CORPUS = File.join(FIXTURES, "corpus")
   OUTPUTS = File.join(FIXTURES, "outputs")
+  INCIDENT_CORPUS = File.join(FIXTURES, "incidents", "corpus")
+  INCIDENT_OUTPUTS = File.join(FIXTURES, "incidents", "outputs")
 
   def run_cli(argv)
     io = StringIO.new
@@ -198,6 +264,41 @@ class CriticEvalCliTest < Minitest::Test
 
     assert_equal 0, code
     assert_includes env["warnings"].map { |w| w["code"] }, "below_trust_bar"
+  end
+
+  # The two cases the first real trust-bar run (2026-09-17) exposed, saved
+  # in the mandated output format: a clean review whose only severity count
+  # is the Verdict line, and a must-fix whose body quotes code with `#`
+  # comments in it. Both scored wrong before the parser rules landed - this
+  # corpus reads 0.0 / 0.0 under the old parser and 1.0 / 1.0 under the new
+  # one, which is the whole regression.
+  def test_the_incident_corpus_scores_clean
+    _code, env = run_cli(["--corpus", INCIDENT_CORPUS, "--outputs", INCIDENT_OUTPUTS])
+
+    assert env["ok"]
+    assert_equal({ "hit" => 1, "miss" => 0, "false_positive" => 0, "true_negative" => 1 },
+                 env["data"]["counts"])
+    assert_in_delta 1.0, env["data"]["precision"]
+    assert_in_delta 1.0, env["data"]["recall"]
+  end
+
+  def test_a_saved_output_whose_only_severity_is_the_verdict_line_blocks_nothing
+    _code, env = run_cli(["--corpus", INCIDENT_CORPUS, "--outputs", INCIDENT_OUTPUTS])
+
+    scored = env["data"]["cases"].find { |c| c["id"] == "verdict-summary-only" }
+
+    assert_equal "true_negative", scored["outcome"]
+    assert_equal 0, scored["blocking_count"]
+    assert_equal 2, scored["findings_count"]
+  end
+
+  def test_a_finding_body_carrying_a_fenced_block_is_read_to_its_real_end
+    _code, env = run_cli(["--corpus", INCIDENT_CORPUS, "--outputs", INCIDENT_OUTPUTS])
+
+    scored = env["data"]["cases"].find { |c| c["id"] == "fenced-code-body" }
+
+    assert_equal "hit", scored["outcome"]
+    assert_equal 1, scored["findings_count"]
   end
 
   def test_agent_filter_keeps_only_that_agents_cases

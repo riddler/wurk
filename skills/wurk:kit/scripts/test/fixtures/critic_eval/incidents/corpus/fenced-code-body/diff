@@ -1,0 +1,7 @@
+diff --git a/lib/queue_reader.rb b/lib/queue_reader.rb
+index 3333333..4444444 100644
+--- a/lib/queue_reader.rb
++++ b/lib/queue_reader.rb
+@@ -6,7 +6,7 @@ class QueueReader
+-  def pending = @rows.select { |r| r[:state] == "pending" }
++  def pending_rows = @rows.select { |r| r[:state] == "pending" }

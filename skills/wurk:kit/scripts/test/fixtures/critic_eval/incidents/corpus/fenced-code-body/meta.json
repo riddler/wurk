@@ -1,0 +1,6 @@
+{
+  "label": "bad",
+  "agent": "wurk-diff-critic",
+  "expect": { "severity": "must-fix", "contains": "callers" },
+  "why": "the un-updated callers are named after a fenced block whose `#` comment lines the scorer once read as a heading, cutting the body off before the sentence that identified the defect"
+}

@@ -205,7 +205,10 @@ finding that carries the expected substring is a **hit**, a `bad` case
 without one is a **miss**, a `good` case with any blocking finding is a
 **false positive**, and a `good` case without one is a **true negative**.
 Precision is hits over hits plus false positives; recall is hits over the
-`bad` cases. `data.meets_bar` answers the question the bar asks;
+`bad` cases. The mandated summary line is exempt: a `Verdict:` line whose
+only severity mention is a count (`N findings (M must-fix)`) reports how
+many findings carry a rank rather than asserting one, so it is not itself a
+finding - a `Verdict:` line that ranks something instead still is. `data.meets_bar` answers the question the bar asks;
 `data.cases` says which case moved the number, which is the half worth
 reading when it fails.
 
@@ -220,7 +223,11 @@ The kit ships a four-case worked example under
 outcome, scoring 0.5 and 0.5. It is what the scorer's own tests run on,
 and it is a corpus that fails the bar on purpose: a critic with one hit,
 one miss and one false positive out of four is exactly the one that should
-not be blocking anything yet.
+not be blocking anything yet. A second, two-case corpus sits beside it under
+`incidents/`, holding the output shapes that once scored wrong - a clean
+review carrying only the summary line, and a finding whose body quotes code.
+It scores 1.0 and 1.0, and is kept separate so the worked example's numbers
+stay the ones this section names.
 
 ### When to re-run it
 

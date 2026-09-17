@@ -60,17 +60,32 @@ module CriticEval
     #   ("3. lib/a.rb:14 - must-fix" with the prose under it), so a
     #   corpus's expected substring has to be matched against the block,
     #   not the one line that carries the rank.
+    # - The mandated summary line is not a finding. The output format the
+    #   recipe mandates opens with `**Verdict**: N findings (M must-fix)`,
+    #   which names exactly one severity and so satisfied both rules above:
+    #   every clean output scored as a blocking finding, and every good
+    #   case as a false positive, whatever the review said.
+    # - A fenced block is opaque. A finding's body routinely quotes the
+    #   code it is about, and a `#` comment inside that quote is not a
+    #   heading - reading it as one cut the body off before the sentence
+    #   that named the defect.
     def findings(text, severities: SEVERITIES)
       lines = text.to_s.lines
+      fenced = fenced_map(lines)
       starts = []
       lines.each_with_index do |raw, idx|
+        next if fenced[idx]
+
         hits = severities.select { |sev| raw =~ severity_matcher(sev) }
-        starts << [idx, hits.first] if hits.length == 1
+        next unless hits.length == 1
+        next if verdict_summary?(raw, hits.first)
+
+        starts << [idx, hits.first]
       end
 
       starts.each_with_index.map do |(idx, severity), n|
         next_start = starts[n + 1] ? starts[n + 1][0] : lines.length
-        stop = body_end(lines, idx, next_start)
+        stop = body_end(lines, idx, next_start, fenced)
         {
           severity: severity,
           line: idx + 1,
@@ -82,12 +97,58 @@ module CriticEval
 
     # Where a finding's block stops: the next finding, or the first
     # heading before it - a "## Checks that passed" section under the last
-    # finding is not part of that finding.
-    def body_end(lines, start_idx, next_start)
+    # finding is not part of that finding. A `#` line inside a fenced
+    # block is a comment in quoted code, never a heading.
+    def body_end(lines, start_idx, next_start, fenced = nil)
+      fenced ||= fenced_map(lines)
       ((start_idx + 1)...next_start).each do |i|
+        next if fenced[i]
+
         return i if lines[i] =~ /\A\s{0,3}\#{1,6}\s/
       end
       next_start
+    end
+
+    # Which lines sit inside a fenced code block, as an index-aligned array
+    # of booleans. The fence lines themselves count as fenced: an opener
+    # carries an info string (```ruby) and a closer carries nothing, and
+    # neither is a finding or a heading.
+    #
+    # A fence closes only on its own marker character, so a ~~~ quoted
+    # inside a ``` block does not end it. An unclosed fence runs to the end
+    # of the output, which is what a reader of the raw markdown sees too.
+    def fenced_map(lines)
+      marker = nil
+      lines.map do |line|
+        opener = line[/\A\s{0,3}(`{3,}|~{3,})/, 1]
+        if marker.nil?
+          marker = opener[0] if opener
+          !opener.nil?
+        elsif opener && opener[0] == marker
+          marker = nil
+          true
+        else
+          true
+        end
+      end
+    end
+
+    # Whether this line is the mandated summary line rather than a finding.
+    # Two conditions, and the second is what keeps the exemption narrow:
+    #
+    # - The line is labeled `Verdict:` - the template's own shape, allowing
+    #   the emphasis and list markers agents wrap it in.
+    # - Every mention of the severity on it is a COUNT (`0 must-fix`,
+    #   `1 must-fix`). A summary reports how many findings carry a rank; it
+    #   never asserts one. So a line that reads `**Verdict**: must-fix -
+    #   the rescue swallows the error` is still a finding, and an agent
+    #   cannot hide a real one by moving it onto the summary line.
+    def verdict_summary?(line, severity)
+      return false unless line =~ /\A\s{0,3}(?:[-*+]\s+)?[*_]{0,2}verdict[*_]{0,2}\s*:/i
+
+      mentions = line.scan(severity_matcher(severity)).length
+      counted = line.scan(/\d+\s*#{Regexp.escape(severity)}(?![\w-])/i).length
+      mentions.positive? && mentions == counted
     end
 
     # Word-boundary and case-insensitive, so `**must-fix**`, `- must-fix:`
