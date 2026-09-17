@@ -229,6 +229,41 @@ Gate discipline (learned the expensive way, campaigns 004 and 007):
   stop - and the work existed only as uncommitted edits in a worktree
   nobody came back to.
 
+Verification hygiene (how to READ the result the gate hands back):
+
+The block above is about waiting for the gate; this is about reading its
+answer. Three misreadings, each of which turned a real signal into a wrong
+verdict:
+
+- **A failure you may have caused yourself is not a flake until it
+  survives isolation.** Running several suites at once, or gating while a
+  warm is still going, creates load the gate then fails under - the failure
+  is real, it is just about your machine rather than your branch. Before
+  reading such a run as red, re-run the failing test alone with nothing
+  else of yours running. What survives isolation is a finding; what does
+  not is load you should stop creating, and never a flake bead. A flake
+  bead filed off a single loaded run sends the next reader after a defect
+  that was never there.
+- **The verdict is the envelope, never a piped tail.** `gate.rb` answers
+  with `ok` and an exit status, and that pair IS the verdict. A pipe
+  reports the last command's status, so `<gate> | tail -20` exits 0
+  whatever the gate did - it reads green off a red run every time. Send the
+  full output to a bead-prefixed file, take the verdict from the run's own
+  exit status and summary line, and hand a large file to
+  **wurk-gate-reader** rather than slicing it. Trim what you READ, never
+  what you TEST.
+- **An environmental error is neither a pass nor a failure.** A missing
+  container runtime, a daemon that does not answer, an image that cannot be
+  pulled, a checkout the gate cannot see: the gate did not measure the
+  branch, so it holds no verdict about it. That is the skipped
+  classification, named in docs/gate-contract.md by the section
+  "What is a skip and what is a failure", whose vocabulary it uses: a
+  `data.skip_code`, `status: "skipped"`, one warning, `ok: true`. Report
+  the skip WITH its reason, name the coverage nobody got, and leave the
+  fuller run to whoever can run it. Calling it a pass claims coverage that
+  does not exist; calling it a failure sends someone hunting a regression
+  in a branch the gate never read.
+
 Relaying your dispatch to subagents (learned in campaign 007):
 
 You may spawn subagents, and a subagent knows only what you typed into
