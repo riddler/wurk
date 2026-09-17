@@ -372,7 +372,8 @@ wave; skipping it is never an option.
 Ready-graph: `bd ready` + open beads, joined with dependency edges and
 the campaign scope. Output: topologically ordered work list with
 blocked-by annotations. Re-render after every completion or discovery
-and journal the render ("N done / N running / N blocked; next: ...").
+and journal the render as [graph] ("N done / N running / N blocked;
+next: ...").
 
 A bead the invocation pre-decides as superseding or absorbing an
 out-of-scope blocker (a pre-decided contract fork, per Invocation) is
@@ -764,11 +765,11 @@ Every wake - a task-notification, a SendMessage reply, a Monitor event,
 a Monitor expiry, a resume, an operator message - triggers a sweep of
 the WHOLE running set, not just the bead the wake names. Sweep = for
 each running bead read three things: the report file (exists? then read
-it and land the bead as a [complete] or [state] entry exactly as if the
-notification had arrived), the report dir's mtimes (`ls -lt <reports
+it and land the bead as a [complete], [partial] or [state] entry
+exactly as if the notification had arrived), the report dir's mtimes (`ls -lt <reports
 dir>`), and the newest commit / mtime in the bead's worktree (`git -C
 <worktree> log -1 --format='%ci %h %s'`, plus `git status --porcelain`
-for uncommitted movement). Journal the sweep briefly as [state] when it
+for uncommitted movement). Journal the sweep briefly as [probe] when it
 changes anything.
 
 The heartbeat: notifications are hints, so do not wait for one. Arm a
@@ -865,7 +866,7 @@ for an hour.
    ignores the worktree's uncommitted edits. Everything else keeps its
    worker and waits for the next sweep.
 
-A resume's first journal entry is a [state] render saying what was
+A resume's first journal entry is a [graph] render saying what was
 reconstructed and from which files, so the next resume can verify it -
 and, in a dogfooding campaign, the commit its conductor prose was
 loaded from, because a resume is the moment a landed skill change
@@ -908,11 +909,11 @@ this campaign touched): `bead.rb sync scan`, then read its result - a
 `blocked` `outbound_scan_hit` is the refusal, from the Outbound content
 section's rule, never a rephrase-and-retry; `data.informational_hits`
 go into the journal by id and fields - and only then `bead.rb sync
-push`, journaling `data.confirmed`. This runs in place of a hand-run
+push`, journaling `data.confirmed` as [tracker-push]. This runs in place of a hand-run
 scan and a bare `bd dolt push`, and only where the repo's `beads.sync`
 is `git` or `dolthub`. Under `local` (including an unset key, which
 defaults to `local`) there is no tracker push at all: journal "tracker
-is local-only, nothing pushed" and land the rest. The conductor owning
+is local-only, nothing pushed" as [tracker-push] and land the rest. The conductor owning
 tracker pushes never means it may make one the repo's manifest forbids.
 
 Supersede-then-close, both modes: the tracker enforces its edges at
@@ -1210,24 +1211,130 @@ dir, or `.claude/campaigns/journal/` when none exists; include the
 campaign id in the filename when the project runs concurrent
 campaigns) - the campaign must be resumable from the journal alone. Closed event vocabulary:
 
-    [dispatch] [complete] [state] [discovery] [scope] [operator]
-    [refusal] [conductor-error] [cleanup] [correction] [incident]
-    [ruling-queued] [stale] [adoption]
+    [dispatch] [complete] [partial] [state] [graph] [probe] [verify]
+    [discovery] [premise-corrected] [scope] [held] [operator]
+    [ruling-queued] [ruling-taken] [refusal] [resource] [incident]
+    [conductor-error] [correction] [cleanup] [adoption] [tracker-push]
+    [cross-campaign] [stale]
+
+The vocabulary is CLOSED, and every type in it is one a reader greps
+for. A campaign that wants a type the list does not have files a retro
+schema gap (Phase 6) and uses the nearest existing type meanwhile; it
+does not invent a spelling. Ad-hoc spellings are how a journal stops
+being machine-comparable across campaigns, and they read as vocabulary
+to the next conductor.
 
 `[dispatch]` carries (bead, worktree, model tier, the one-line tier
-reason from Phase 3's rubric; on an escalation, the rung it came from).
+reason from Phase 3's rubric; on an escalation, the rung it came from);
+a dispatch that releases a hold names the `[held]` entry it releases.
 `[complete]` carries (bead, PR-or-merge, base, sha, gate, scan,
-bead-status). `[stale]` carries (bead, minutes since last
-report/commit/journal movement, each liveness probe and what it
+bead-status), and means the bead's WHOLE scope is done. `[partial]`
+carries everything `[complete]` carries, plus (what was not done, why
+it stopped, where the remainder is recorded - a bead, a queue item, or
+the ruling it waits on). A bead that lands its first commit and blocks
+on a ruling, or finishes everything but one test, is `[partial]`; the
+ad-hoc spellings one campaign reached for on the way to this type,
+`[complete-partial]` and `[complete-pending-landing]`, are not
+vocabulary, they are this type. `[stale]` carries (bead, minutes since
+last report/commit/journal movement, each liveness probe and what it
 returned, decision). `[operator]` records mid-campaign operator
 instructions with the scope you gave them; when it is a consent
-carve-out, quote it. `[adoption]` carries (what landed, sha, kind:
-skill prose / agent definition / kit script, moment: next campaign /
-next dispatch / next shell-out / this campaign by hand from here) for
-every landing that rewrites a file the running conductor depends on
-(Phase L's adoption rule); a resume's first `[state]` render names the
-commit its prose was loaded from for the same reason. An event
-fitting no type: nearest type + a retro schema-gap entry.
+carve-out, quote it; when it answers a queued ruling, it names the
+ruling. `[adoption]` carries (what landed, sha, kind: skill prose /
+agent definition / kit script / none - a landing that touches nothing
+the conductor runs on, moment: next campaign / next dispatch / next
+shell-out / this campaign by hand from here) for every landing that
+rewrites a file the running conductor depends on (Phase L's adoption
+rule); a resume's first `[graph]` render names the commit its prose was
+loaded from for the same reason.
+
+`[graph]` carries (N done / N running / N blocked, next, and beside any
+bd-blocked bead the render carries, the pre-decision that put it there)
+- Phase 2's render, and a resume's first entry.
+
+`[probe]` carries (what was probed, the command run, what it returned,
+what it changed). Sweeps on wake, Phase 3's claim-and-probe, and any
+liveness check outside a stall ladder. A probe whose conclusion is that
+a worker has stalled is `[stale]`; the probe type is for the check
+itself, including one whose answer is that nothing is wrong (Sweep on
+every wake governs when a no-op sweep is worth a line at all).
+
+`[verify]` carries (the claim, who made it, how you re-checked it, the
+result). The conductor re-running a gate a worker reported green,
+auditing the deletions a diff claims, grepping the citations a worker
+says it fixed, a second worker corroborating a first, a diff-scope
+audit against the campaign's closing invariant. `[verify]` is the
+conductor's own check and `[complete]` is what the worker reported;
+collapsing them loses the distinction an operator most wants.
+**A measured non-event is worth an entry.** "The sibling tests did NOT
+trip the new refusal", "the demo stack is unaffected, confirmed from
+the branch it was built from" are `[verify]` entries, not prose inside
+a `[complete]`: they are claims a later reader cannot reconstruct and
+will want to audit, and buried in prose they are indistinguishable
+from never having been checked.
+
+`[premise-corrected]` carries (what was believed, what was measured,
+what held the belief - a bead, a dispatch, the campaign file - and
+whether any sibling rests on the same belief). Both directions belong
+here: a dispatch-time assumption a worker disproved, and a bead whose
+own premise was false. The sibling field is the point, because a false
+premise usually has company and the correction outlives the campaign.
+A Phase 1 ground-truth delta that CONTRADICTS the campaign file is
+this type; one that merely records what is there is `[state]`.
+`[correction]` remains the conductor's broadcast to workers when a
+dispatch-time assumption dies, and carries its target (a worker, every
+in-flight worker, or the conductor's own procedure from here on).
+
+`[held]` carries (what was held, what it waits on, why). A bead
+deliberately NOT dispatched - two beads that must be decided in order
+though their files are disjoint, a contended resource - as distinct
+from a bead merely not reached yet, which is the graph's business. A
+reader resuming from the journal alone cannot otherwise tell the two
+apart, and the reason is what stops the next conductor from undoing the
+decision. A bead that WAS dispatched with its scope narrowed off a file
+is `[scope]`, not `[held]`.
+
+`[ruling-taken]` carries (the question, the rule or precedent it
+resolves under, the decision, what it unblocks). The conductor settling
+a queued ruling ITSELF, where a rule the operator already gave decides
+a new fact, and any large sequencing judgement the conductor makes on
+its own authority. It is the exact opposite act from its pair
+`[ruling-queued]`, which is refusing to decide and handing the question
+up - so a `[ruling-queued]` with neither a `[ruling-taken]` nor an
+`[operator]` entry naming it is an unresolved ruling, and that is the
+grep. A ruling the operator decided but that is enacted later says so
+in the `[operator]` entry and again in the `[complete]` or `[partial]`
+that enacts it.
+
+`[resource]` carries (the resource, what the run occupies or what ran
+out, the effect on the campaign, whether it is still in force).
+Infrastructure rather than the work: Phase 0's gate measurement and
+what a run occupies while it holds it, a spend limit or quota kill, a
+dead MCP server, a full disk. This is never `[incident]`, which is for
+authority-chain and scope violations and carries the connotation that
+someone did something wrong.
+
+`[tracker-push]` carries (the scan result, the informational hits by id
+and field, `data.confirmed`) or the local-only negative - Phase L's
+scan-and-push pair, which is the one journal line that says whether the
+tracker a resumer is about to read is current.
+
+`[cross-campaign]` carries (the other campaign, what of its state you
+touched, and the owner re-read plus liveness probe behind it), and is
+written to BOTH journals. Required by the multi-campaign protocol in
+REFERENCE.md.
+
+`[refusal]` says whether the refused condition was one-off or STANDING
+- still in force when the campaign ends - and a standing one is
+repeated in the report's queue. A reader resuming from the journal
+alone otherwise cannot tell a cleared refusal from a live one, and a
+campaign-wide refusal is exactly the kind that outlives the campaign.
+`[discovery]` names what it blocks: the dependent bead, or `nothing`.
+Phase 5 prescribes only the blocking case, and one type for both
+flattens a real distinction - one stops work, the other is a surplus
+find worth keeping.
+
+An event fitting no type: nearest type + a retro schema-gap entry.
 
 **Campaign state lives outside what the campaign publishes.** The
 journal, the morning report, scratch files and any status doc the
