@@ -95,6 +95,14 @@ ready set reflects the real build order rather than a flat list. Where the
 bead belongs to an epic, link it as a child (`--parent` at create time, or
 `--type parent-child` here).
 
+`--parent` at create time also unions the parent's labels onto the child -
+`bd create --help` says it inherits them. A child filed under a labelled epic
+therefore comes out carrying the epic's areas on top of its own, and a label
+set that is the union of two predictions predicts nothing. Either file the
+epic with no area labels and label only the children, or set each child's own
+areas after the create and remove what came across. Then read the labels back
+(see **Apply labels** below).
+
 ## Apply labels
 
 ```bash
@@ -135,6 +143,20 @@ undecided".
 **An unlabeled bead is not neutral: it is unpickable.** `/wurk:next` skips it
 as "blast radius undecided". Labeling at creation is cheaper than the round
 trip.
+
+**Write the labels, then read them back.** The id comes FIRST in `label add`;
+called label-first the command still succeeds and attaches the bead ids as
+labels. The exit line reports the call, not the state, so confirm the state
+itself - `data.labels` on the bead:
+
+```bash
+ruby ~/.claude/skills/wurk:kit/scripts/bead.rb show <id>
+```
+
+Three filing mistakes all end in the same place, a label set that predicts
+nothing: no labels at all, the parent's areas unioned on by `--parent` (see
+**Link dependencies** above), and a label-first `label add`. One read-back
+catches all three.
 
 ## Report
 

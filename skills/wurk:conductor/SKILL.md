@@ -1193,7 +1193,10 @@ hour later, had to label all nine by hand before it could plan a wave.
 Where you genuinely cannot predict the files, label the areas you can
 and say in the bead which part is unpredicted, rather than leaving the
 field empty - an empty field reads as "not applicable", and a stated
-gap reads as a gap.
+gap reads as a gap. File through `/wurk:issue` and obey its **Apply
+labels** rule, which covers the two ways a labelled filing still comes
+out wrong - `--parent` unioning the epic's areas onto the child, and a
+label-first `label add` - and the read-back that catches both.
 
 ## Phase L - Landing
 
