@@ -1786,6 +1786,26 @@ was written down here. Judging which detail is load-bearing is yours,
 and the test is whether a reader with no access to this campaign could
 tell what went wrong from the bead alone.
 
+**Classify every defect bead prose or guard, at filing time.** One
+campaign fixed a previous retro's whole bead set as prose, and some of
+those mistakes were deterministically detectable - a gate verdict read
+through a pipe, a note appended to the wrong line. Prose is the weakest
+home a machine-catchable mistake can have, and the choice is easiest
+while the incident is still in front of you, so the bead carries a
+line: PROSE, naming the home the fix belongs in per
+`docs/harness-placement.md`, or GUARD, naming which of the three forms
+it would take - a hook, a kit check, or a contract test in the suite.
+Read `docs/recipes/lesson-to-guard.md` before writing GUARD on a bead:
+it carries the triage question, the refusal rule that keeps a
+judgement-only or flaky check out of the gate, the bar a class has to
+clear, and what a guard must carry before it lands - and the refusal
+rule disqualifies more candidates than it admits. A line in the bead,
+not a label vocabulary: a label would have to be agreed across trackers
+and would drop the one-sentence reason, which is the part the bead's
+eventual worker actually needs. The classification is your judgement
+and that worker may overturn it; what is not optional is that the bead
+says which one was meant and why.
+
 ## Appendix - dispatch template
 
 Every dispatch carries this invariant block verbatim (fill the slots):
