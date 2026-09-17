@@ -1074,6 +1074,7 @@ class WorktreeCreateTest < Minitest::Test
       @fake.expect(%w[git worktree list --porcelain], out: worktree_list(root, []))
       @fake.expect(["git", "merge", "--ff-only", REMOTE_SHA], exitstatus: 1,
                                                               err: "error: Your local changes would be overwritten\n")
+      @fake.expect(%w[git status --porcelain --untracked-files=no], out: "")
 
       code, env = run_create(["zz-abc-new-thing"])
 
@@ -1081,6 +1082,147 @@ class WorktreeCreateTest < Minitest::Test
       assert_equal "preflight_refused", env["blocked"].first["code"]
       assert_equal "fast_forward_failed", env["data"]["preflight"]["reason"]
       assert_match(/local changes would be overwritten/, env["blocked"].first["message"])
+    end
+  end
+
+  # --- --stash-dirty: the sanctioned way past a dirty-tree fast-forward ----
+  #
+  # An unattended caller (a conductor) aborted a whole campaign on one
+  # uncommitted edit outside its footprint, and its queued successor then
+  # aborted on the same edit. The remedy is a named stash, reported with
+  # its restore command, followed by the retried fast-forward. Off by
+  # default: a human at the keyboard decides about their own edits.
+
+  # Without the flag the refusal now carries what a caller needs to know
+  # the remedy exists: the dirty paths and the exact stash it did not run.
+  #
+  # sabotage: stash without the flag -> red (no stash push is registered,
+  # FakeSh raises), and the refusal below would be missing.
+  def test_preflight_refusal_names_the_dirty_paths_without_stashing
+    with_scratch_repo do |root, _worktrees_root|
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+      @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_shas(local: LOCAL_SHA, remote: REMOTE_SHA)
+      @fake.expect(["git", "merge-base", "--is-ancestor", LOCAL_SHA, REMOTE_SHA], out: "")
+      @fake.expect(%w[git worktree list --porcelain], out: worktree_list(root, []))
+      @fake.expect(["git", "merge", "--ff-only", REMOTE_SHA], exitstatus: 1, err: "error: Your local changes would be overwritten\n")
+      @fake.expect(%w[git status --porcelain --untracked-files=no], out: " M .gitleaks.toml\nM  docs/x.md\n")
+
+      code, env = run_create(["zz-abc-new-thing"])
+
+      assert_equal 1, code
+      assert_equal "fast_forward_failed", env["data"]["preflight"]["reason"]
+      assert_equal [".gitleaks.toml", "docs/x.md"], env["data"]["preflight"]["dirty_paths"]
+      assert_includes env["data"]["preflight"]["repair"], "git stash push --message"
+      assert_includes env["data"]["preflight"]["repair"], "--stash-dirty"
+      refute env["data"]["preflight"].key?("stash")
+      refute @fake.calls.any? { |c| c.argv[0, 2] == %w[git stash] }
+    end
+  end
+
+  # With the flag: stash exactly the dirty tracked paths under a message
+  # naming this script, retry the fast-forward, cut, and report the stash
+  # with its restore command so the edits are never silently lost.
+  #
+  # sabotage: drop the retry and report fast_forwarded on the first failure
+  # -> red (the second merge expectation is left unconsumed by verify!, and
+  # the branch would be cut from a base that never moved).
+  def test_preflight_stash_dirty_stashes_tracked_edits_and_retries_the_fast_forward
+    with_scratch_repo do |root, worktrees_root|
+      path = File.join(worktrees_root, "zz-abc-new-thing")
+      stash_sha = "5555555555555555555555555555555555555555"
+
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+      @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_shas(local: LOCAL_SHA, remote: REMOTE_SHA)
+      @fake.expect(["git", "merge-base", "--is-ancestor", LOCAL_SHA, REMOTE_SHA], out: "")
+      @fake.expect(%w[git worktree list --porcelain], out: worktree_list(root, []))
+      @fake.expect(["git", "merge", "--ff-only", REMOTE_SHA], exitstatus: 1, err: "error: Your local changes would be overwritten\n")
+      @fake.expect(%w[git status --porcelain --untracked-files=no], out: " M .gitleaks.toml\n")
+      @fake.expect(["git", "stash", "push", "--message"], out: "Saved working directory\n")
+      @fake.expect(["git", "rev-parse", "--verify", "--quiet", "stash@{0}"], out: "#{stash_sha}\n")
+      @fake.expect(["git", "merge", "--ff-only", REMOTE_SHA], out: "Fast-forward\n")
+      @fake.expect(["mkdir", "-p", worktrees_root], out: "")
+      @fake.expect(["git", "worktree", "add", path, "-b", "zz-abc-new-thing", "--no-track", "origin/main"], out: "")
+      @fake.expect(["faketool", "trust", path], out: "")
+      @fake.expect(["cp", "-Rfc", "vendor", "build", "#{path}/"], out: "")
+      @fake.expect(%w[faketool fetch], out: "")
+      @fake.expect(%w[make quick], out: "loop green\n")
+
+      code, env = run_create(["zz-abc-new-thing", "--stash-dirty"])
+
+      assert_equal 0, code
+      assert_equal true, env["ok"]
+      assert_equal "fast_forwarded", env["data"]["preflight"]["status"]
+      stash = env["data"]["preflight"]["stash"]
+      assert_equal stash_sha, stash["sha"]
+      assert_equal [".gitleaks.toml"], stash["paths"]
+      assert_equal "git stash pop #{stash_sha}", stash["restore"]
+      assert_match(/worktree_create\.rb preflight .*\.gitleaks\.toml/, stash["message"])
+      stash_call = @fake.calls.find { |c| c.argv[0, 3] == %w[git stash push] }
+      assert_equal root, stash_call.chdir
+      assert_equal ["--", ".gitleaks.toml"], stash_call.argv[-2..], "stash exactly the dirty tracked paths, nothing else"
+      assert env["warnings"].any? { |w| w["code"] == "preflight_stashed" && w["message"].include?(stash_sha) }, env["warnings"].inspect
+      @fake.verify!
+    end
+  end
+
+  # Untracked files are never stashed: an untracked file in the way (the
+  # remote added a file at that path) is not an "edit", and stashing it
+  # would move something the operator may not know exists. With no tracked
+  # dirt the flag changes nothing and the refusal stands.
+  #
+  # sabotage: use `git status --porcelain` without --untracked-files=no
+  # and stash whatever comes back -> red (the stash push is unregistered).
+  def test_preflight_stash_dirty_never_stashes_untracked_files
+    with_scratch_repo do |root, _worktrees_root|
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+      @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_shas(local: LOCAL_SHA, remote: REMOTE_SHA)
+      @fake.expect(["git", "merge-base", "--is-ancestor", LOCAL_SHA, REMOTE_SHA], out: "")
+      @fake.expect(%w[git worktree list --porcelain], out: worktree_list(root, []))
+      @fake.expect(["git", "merge", "--ff-only", REMOTE_SHA], exitstatus: 1, err: "error: untracked working tree files would be overwritten\n")
+      @fake.expect(%w[git status --porcelain --untracked-files=no], out: "")
+
+      code, env = run_create(["zz-abc-new-thing", "--stash-dirty"])
+
+      assert_equal 1, code
+      assert_equal "fast_forward_failed", env["data"]["preflight"]["reason"]
+      refute env["data"]["preflight"].key?("dirty_paths")
+      refute env["data"]["preflight"].key?("stash")
+      refute @fake.calls.any? { |c| c.argv[0, 2] == %w[git stash] }
+    end
+  end
+
+  # A fast-forward that still fails after the stash refuses as before, and
+  # the message carries the restore command so the stash is not orphaned.
+  def test_preflight_stash_dirty_refuses_with_the_restore_command_when_the_retry_fails
+    with_scratch_repo do |root, _worktrees_root|
+      stash_sha = "5555555555555555555555555555555555555555"
+
+      expect_location(root)
+      @fake.expect(["git", "branch", "--list", "zz-abc-new-thing"], out: "")
+      @fake.expect(%w[git fetch origin], out: "")
+      expect_preflight_shas(local: LOCAL_SHA, remote: REMOTE_SHA)
+      @fake.expect(["git", "merge-base", "--is-ancestor", LOCAL_SHA, REMOTE_SHA], out: "")
+      @fake.expect(%w[git worktree list --porcelain], out: worktree_list(root, []))
+      @fake.expect(["git", "merge", "--ff-only", REMOTE_SHA], exitstatus: 1, err: "error: Your local changes would be overwritten\n")
+      @fake.expect(%w[git status --porcelain --untracked-files=no], out: " M .gitleaks.toml\n")
+      @fake.expect(["git", "stash", "push", "--message"], out: "Saved\n")
+      @fake.expect(["git", "rev-parse", "--verify", "--quiet", "stash@{0}"], out: "#{stash_sha}\n")
+      @fake.expect(["git", "merge", "--ff-only", REMOTE_SHA], exitstatus: 1, err: "error: still blocked\n")
+
+      code, env = run_create(["zz-abc-new-thing", "--stash-dirty"])
+
+      assert_equal 1, code
+      assert_equal "preflight_refused", env["blocked"].first["code"]
+      assert_equal "fast_forward_failed", env["data"]["preflight"]["reason"]
+      assert_includes env["blocked"].first["message"], "git stash pop #{stash_sha}"
+      assert_equal stash_sha, env["data"]["preflight"]["stash"]["sha"]
+      refute env["commands"].any? { |c| c.include?("git worktree add") }
     end
   end
 

@@ -750,7 +750,25 @@ When on, after its `git fetch origin` and before any mutation, the script:
   - `default_checked_out_elsewhere` - the local default is behind and
     checked out in another worktree, whose tree this script must not move.
   - `fast_forward_failed` - the fast-forward itself failed (a dirty file in
-    its way); the local default is where it was.
+    its way); the local default is where it was. When the cause is
+    uncommitted edits to tracked files, `data.preflight.dirty_paths`
+    lists them and `data.preflight.repair` renders the stash the script
+    did not run.
+
+`worktree_create.rb --stash-dirty` is the one sanctioned way past that
+last refusal, for an unattended caller: with the flag, uncommitted edits
+to TRACKED files (never untracked ones) are stashed under a message
+naming the script, the stamp and the paths, the fast-forward is retried,
+and the cut proceeds with `data.preflight.stash` carrying `ref`, `sha`,
+`message`, `paths` and the exact `restore` command (`git stash pop
+<sha>`), plus a `preflight_stashed` warning. A fast-forward that still
+fails after the stash refuses `fast_forward_failed` as before, with the
+restore command in the message. The flag is off by default because a
+human at the keyboard should decide about their own edits; the
+conductor's self-clear rule (skills/wurk:conductor/SKILL.md) is what
+makes it legitimate for a scheduler-started run, and that rule requires
+a receipt the script cannot write - a journal line, a tracker bead, a
+report section - so the flag alone is never the whole remedy.
 
 Two conditions warn rather than refuse: `preflight_skipped` when either ref
 does not resolve (a clone that never fetched, or a default branch nobody

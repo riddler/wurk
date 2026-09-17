@@ -29,6 +29,9 @@ module WorktreeCreate
         opts.on("--base REF", "cut the branch from REF instead of the default branch (stacked work: the parent branch)") do |v|
           options[:base] = v
         end
+        opts.on("--stash-dirty", "preflight: when uncommitted edits to tracked files block the fast-forward, stash them (named, reported) and retry") do
+          options[:stash_dirty] = true
+        end
       end
       args = Cli.parse!(parser, argv)
       name = args.first
@@ -164,7 +167,8 @@ module WorktreeCreate
       # the local default branch's hygiene, which the next worktree, the
       # next refresh, and every merge-base a human runs by hand all read.
       if manifest.preflight?
-        passed = preflight(env, manifest, root: root, dry_run: dry_run, fetched: fetch_res.success?)
+        passed = preflight(env, manifest, root: root, dry_run: dry_run, fetched: fetch_res.success?,
+                                          stash_dirty: options[:stash_dirty] == true)
         return env.emit(io) unless passed
       else
         env.data[:preflight] = { "status" => "disabled" }
@@ -222,7 +226,21 @@ module WorktreeCreate
     # and `data.preflight.reason` names which condition (see docs/manifest.md
     # for the vocabulary). Exit code is the contract's 1 (blocked), never 2 -
     # 2 is a usage error with no envelope (skills/wurk:kit/REFERENCE.md).
-    def preflight(env, manifest, root:, dry_run:, fetched:)
+    #
+    # `stash_dirty` (--stash-dirty) is the one sanctioned way past a
+    # fast_forward_failed whose cause is uncommitted edits to TRACKED files
+    # in the main checkout: those edits are stashed under a message that
+    # names this script and the stamp, the fast-forward is retried, and the
+    # stash (ref, sha, paths, the exact restore command) is reported in
+    # `data.preflight.stash` plus a `preflight_stashed` warning, so nothing
+    # is lost and the caller can hand the operator the receipt. It exists
+    # for an unattended caller (a conductor) that would otherwise abort a
+    # whole campaign on a stray edit outside its footprint - a measured
+    # incident cost two campaigns one night. It is off by default because a
+    # human at the keyboard should decide about their own edits. It never
+    # stashes untracked files, and a fast-forward that still fails after
+    # the stash refuses exactly as before.
+    def preflight(env, manifest, root:, dry_run:, fetched:, stash_dirty: false)
       default = manifest.default_branch
       remote = manifest.remote_default_branch
       local_sha = rev_parse(env, root, "refs/heads/#{default}")
@@ -288,14 +306,72 @@ module WorktreeCreate
 
       ff_res = Sh.run(ff, chdir: root, envelope: env)
       unless ff_res.success?
-        return refuse_preflight(
-          env, report, "fast_forward_failed",
-          err_or(ff_res, "#{Sh.render(ff)} failed") + "; local #{default} is still behind #{remote}"
+        # Only a checked-out default can be blocked by a dirty tree
+        # (update-ref touches no working tree), and only tracked edits are
+        # ever stashed: an untracked file in the way stays a refusal.
+        dirty = checkout ? dirty_tracked_paths(env, root) : []
+        report["dirty_paths"] = dirty unless dirty.empty?
+
+        if dirty.empty? || !stash_dirty
+          unless dirty.empty?
+            report["repair"] = "#{Sh.render(stash_command(default, dirty), chdir: root)} (worktree_create.rb --stash-dirty does this and retries)"
+          end
+          return refuse_preflight(
+            env, report, "fast_forward_failed",
+            err_or(ff_res, "#{Sh.render(ff)} failed") + "; local #{default} is still behind #{remote}"
+          )
+        end
+
+        stash = stash_command(default, dirty)
+        stash_res = Sh.run(stash, chdir: root, envelope: env)
+        unless stash_res.success?
+          return refuse_preflight(
+            env, report, "fast_forward_failed",
+            "git stash of #{dirty.join(', ')} failed: #{err_or(stash_res, 'no output')}; local #{default} is still behind #{remote}"
+          )
+        end
+        sha = rev_parse(env, root, "stash@{0}")
+        report["stash"] = {
+          "ref" => "stash@{0}",
+          "sha" => sha,
+          "message" => stash[stash.index("--message") + 1],
+          "paths" => dirty,
+          "restore" => "git stash pop #{sha || 'stash@{0}'}"
+        }
+        env.warn(
+          code: "preflight_stashed",
+          message: "uncommitted edits to #{dirty.join(', ')} were stashed as #{sha || 'stash@{0}'} so #{default} could fast-forward; " \
+                   "restore with: #{report['stash']['restore']}"
         )
+
+        retry_res = Sh.run(ff, chdir: root, envelope: env)
+        unless retry_res.success?
+          return refuse_preflight(
+            env, report, "fast_forward_failed",
+            err_or(retry_res, "#{Sh.render(ff)} failed") + " after stashing #{dirty.join(', ')} (#{report['stash']['restore']}); " \
+            "local #{default} is still behind #{remote}"
+          )
+        end
       end
 
       report["status"] = "fast_forwarded"
       true
+    end
+
+    # Tracked paths with uncommitted edits in the main checkout: the ` M`,
+    # `M `, `MM`, `D`, `R` shapes of `git status --porcelain`, never `??`.
+    def dirty_tracked_paths(env, root)
+      res = Sh.run(%w[git status --porcelain --untracked-files=no], chdir: root, envelope: env)
+      return [] unless res.success?
+
+      res.out.to_s.each_line.map { |line| line.chomp[3..].to_s.split(" -> ").last.to_s.strip }.reject(&:empty?)
+    end
+
+    def stash_command(default, paths)
+      stamp = Time.now.utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+      ["git", "stash", "push", "--message",
+       "worktree_create.rb preflight #{stamp}: uncommitted edits on #{default} stashed so it could fast-forward (#{paths.join(', ')})",
+       "--"] + paths
     end
 
     def refuse_preflight(env, report, reason, message)
