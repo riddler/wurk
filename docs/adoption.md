@@ -58,7 +58,10 @@ later is `git pull` in this clone followed by `ruby install.rb` again: an
 edit to an already-linked file is live at once through the symlink, but a
 skill or agent added since the last install has no link until the script
 runs, and `manifest.rb check` then reports `mr_review_agent_missing` for
-an agent that is in the clone.
+an agent that is in the clone. A NEW agent needs more than the re-run:
+the harness reads its agent roster when a session starts, so a newly
+linked agent may only be spawnable by name once that roster reloads,
+which may be the next session.
 
 ## 1. Survey the repo before writing anything
 

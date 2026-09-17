@@ -1432,8 +1432,32 @@ each is read differently. Skill prose is loaded into the conductor's
 context at invocation and never re-read, so a landed skill change
 governs the NEXT campaign, or the next session that resumes this one
 (Resume from state), not this session. An agent definition is read by
-the harness at every Agent call, so a landed agent change governs the
-NEXT DISPATCH, with no opt-out. A kit script is read at every
+the harness at every Agent call, so a landed EDIT to an agent that is
+already installed governs the NEXT DISPATCH, with no opt-out. A NEW
+agent file is the case that rule does not cover, and it has been
+measured failing: `install.rb` links `agents/*.md` by name into the
+harness agents directory, so a file that did not exist at the last
+install has no link at all; and the harness reads its agent ROSTER
+when a session starts, so even a linked new agent may not be
+spawnable in the session that landed it. A landing session that
+dispatched a just-landed new agent was refused with "Agent type not
+found", while the regenerated EXISTING agents of the same campaign
+took effect at the next spawn exactly as the rule says, because their
+links and their names were already there. So a NEW agent takes effect
+only after `install.rb` has linked it AND the harness has reloaded
+its roster, which may be the next session - a session has also been
+measured picking up a newly linked agent without a restart, so a
+fresh session is the conservative moment rather than a hard
+requirement. Two things follow and neither is optional. The conductor
+CONFIRMS a new agent with an Agent call before it relies on one,
+because the roster is the half it cannot see, and a refusal naming
+the type is the answer rather than something to retry. And a landing
+that ADDS an agent file gets an `[adoption]` line saying the agent is
+NEW and naming both conditions; when running `install.rb` is outside
+the campaign's footprint, that same landing queues the install for
+the operator (the report's queue) instead of running it, and whatever
+the campaign meant to do with the agent is queued behind it. A kit
+script is read at every
 shell-out, so a landed script change governs the NEXT SHELL-OUT, with
 no opt-out. The conductor does not choose these moments; it names
 them. Every landing that touches one of the three files gets its own
