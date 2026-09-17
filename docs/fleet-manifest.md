@@ -237,9 +237,12 @@ two cases SKILL.md's Phase 4 and `/wurk:branch --base` already implement.
 
 An argv array: the landing invariant check, "a cheap, seconds-scale
 command on the merged tree between textual merge OK and next full gate"
-(SKILL.md, Phase L, LOCAL-ONLY mode). Fleet-wide, so it fits a fleet of
-one or a fleet whose repos share a toolchain; a fleet whose repos need
-different checks has no per-repo slot for them today.
+(SKILL.md, Phase L, "The landing invariant check, both modes"). Fleet-wide,
+so it fits a fleet of one or a fleet whose repos share a toolchain; a fleet
+whose repos need different checks has no per-repo slot for them today. A
+single-repo campaign has no fleet file at all and names the command in its
+campaign file instead, which is why this key's absence is not the only way
+a campaign can arrive at a landing check.
 
 ## What is deliberately not in the schema
 

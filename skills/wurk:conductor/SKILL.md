@@ -308,7 +308,12 @@ queues a note. Unrelated dirt - e.g. mobile lockfiles under a backend
 campaign, or an uncommitted edit on the default-branch checkout that
 blocks the kit preflight's fast-forward - is a self-clear (above):
 stash it through the kit, leave the receipt, continue. Never resolve
-tracker sync conflicts autonomously.
+tracker sync conflicts autonomously. Journal the tracker pull and its
+result - "pulled, N records" or "tracker is local-only, no pull" - the
+way the gate measurement below is journaled. One campaign fetched git
+only; its tracker push at wrap was rejected as behind the remote, and
+the journal could not say whether a pull had ever been attempted, so
+the recovery needed an operator ruling that a pull was allowed.
 
 **Measure the gate, once, per repo.** Actually run the repo's gate
 command on the synced checkout and journal two things: the wall-clock
@@ -942,17 +947,152 @@ expected outcome - journal it as success, not as an error to retry or
 investigate. The local branch goes with the worktree (the kit's
 worktree_cleanup.rb removes it on the forge's merged signal).
 
+**The merge's exit status gates every later landing step.** A landing is
+a sequence, and every step after the merge - the landing invariant, the
+gate, the bead close, the worktree removal, the branch delete - is
+conditional on the merge having actually happened. Read the merge's exit
+status AND its full output before any of them; this is Confirming your
+own commands applied to the one command a landing is built on, not a
+rule local to this phase. Two consequences, both learned the same night:
+
+- **Never pipe the merge.** `git merge ... | tail` reports the exit
+  status of `tail`, so a refused merge reads as a clean one. One
+  campaign merged a bead branch through such a pipe into a repo
+  configured `merge.ff = only`, which refused the non-ff merge; the
+  non-zero exit was masked, and the conductor went on to run the landing
+  check and the full gate on the UNMERGED tree, close the bead, remove
+  the worktree and force-delete the branch. The commit was recovered by
+  sha and merged with `--no-ff`, but every landing step had run on a
+  false premise.
+- **Merge with `--no-ff` explicitly.** A repo may refuse a fast-forward
+  by config, and the conductor does not learn that from a ff attempt
+  whose refusal it never read. An explicit merge commit per bead is also
+  the better landing record: it names the bead branch in the history the
+  retro reads.
+
+A red gate on a supposedly merged tree is a STOP, and the first question
+there is not "which bead broke it" but "did the merge land" - answered
+from `git log` and `git merge-base --is-ancestor <bead-branch> HEAD`, not
+from the merge output you read earlier. That stop is queued for the
+operator: never a bead close, never a worktree removal, never a branch
+delete, because those three are what turn a bad landing into an
+unrecoverable one.
+
+**The landing invariant check, both modes.** Between "textual merge OK"
+and the next full gate, run one cheap, seconds-scale command on the
+merged tree - a dependency-graph sort, a lockfile consistency check, an
+import-graph check, whatever the toolchain offers that catches a
+cross-branch structural break without compiling. Three individually-green
+beads once composed into a dependency cycle the build tool refused to
+sort, found two worktrees later, because each bead had passed the full
+gate on its own pre-merge base and nothing had run on the composed tree -
+always run it. The check is not mode-specific: it runs on every merge the
+CONDUCTOR performs, which is every landing in LOCAL-ONLY mode and, in MR
+mode, every landing under a consent carve-out that lets the conductor
+merge (there, on the pulled default branch, after the forge merge is
+verified). Its exit status gates what follows exactly as the merge's
+does, above; a non-zero exit is a stop and a queue, not a journal note
+you land past.
+
+Where the command comes from is decided before the first landing and
+journaled, never invented at landing time:
+
+- A fleet campaign reads `landingCheck` from the fleet manifest: an argv
+  array, fleet-wide, absent meaning no check (`docs/fleet-manifest.md`).
+- A single-repo campaign has no fleet manifest (Configuration), so the
+  campaign file's policy block names the command and Phase 0 journals it
+  beside the gate measurement.
+- A campaign with neither journals the explicit negative - "no landing
+  invariant available in this repo" - and journals the composed-tree risk
+  against every landing that composes anything. An absent check is a
+  declared gap, not a licence to skip the line that says so.
+
+Two limits are worth knowing rather than rediscovering: `landingCheck` is
+fleet-wide, so a fleet whose repos need different checks has no per-repo
+slot today; and the invariant catches a STRUCTURAL break only. A
+behavioral one is the next rule's job.
+
+**Compose and re-gate: a clean merge is not a correct merge.** A textual
+merge that produced no conflict markers is evidence about text, not about
+behavior, and "merged-tree behavior is verified by the next bead's full
+gate" under-sells the hazard wherever beads land in parallel onto one
+integration branch. One downstream campaign hit this three times in
+twelve landings. All three merged CLEAN, and two of the three pairs of
+branches had zero overlapping paths:
+
+- A file auto-merged with no markers and would not compile: the landed
+  draft called a private function a sibling bead had replaced with an
+  adapter seam.
+- A behavior change - a publish step that now refuses unresolvable
+  references - met 2600 new tests a sibling had added that publish. It
+  happened to be fine, but only a real run proved that.
+- Silent: a fixture pinned a mapping version declared only for a
+  different record type. Nothing was red, because those suites publish
+  the step but never RUN it. Once a sibling made pins resolve for real,
+  that fixture was a trap waiting for the first test that ran one.
+
+So **zero path overlap is not evidence either.** Intersect the two
+changed-path sets and journal the intersection, including when it is
+empty - an empty intersection is the finding that says this landing still
+needs a semantic re-gate, not the one that excuses it.
+
+And when you send a branch back to a worker to compose, **name the
+specific semantic interaction to look for**: which symbol or behavior on
+one side meets what on the other, written into the dispatch as the thing
+to verify. "Please re-gate" is what all three above survived; each was
+found because the instruction named the interaction, and the third - red
+nowhere, in suites that never run the step - a generic re-gate would have
+missed entirely.
+
+This is a different concern from the flake repeat below, and neither
+substitutes for the other. The repeat re-runs the SAME gate to expose an
+order-dependent flake; the semantic re-gate asks whether the composed
+tree still means what both branches meant, which is a question a suite
+that never exercised the interaction cannot answer however many times it
+is run.
+
 LOCAL-ONLY mode, per green bead: merge the bead branch into the
-integration branch (ff when possible; compose textual conflicts
-minimally and journal the composition), then run the **landing invariant
-check** - a cheap, seconds-scale command on the merged tree between
-"textual merge OK" and "next full gate" - a dependency-graph sort or
-lockfile consistency check, whatever the toolchain offers that catches
-cycles without compiling; use the manifest's landingCheck if declared. Three individually-green beads once composed into a dep cycle
-found two worktrees later - always run it. Close the bead with a landing
+integration branch by the mechanics below (ff when possible; compose
+textual conflicts minimally and journal the composition), read the
+merge's exit status before anything else, then run the landing invariant
+check on the merged tree (above). Close the bead with a landing
 note, remove worktree, force-delete branch (non-ff delete expected).
-Merged-tree behavior is otherwise verified by the next bead's full gate;
-journal that risk when a landing composes anything non-trivial.
+Merged-tree behavior is otherwise verified by the next bead's full gate -
+under the compose-and-re-gate rule above, not instead of it; journal that
+risk when a landing composes anything non-trivial.
+
+**LOCAL-ONLY landing mechanics: the integration branch has no checkout.**
+"Merge the bead branch into the integration branch" is not directly
+runnable in this mode, because under worktree-per-issue the integration
+branch is a ref that nothing has checked out. There are two paths, and
+which one you are on is decided by the merge itself rather than guessed:
+
+- **Fast-forward: update the ref from the main checkout.** `git push .
+  <bead-branch>:<integration-branch>` fast-forwards the integration ref
+  in place, with no checkout and no worktree. It REFUSES a non-ff update,
+  which is exactly the signal to take the other path, so read its exit
+  status and output (above) and never force it.
+- **Non-ff: merge inside the bead's own warmed worktree.** `git checkout
+  <integration-branch>` there, `git merge --no-ff <bead-branch>`, compose
+  the conflicts, and run the landing invariant check on that live warmed
+  stack before you let go of it. The bead's worktree is the right place
+  because its build cache is already warm, which is what makes a
+  seconds-scale invariant actually take seconds. Then remove the
+  worktree: the integration branch ref survives the removal, so the
+  landing does not go with the directory. One campaign landed 14 beads
+  this way.
+
+When several beads compose with no full gate between them, the NEXT
+bead's worktree is the cheapest place to verify the composed tree: cut it
+from that tree (`worktree_create.rb --base <integration-branch>`) and, in
+a repo whose warm runs the full suite, its warm IS the verification -
+paid for by work the campaign was doing anyway. In a repo whose warm is
+cheaper than that, the warm is not a substitute for a gate; journal which
+of the two you actually got.
+
+These are LOCAL-ONLY mechanics. In MR mode the forge performs the merge
+and the conductor verifies it through the forge (above) - do not reach for
+`git push .` there.
 
 **Repeat the gate after landing, both modes.** One post-landing gate
 run only proves the merged tree passed once; an order-dependent flake
