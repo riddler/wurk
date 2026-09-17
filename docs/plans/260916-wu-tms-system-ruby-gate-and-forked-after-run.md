@@ -542,14 +542,14 @@ drop the source scan. Do not reach for a fork to test the fork guard.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes
-- [ ] The 12-seed sweep from Phase 1 is still green
-- [ ] Both new tests carry a `# sabotage:` note, so `gate.rb`'s sabotage scan
+- [x] Full quality gate passes
+- [x] The 12-seed sweep from Phase 1 is still green
+- [x] Both new tests carry a `# sabotage:` note, so `gate.rb`'s sabotage scan
       reports no `sabotage_note_missing` warning for this commit
-- [ ] Reverting Phase 1's conversion in one file by hand makes
+- [x] Reverting Phase 1's conversion in one file by hand makes
       `test_no_test_file_forks` red naming that file (perform the mutation,
       observe red, revert)
-- [ ] Removing the owner-pid comparison by hand makes
+- [x] Removing the owner-pid comparison by hand makes
       `test_the_guard_hook_only_fires_in_its_own_process` red (same
       mutate-observe-revert)
 
@@ -857,6 +857,28 @@ before considering the plan fully landed.
       `/usr/bin/ruby`; the six spawns should add about 10ms)
 - [ ] Nothing in the four test files now depends on code having run inside a
       child process
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 2
+
+- [ ] The scan's exemption for `contract_test.rb` is still narrow: that file
+      has a fixture string and no executable fork
+- [ ] Neither `home_guard_test.rb` nor `support/dead_pid.rb` appears in the
+      scan's own offender list (the self-match trap above)
+- [ ] The failure message names the file and points at `DeadPid.obtain` - a
+      contributor who hits it should not need to read this plan
+- [ ] `test_every_test_file_loads_the_guard` and
+      `test_every_accepted_support_helper_requires_the_guard` still hold with
+      `dead_pid` in the list
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,

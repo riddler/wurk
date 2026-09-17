@@ -27,21 +27,41 @@ require "minitest"
 # by hand.
 module HomeGuard
   class << self
-    attr_reader :dir, :original_home
+    attr_reader :dir, :original_home, :owner_pid
 
     def install!
       return dir if installed?
 
       @original_home = ENV["HOME"]
       @dir = Dir.mktmpdir("wurk-test-home-")
+      @owner_pid = Process.pid
       ENV["HOME"] = @dir
       UserConfig.reset! if defined?(UserConfig)
-      Minitest.after_run { FileUtils.remove_entry(@dir) if @dir && Dir.exist?(@dir) }
+      # Only the process that installed the guard removes it. The test tree
+      # does not spawn a child that inherits this at_exit stack (Phase 1
+      # removed the one idiom that did that - see support/dead_pid.rb), so
+      # this pid check has nothing to catch today. It is defense in depth: a
+      # future child process that inherited this stack anyway would
+      # otherwise delete the tmpdir out from under the still-running parent.
+      Minitest.after_run { cleanup_if_owner }
       @dir
     end
 
     def installed?
       !@dir.nil?
+    end
+
+    private
+
+    # The Minitest.after_run body, pulled out so a test can call it directly
+    # under a substituted Process.pid instead of forking to prove the guard
+    # holds.
+    def cleanup_if_owner
+      remove_guard_dir if Process.pid == @owner_pid
+    end
+
+    def remove_guard_dir
+      FileUtils.remove_entry(@dir) if @dir && Dir.exist?(@dir)
     end
   end
 end

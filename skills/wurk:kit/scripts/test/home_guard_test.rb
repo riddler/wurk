@@ -79,4 +79,51 @@ class HomeGuardTest < Minitest::Test
       assert_includes content, %(require_relative "home_guard"), "support/#{name}.rb must require home_guard"
     end
   end
+
+  # sabotage: put a fork-and-reap idiom back into any test file, or drop
+  # the DeadPid.obtain call from one of the four files wu-tms converted ->
+  # red, naming the file. A forked child inherits this process's at_exit
+  # stack, and under the version floor's minitest (5.11.3) that stack runs
+  # every Minitest.after_run hook - including the one support/home_guard.rb
+  # registers, which removes the guard dir the rest of the suite is still
+  # using. Use support/dead_pid.rb's DeadPid.obtain for a dead pid instead.
+  # The pattern is built from pieces so this file does not match itself.
+  FORK_SCAN_EXEMPT = %w[contract_test.rb].freeze # its fork idiom lives in a
+                                                  # fixture string fed to
+                                                  # Contract.process_creation,
+                                                  # never executed
+
+  def test_no_test_file_forks
+    pattern = Regexp.new(["(^|[^\\w.])", "fo", "rk", "\\s*[({]"].join)
+    offenders = Dir.glob(File.join(TEST_DIR, "**", "*.rb")).sort.select do |file|
+      next false if FORK_SCAN_EXEMPT.include?(File.basename(file))
+
+      File.read(file).match?(pattern)
+    end
+    assert_empty offenders.map { |f| f.sub("#{TEST_DIR}/", "") },
+                 "a forked child inherits this process's at_exit stack and runs the " \
+                 "suite's Minitest.after_run hooks (see support/home_guard.rb); use " \
+                 "DeadPid.obtain from support/dead_pid.rb instead"
+  end
+
+  # sabotage: drop the owner-pid comparison from cleanup_if_owner in
+  # support/home_guard.rb (i.e. make it call remove_guard_dir
+  # unconditionally) -> red. The guard dir must survive a cleanup attempt
+  # made under any pid but the installer's; this test states that condition
+  # directly instead of forking, since forking is exactly what
+  # test_no_test_file_forks forbids.
+  def test_the_guard_hook_only_fires_in_its_own_process
+    assert_equal Process.pid, HomeGuard.owner_pid
+    dir_before = HomeGuard.dir
+    assert Dir.exist?(dir_before)
+
+    original_owner_pid = HomeGuard.owner_pid
+    HomeGuard.instance_variable_set(:@owner_pid, original_owner_pid - 1)
+    begin
+      HomeGuard.send(:cleanup_if_owner)
+      assert Dir.exist?(dir_before), "cleanup fired for a pid other than the installer's"
+    ensure
+      HomeGuard.instance_variable_set(:@owner_pid, original_owner_pid)
+    end
+  end
 end
