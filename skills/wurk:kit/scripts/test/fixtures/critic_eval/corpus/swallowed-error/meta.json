@@ -1,0 +1,6 @@
+{
+  "label": "bad",
+  "agent": "wurk-diff-critic",
+  "expect": { "severity": "must-fix", "contains": "error path" },
+  "why": "the rescue turns a failed write into a silent success; the caller cannot tell the report was never written"
+}

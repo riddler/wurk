@@ -113,6 +113,123 @@ Four properties are load-bearing, and `/wurk:mr` relies on each:
 - **Findings specific enough to act on without a second round.** The
   round is single by design: file, line, input, outcome, smallest fix.
 
+## Trusting a critic
+
+A must-fix finding stops a request from opening. Nothing in the round asks
+whether the agent that reported it deserves that authority, and the two
+ways an undeserving one fails are both expensive: an agent that ranks
+everything must-fix trains the reader to wave the round through, and an
+agent that ranks nothing must-fix costs the round its point. So a critic
+earns blocking authority the same way any other gate does - by being
+measured on cases whose answer is already known.
+
+The bar is **recall and precision of at least 0.8** over a labeled corpus.
+Below it the agent still has value; it just runs **advisory** - kept out of
+`mr.review_agents` and hand-run, its findings read rather than honored -
+until a revision clears the bar. Declaring it is what makes it blocking,
+so the manifest entry is the promotion.
+
+### The corpus
+
+One directory per case, each holding the diff the agent is given and a
+`meta.json` that says what the right answer is:
+
+```
+corpus/
+  swallowed-error/
+    diff             the diff the agent reviews
+    meta.json        the label
+  scoped-refactor/
+    diff
+    meta.json
+```
+
+```jsonc
+{
+  "label": "bad",                  // "bad" = a finding is owed here;
+                                   // "good" = nothing here blocks
+  "agent": "wurk-diff-critic",     // (opt) whose case this is; omit for
+                                   // a case every agent should get right
+  "expect": {
+    "severity": "must-fix",        // (opt) this case's blocking rank
+    "contains": "error path"       // (opt) a substring the finding must
+                                   // carry to count as a hit
+  },
+  "why": "the rescue turns a failed write into a silent success"
+}
+```
+
+`expect.contains` is what keeps a hit honest. Without it, an agent that
+ranks every diff must-fix scores perfect recall by accident; with it, the
+finding has to name the planted defect. Write it as the shortest phrase the
+right finding cannot avoid, and never as a phrase only one wording of the
+right answer would produce.
+
+Four or five cases is a floor, not a target, and roughly half should be
+`good`: precision is measured entirely on the cases where the right answer
+is silence, and a corpus of nothing but planted defects measures only
+eagerness. Keep the diffs small and self-contained - a case is read by a
+human deciding whether the label is right, and one that needs the whole
+repo to judge will be relabeled wrong later.
+
+**Label the cases yourself.** A corpus labeled by running the critic and
+recording what it said measures nothing: it is the agent grading its own
+homework, and every miss is baked in as the right answer.
+
+### The saved outputs
+
+Run each case by hand or from a harness of your own and save the agent's
+output verbatim, one file per case:
+
+```
+outputs/
+  swallowed-error.md
+  scoped-refactor.md
+```
+
+The scorer never runs a model. That is the contract (ADR-0006): a kit
+script is deterministic, so the same saved outputs score the same way
+twice, and a red bar is never an agent having a bad afternoon. It also
+means a run is reviewable - the output that produced a miss is on disk to
+read.
+
+### Scoring
+
+```bash
+ruby ~/.claude/skills/wurk:kit/scripts/critic_eval.rb \
+  --corpus corpus --outputs outputs --agent wurk-diff-critic
+```
+
+Each case lands on one of four outcomes: a `bad` case with a blocking
+finding that carries the expected substring is a **hit**, a `bad` case
+without one is a **miss**, a `good` case with any blocking finding is a
+**false positive**, and a `good` case without one is a **true negative**.
+Precision is hits over hits plus false positives; recall is hits over the
+`bad` cases. `data.meets_bar` answers the question the bar asks;
+`data.cases` says which case moved the number, which is the half worth
+reading when it fails.
+
+A run below the bar is still a successful run - the script reports and
+warns (`below_trust_bar`), and never edits a manifest. Promoting an agent
+to blocking, or demoting one, is a call with a person's name on it
+(ADR-0008); a script that flipped the field on a score would be making it
+for them.
+
+The kit ships a four-case worked example under
+`skills/wurk:kit/scripts/test/fixtures/critic_eval/` - one of each
+outcome, scoring 0.5 and 0.5. It is what the scorer's own tests run on,
+and it is a corpus that fails the bar on purpose: a critic with one hit,
+one miss and one false positive out of four is exactly the one that should
+not be blocking anything yet.
+
+### When to re-run it
+
+Whenever the agent's own prose changes, and whenever a real round produces
+a finding that surprises you in either direction - a must-fix nobody
+agreed with, or a defect the round let through. Add that case to the
+corpus with the label you wish the agent had produced, and the next run
+says whether the revision fixed it or moved the problem.
+
 ## What the round is not
 
 `judge` is a merge-time propose-and-refute pass over **registered
@@ -135,3 +252,9 @@ carries every other finding into the summary and the request body, filing
 a bead for anything that deserves its own work. It never spawns a second
 round to check the fixes; a round whose findings are large enough to want
 one is a signal that the branch is not ready.
+
+An agent that cannot run is **fail-open, loudly**: the round proceeds, and
+`review agent <name> did not run` goes into the request body and onto the
+bead, because an agent that reported nothing is not an agent that found
+nothing. `/wurk:mr`'s review-round step states the rule and where the line
+is recorded.

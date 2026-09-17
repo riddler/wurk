@@ -1,0 +1,5 @@
+{
+  "label": "good",
+  "agent": "wurk-diff-critic",
+  "why": "a comment stating an existing behavior; there is nothing for a critic to block"
+}

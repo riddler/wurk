@@ -1,0 +1,6 @@
+{
+  "label": "bad",
+  "agent": "wurk-diff-critic",
+  "expect": { "severity": "must-fix", "contains": "rename" },
+  "why": "a public method is renamed with no caller updated and no acceptance criterion asking for it"
+}

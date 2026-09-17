@@ -1,0 +1,13 @@
+diff --git a/lib/report_writer.rb b/lib/report_writer.rb
+--- a/lib/report_writer.rb
++++ b/lib/report_writer.rb
+@@ -12,7 +12,11 @@ class ReportWriter
+   def write(path, rows)
+-    File.write(path, render(rows))
++    begin
++      File.write(path, render(rows))
++    rescue StandardError
++      nil
++    end
+   end
+ end

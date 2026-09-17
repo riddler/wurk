@@ -246,6 +246,26 @@ change:
      to iterate: the branch is not ready for a request.
    - **The agents review; they do not edit.** The named agents are read-only
      by construction. The fixes are yours to make and yours to commit.
+   - **An agent that does not run is fail-open, and loud.** An agent that
+     cannot be spawned, that errors out, or that comes back with no verdict
+     at all has reported nothing - not a clean review. Proceed: a crashed
+     reviewer must never wedge a pipeline that has a green gate behind it,
+     and there is nobody awake to restart it. But say so where a human eye
+     lands on it. Write the line
+
+     ```
+     review agent <name> did not run
+     ```
+
+     into the request body's Notes (step 8) and into the bead note (step 9),
+     in those words, and into step 10's report. The two failures this rule
+     exists between are silence and a stall, and silence is the worse one:
+     a round recorded as clean when nothing reviewed the branch is a false
+     statement in the request, and the reviewer who would have caught it is
+     the one reading that request. Never count such an agent as zero
+     findings, never retry it into a second round (the one-round bound
+     above is not lifted by a crash), and never re-rank the round's verdict
+     because one reviewer was missing.
 
    **What counts as must-fix is the reporting agent's call, not this
    skill's.** A finding is must-fix when the agent that reported it says so,
@@ -277,8 +297,8 @@ change:
    an addressed finding that is not in a commit is not in the request.
 
    Record for step 7 and step 10: the agents that ran, how many findings
-   each returned, how many were must-fix, how many were addressed, and what
-   was deferred and why.
+   each returned, how many were must-fix, how many were addressed, what was
+   deferred and why, and every agent that did not run.
 
 6. **Check the changelog.** Only when `data.touches_build` (from step 1) is
    true and the diff touches the project's public surface. Follow the branch
@@ -363,7 +383,8 @@ change:
      second opinion, plus which gate ran, and - when step 3 auto-resolved a
      conflict - which file it resolved and what the merge did. When step 5
      ran a review round, every finding it did not address, so the deferral
-     is reviewable rather than invisible
+     is reviewable rather than invisible, and every agent that did not run,
+     as `review agent <name> did not run`
    - **The close lines** - one per bead the branch's trailers name (plus the
      epic, if they share one). Under the default `beads` topology these name
      the bead ids. Under `beads-with-forge-projection` they name the forge
@@ -395,6 +416,11 @@ change:
 
    A bead whose request URL was never recorded is one nobody can follow
    from the issue to the review, so the note is unconditional.
+
+   When step 5 had an agent that did not run, a second `bd note` carries
+   `review agent <name> did not run` onto the bead as well. The request
+   body is read once, at merge; the bead is what somebody reads a month
+   later asking what reviewed this.
 
    The scan and the push are two verbs on purpose, and the push refuses
    without a scan younger than ten minutes over the same export. Read the
@@ -453,7 +479,8 @@ change:
    Branch:  <branch> -> <default branch> (N commits)
    Gate:    full gate green
    Review:  <agent>, <agent> - M must-fix addressed, K deferred to the body
-            (omit the line entirely when no review agents are declared)
+            (omit the line entirely when no review agents are declared;
+            name every agent that did not run, in the same line)
    Bead:    <id> in progress, URL recorded, <beads pushed | not pushed,
             tracker is local-only | tracker push deferred to the orchestrator>
    Next:    merging is a human decision; the bead closes on merge, not here

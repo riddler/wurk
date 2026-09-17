@@ -1,0 +1,10 @@
+diff --git a/lib/report_writer.rb b/lib/report_writer.rb
+--- a/lib/report_writer.rb
++++ b/lib/report_writer.rb
+@@ -1,4 +1,6 @@
++# Renders rows and writes them; a failed write raises, deliberately.
++#
+ class ReportWriter
+   def write(path, rows)
+     File.write(path, render(rows))
+   end
