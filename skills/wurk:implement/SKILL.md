@@ -130,6 +130,17 @@ Automated Verification box (or from `--from-phase N`) through the last phase:
    check, the bead checks, and whatever the project's extension adds all run
    for real, independent of the subagent's self-report.
 
+   **A phase advances on a commit that exists, never on a report that it is
+   complete.** A subagent returning is not a phase landing - it tells you
+   only that you have no live child, and a child can end its turn with a
+   gate still running and its work uncommitted. So the orchestrator reads
+   the sha `/wurk:commit --auto` actually produced, and a phase whose
+   subagent reported success with no commit behind it is a refusal (above),
+   not an advance. The same rule binds the orchestrator's own turn: do not
+   stop between a subagent's report and the advancement gate, expecting to
+   be resumed - run the gate, take the commit or the refusal, and only then
+   yield.
+
    - **Refused** (red gate, narrowed gate, unrelated changes, no bead
      detected, or a project-specific refusal): stop the loop immediately - no
      retry. **Uncheck this phase's Automated Verification boxes** if the
