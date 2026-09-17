@@ -599,7 +599,11 @@ worktree isolation when parallel workers share directories.
     project names branches after the bead; that convention is
     load-bearing here, not cosmetic. In the incident the duplicate
     branch already existed under a discoverable name while the
-    conductor was still deciding what to dispatch.
+    conductor was still deciding what to dispatch. That fetch waits for
+    any landing in flight: when a landing command is running against a
+    checkout this probe covers, the fetch runs after that command
+    returns, never as a parallel tool call beside it (Phase L's
+    one-git-process-per-checkout rule).
   - **Peer-session scan.** List the sessions the harness knows about
     (ListAgents, or the equivalent it exposes) and read their subjects
     for the same bead or the same discovery.
@@ -1245,6 +1249,19 @@ ref does not exist" against a request the forge reports merged is the
 expected outcome - journal it as success, not as an error to retry or
 investigate. The local branch goes with the worktree (the kit's
 worktree_cleanup.rb removes it on the forge's merged signal).
+
+**One git process per checkout.** A landing is a SERIAL sequence against
+one checkout - merge, pull, invariant check, gate, worktree removal - and
+no other git command of yours runs concurrently with it: not a probe's
+fetch, not a second pull, not a cleanup's worktree removal. In practice
+that means never issuing a landing command and another git command as
+parallel tool calls against the same checkout. One campaign did exactly
+that, a pull and a probe's fetch at once, and git refused one side's ref
+update ("unable to update local ref" on `origin/main`); nothing was lost
+because only a remote-tracking ref missed an update and a re-fetch
+repaired it, but two writers leave a lock file or a half-updated ref
+that the next landing reads as a diverged checkout.
+Probes that fetch run AFTER the landing command returns.
 
 **The merge's exit status gates every later landing step.** A landing is
 a sequence, and every step after the merge - the landing invariant, the
