@@ -33,6 +33,9 @@ Statuses:
 - **RUNNING** - a conductor session has claimed it (claim = write your
   session date/identifier into the row at Phase 0).
 - **WRAPPED** - morning report + retro done; row kept for the record.
+- **ABORTED** - stopped on an environment fault before landing anything;
+  report + retro still written; the fault is the queue's first item.
+  Re-armable once cleared; holds any campaign queued behind it.
 
 Registry edits are read-modify-write under the registry lock
 (`locks/registry/`, mkdir-mutex, held only for the edit). A conductor
@@ -158,7 +161,7 @@ starts with `Status:`, in the shape the conductor already writes by hand:
     Status: ARMED 2026-09-14 18:41 -0600 (consent adopted verbatim in the conductor session). Arming was ...
 
 The grammar is `Status: <WORD> [<stamp>] <anything>`. `<WORD>` is one of
-`DRAFTED`, `QUEUED`, `ARMED`, `WRAPPED`; `<stamp>` is a date, optionally with a
+`DRAFTED`, `QUEUED`, `ARMED`, `WRAPPED`, `ABORTED`; `<stamp>` is a date, optionally with a
 time and zone offset (`2026-09-14`, `2026-09-14 18:41 -0600`); everything
 after the stamp is prose (except that on a QUEUED line the stamp may
 be followed by `after <id>`, naming the plan this one queues behind -
@@ -173,6 +176,14 @@ the script edits exactly that line.
 its mutex directory is held by a live holder (`lock.rb`'s probe, not
 stale); that is a fact about the lock dir, not something a file can claim
 about itself, so the script derives it and the file never records it.
+
+`ABORTED` is the wrap of a run that stopped on an environment fault
+before landing anything (the `--armed` section's "An abort is ABORTED,
+never WRAPPED"). It is not armed, so the scheduler never restarts it
+into the same fault; it never satisfies a successor's queue (below); and
+it is the one terminal word `arm` accepts, with a `re_armed_after_abort`
+warning, because re-arming after the operator clears the fault is what
+the status is for. `WRAPPED` stays un-re-armable by script.
 
 The consent file carries the same line shape with the words `DRAFTED` and
 `ADOPTED`. Only `ADOPTED` counts.
@@ -198,6 +209,9 @@ inside that window.
 
 A missing or invalid predecessor holds the queue (warning
 `queue_predecessor_missing`), never releases it - a typo must fail safe.
+An `ABORTED` predecessor holds it too (`queue_predecessor_aborted`):
+whatever stopped the predecessor is still in the environment, and one
+measured night a successor promoted on an abort ran straight into it.
 `QUEUED` with no `after` id also holds (`queued_without_after`). Chains
 (`044 after 043 after 042`) advance one wrap at a time, because
 satisfaction requires the predecessor to be WRAPPED, not merely armed.
@@ -222,7 +236,8 @@ under the current directory) and `--locks-dir DIR`.
   the plan has none. Refuses `consent_not_adopted` (needs: human) when the
   consent file is missing or not ADOPTED - arming is the permission a
   scheduler acts on, and the script never manufactures the consent that
-  makes it legitimate. Refuses `campaign_wrapped`. Already armed: ok,
+  makes it legitimate. Refuses `campaign_wrapped`; an ABORTED plan re-arms
+  with a `re_armed_after_abort` warning. Already armed: ok,
   `changed: false`, warning `already_armed`. `--dry-run` reports the
   rewrite in `commands` and touches nothing. With `--after ID`, writes
   `QUEUED <now> after ID` instead (refusing `queued_after_self`); plain

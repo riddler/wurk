@@ -214,8 +214,14 @@ restated description goes stale the moment the bead is edited.
   make the preflight pass. `default_checked_out_elsewhere` names the
   worktree that has the stale default checked out; the fast-forward belongs
   there, by the user. `fast_forward_failed` carries git's own message (a
-  dirty file in the way, typically); report it verbatim. Do not turn the
-  preflight off in the manifest to get past a refusal.
+  dirty file in the way, typically); report it verbatim, and when
+  `data.preflight.dirty_paths` is present, name those paths and the
+  `data.preflight.repair` stash the script did not run - the user
+  decides about their own uncommitted edits. Do not turn the preflight
+  off in the manifest to get past a refusal, and do not pass
+  `--stash-dirty` yourself: that flag is for an unattended caller (the
+  conductor's own worktree cuts, under its self-clear rule and receipt),
+  not for a session with a human in it.
 - `data.preflight.status` - `"in_sync"` needs no mention. `"fast_forwarded"`
   goes in the report: the local default branch moved to the remote's sha
   before the cut, and the user should know their main checkout moved.

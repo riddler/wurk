@@ -34,7 +34,7 @@ plan cites). The full protocol and the linkage-ledger schema are in
 this skill's REFERENCE.md. Then:
 
 - **Registry, not pointer.** A registry file lists every campaign with
-  status (DRAFTED / ARMED / RUNNING / WRAPPED), conductor claim, and
+  status (DRAFTED / ARMED / RUNNING / WRAPPED / ABORTED), conductor claim, and
   declared footprint. Claim your campaign (write your session into its
   row, under the registry lock) at Phase 0; release at wrap. Never
   edit another campaign's row except to correct a verified-stale claim
@@ -207,13 +207,86 @@ campaign finished, aborted, or was refused above (then it reads
 `REFUSAL:`). The daemon side - what schedules the tick, where the report
 is delivered, presence - is the caller's, not this skill's.
 
+**An abort is `ABORTED`, never `WRAPPED`.** A run that stops before it
+lands anything - an obstacle it may not self-clear (below), a gate that
+cannot run, a refusal after the mutex was taken - flips the plan's
+Status to `ABORTED <stamp> <one-line reason>` at wrap, not `WRAPPED`.
+The two words look the same to this run and opposite to the next one:
+`WRAPPED` satisfies a `QUEUED after <id>` successor and sends it
+straight into whatever stopped this run (measured: two campaigns
+aborted on one stray file, minutes apart), and `WRAPPED` is a word the
+kit's `arm` refuses to re-arm, so the operator's morning starts with a
+hand edit. `ABORTED` is not armed, holds every successor queued behind
+it (`queue_predecessor_aborted`), and `campaign_state.rb arm <id>`
+re-arms it once the operator has cleared the fault. The report's queue
+names the fault as its first item either way.
+
+### Self-clears - recoverable obstacles in an unattended run
+
+Nobody is at the keyboard, so every obstacle between the mutex and the
+first dispatch is either something this run clears itself or a night
+lost. The rule for which is which is fixed here, not judged per
+campaign, because the judgement made at 22:00 by a run that wants to
+proceed is the one that widens; the one made at 22:00 by a run that
+fears to proceed is the one that lost two campaigns to a single
+uncommitted file outside either one's footprint.
+
+**An obstacle is self-clearable when ALL of these hold:**
+
+- it is machine-local: a checkout, a lock dir, a worktree, a cache, a
+  stash - never anything on a forge, a tracker that syncs, a deploy;
+- it is outside the campaign's declared footprint (the plan's
+  Footprint, or the beads' paths): a file the campaign would itself
+  edit is a stop, because clearing it decides something about the
+  campaign's own work;
+- the remedy is reversible by one named command the receipt carries
+  (`git stash pop <sha>`, `rmdir <lock>`, `git worktree add` back);
+- the remedy publishes nothing and destroys nothing: no push, no
+  delete of a commit or a file's only copy, no reset of a branch;
+- nothing about it needs the operator's intent to interpret: an edit
+  is stashed whole, never partially, never judged for what it was for.
+
+Fail any one and it is `[ruling-queued]`, and the run ABORTS if it
+cannot dispatch around it. Named instances, so the common cases are
+never re-derived at night:
+
+| obstacle | remedy | receipt | not self-clearable when |
+|---|---|---|---|
+| uncommitted edits to tracked files on the default-branch checkout block the kit preflight's fast-forward (`fast_forward_failed`, `data.preflight.dirty_paths`) | cut the conductor's own worktrees with `worktree_create.rb --stash-dirty` (the consumer's warm wrapper passes it through, or the conductor runs the kit directly); the kit stashes exactly those paths under a named message and reports `data.preflight.stash` | the stash sha, paths, and `restore` command | a dirty path is inside the footprint; the dirt is untracked (the kit never stashes it); the default branch has commits of its own (`local_default_diverged` is a merge-forward for a human) |
+| a stale lock or machine gate slot (owner pid dead, or mtime older than any live gate) | `lock.rb clear` (refuses anything not provably stale) | the owner file's contents and the liveness probe | the owner is alive, or the owner is another campaign's and its journal shows movement |
+| a worktree or branch left by a crashed earlier run of THIS campaign, clean tree | the kit's adopt path (`worktree_create.rb` reports `action: "adopted"`) | the adopted path and sha | the tree is dirty (someone's uncommitted work), or the branch has commits the journal does not account for |
+| a missing reports / journal / locks dir | `mkdir -p` | the path | never |
+
+**Every self-clear leaves the same receipt, and the receipt is not
+optional:**
+
+1. a `[cleanup]` journal line naming the obstacle, the remedy actually
+   run, and the restore command verbatim;
+2. a bead in the CONSUMER's tracker (the repo whose state was touched)
+   titled for the restore - "Restore stash <sha7>: <paths>" - so the
+   operator's work is a tracked item, not a line in a journal they may
+   not read; file it with the run's stamp, and put its id in the
+   `[cleanup]` line;
+3. a **Self-clears** section in the morning report, listing each one
+   with its restore command, ABOVE the queue - the operator reads this
+   before anything else, because it is the only place the run says "I
+   moved your things".
+
+A self-clear is not a CURE and spends none of the consent's cure
+budget: it decides nothing about the campaign's work. It is also not
+covered by any carve-out and needs none: the receipt is what makes it
+legitimate, and a self-clear without the receipt is a
+`[conductor-error]` on yourself.
+
 ## Phase 0 - Sync
 
 Per repo: `git fetch`; tracker pull if the tracker syncs. A diverged
 main or dirty checkout in files the campaign touches drops that repo and
-queues a note (unrelated dirt - e.g. mobile lockfiles under a backend
-campaign - is journaled, not disqualifying). Never resolve tracker sync
-conflicts autonomously.
+queues a note. Unrelated dirt - e.g. mobile lockfiles under a backend
+campaign, or an uncommitted edit on the default-branch checkout that
+blocks the kit preflight's fast-forward - is a self-clear (above):
+stash it through the kit, leave the receipt, continue. Never resolve
+tracker sync conflicts autonomously.
 
 **Measure the gate, once, per repo.** Actually run the repo's gate
 command on the synced checkout and journal two things: the wall-clock
@@ -961,7 +1034,9 @@ overrides for THIS dispatch (each cites its source):
   data.preflight.reason in {local_default_diverged,
   default_checked_out_elsewhere, fast_forward_failed} is
   stop-and-report - never a reset of the default branch, never a
-  manifest opt-out.>
+  manifest opt-out, and never `--stash-dirty` from a worker: a
+  fast_forward_failed on dirty tracked files is the conductor's
+  self-clear, so report it and the conductor cuts your worktree.>
 - <per-repo hazard slot, or "none">
 
 <Moved-files slot - fill exactly one, and never leave it empty. The
