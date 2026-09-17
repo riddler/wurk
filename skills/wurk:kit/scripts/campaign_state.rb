@@ -78,7 +78,7 @@ module CampaignState
 
       Dir.glob(File.join(dir, "*.md")).sort.select do |path|
         id = File.basename(path, ".md")
-        first_h1(File.read(path)) =~ PLAN_H1 && Regexp.last_match(1) == id
+        first_h1(read_utf8(path)) =~ PLAN_H1 && Regexp.last_match(1) == id
       end
     end
 
@@ -166,6 +166,16 @@ module CampaignState
       time.strftime("%Y-%m-%d %H:%M %z")
     end
 
+    # Reads a campaign file as UTF-8 regardless of the caller's locale. A
+    # bare File.read tags the string with Ruby's default external encoding,
+    # which under launchd (no LANG/LC_ALL/LC_CTYPE) is US-ASCII; the first
+    # regex match against a file with any non-ASCII byte then raises
+    # ArgumentError and kills the whole `list` run instead of just this one
+    # campaign. Same shape as outbound_scan.rb's read_utf8.
+    def read_utf8(path)
+      File.binread(path).force_encoding(Encoding::UTF_8)
+    end
+
     # Writes content to path via a sibling temp file and rename, so a
     # concurrent reader (a scheduler listing campaigns while a human arms
     # one) sees the old file or the new one, never a half-written one.
@@ -188,7 +198,7 @@ module CampaignState
     def inspect_plan(path, locks_dir:)
       dir = File.dirname(path)
       id = File.basename(path, ".md")
-      content = File.read(path)
+      content = read_utf8(path)
       status = parse_status(content)
       consent = inspect_consent(consent_path(dir, id))
       mutex = inspect_mutex(mutex_dir(locks_dir, id))
@@ -233,8 +243,8 @@ module CampaignState
       return { after: nil, satisfied: false, predecessor_status: nil, predecessor_exists: false } unless after
 
       path = File.join(dir, "#{after}.md")
-      exists = File.file?(path) && first_h1(File.read(path)) =~ PLAN_H1 && Regexp.last_match(1) == after
-      predecessor_status = exists ? parse_status(File.read(path))[:status] : nil
+      exists = File.file?(path) && first_h1(read_utf8(path)) =~ PLAN_H1 && Regexp.last_match(1) == after
+      predecessor_status = exists ? parse_status(read_utf8(path))[:status] : nil
       predecessor_mutex = inspect_mutex(mutex_dir(locks_dir, after))
       predecessor_running = predecessor_mutex[:held] && !predecessor_mutex[:stale]
       {
@@ -248,7 +258,7 @@ module CampaignState
     def inspect_consent(path)
       return { path: path, exists: false, status: nil, status_stamp: nil, adopted: false } unless File.file?(path)
 
-      status = parse_status(File.read(path))
+      status = parse_status(read_utf8(path))
       { path: path, exists: true, status: status[:status], status_stamp: status[:stamp], adopted: status[:status] == ADOPTED }
     end
 
@@ -470,7 +480,7 @@ module CampaignStateCli
 
     def rewrite(env, options, path, campaign, word, tail: nil)
       now = CampaignState.clock.call
-      content = File.read(path)
+      content = CampaignState.read_utf8(path)
       rewritten = CampaignState.rewrite_status(content, word, now: now, tail: tail)
       env.commands << "rewrite Status line in #{path}: #{campaign[:status] || 'none'} -> #{word} #{CampaignState.stamp(now)}#{tail ? " #{tail}" : ''}"
       env.data[:after] = word

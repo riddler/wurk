@@ -6,6 +6,8 @@ require "stringio"
 require "tmpdir"
 require "fileutils"
 require "time"
+require "open3"
+require "rbconfig"
 require_relative "../campaign_state"
 require_relative "../lib/lock"
 require_relative "support/home_guard"
@@ -751,5 +753,46 @@ class CampaignStateQueueTest < Minitest::Test
     _, env = run_cli(["arm", "043", "--dir", @dir, "--after", "043"])
     refute env["ok"]
     assert env["blocked"].any? { |b| b["code"] == "queued_after_self" }, env.inspect
+  end
+end
+
+# wu-9vp: under launchd there is no LANG/LC_ALL/LC_CTYPE, so Ruby's default
+# external encoding is US-ASCII. A bare File.read used to tag every campaign
+# file's content with that default, and the first regex match against a
+# non-ASCII byte raised ArgumentError and took down the whole `list` run
+# instead of skipping one campaign. This spawns the real script as a
+# subprocess (in-process specs can't exercise Encoding.default_external -
+# it's fixed at Ruby startup from the launching env) with those three
+# variables explicitly unset, the same shape as the acceptance criterion's
+# `env -u LANG -u LC_ALL -u LC_CTYPE`.
+#
+# sabotage: revert campaign_state.rb's read_utf8 to a bare File.read -> red
+# here (ArgumentError: invalid byte sequence in US-ASCII, exit 1), while the
+# in-process CampaignStateCliTest suite above stays green because this
+# process's own default external encoding is whatever locale launched it.
+class CampaignStateLocaleTest < Minitest::Test
+  include CampaignFixtures
+
+  SCRIPT = File.expand_path("../campaign_state.rb", __dir__)
+
+  def setup
+    @dir = Dir.mktmpdir
+  end
+
+  def teardown
+    FileUtils.remove_entry(@dir)
+  end
+
+  def test_list_survives_a_non_ascii_plan_file_with_no_locale_in_the_environment
+    write_plan(@dir, "260914-cafe", body: "Non-ASCII plan body: café, naïve, — an em dash.\n\n## Mode\n\nMR mode.\n")
+    write_consent(@dir, "260914-cafe")
+
+    env = ENV.to_h.merge("LANG" => nil, "LC_ALL" => nil, "LC_CTYPE" => nil)
+    out, err, status = Open3.capture3(env, RbConfig.ruby, SCRIPT, "list", "--dir", @dir)
+
+    assert status.success?, "expected exit 0, got #{status.exitstatus}; stderr: #{err}"
+    parsed = JSON.parse(out)
+    assert parsed["ok"], parsed.inspect
+    assert_equal ["260914-cafe"], parsed["data"]["campaigns"].map { |c| c["id"] }
   end
 end
