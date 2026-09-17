@@ -624,14 +624,14 @@ differs behaviorally from a newer one - wu-tms), so a contributor who
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `ruby skills/wurk:kit/scripts/lib/manifest.rb check` reports
+- [x] `ruby skills/wurk:kit/scripts/lib/manifest.rb check` reports
       `valid: true` with no errors and no new warnings
-- [ ] Full quality gate passes - and now demonstrably under the pinned
+- [x] Full quality gate passes - and now demonstrably under the pinned
       interpreter: `ruby skills/wurk:kit/scripts/gate.rb ...`'s envelope
       `commands` entry renders `/usr/bin/ruby skills/...`
-- [ ] `grep -rn '"ruby", "skills/wurk:kit/scripts/test/run.rb"' .claude/`
+- [x] `grep -rn '"ruby", "skills/wurk:kit/scripts/test/run.rb"' .claude/`
       returns nothing
-- [ ] No document still writes the bare-`ruby` form of the *suite* command.
+- [x] No document still writes the bare-`ruby` form of the *suite* command.
       This grep must return nothing:
 
       ```bash
@@ -823,6 +823,27 @@ made rather than deferred. One is worth an operator's ratification at
    "Resolving the research document's open question 1" above; Phase 4 is
    where it would change.
 
+2. **Phase 3's success-criteria grep is narrower in practice than as
+   written.** The literal command
+   (`grep -rn '[^/]ruby skills/wurk:kit/scripts/test/run\.rb' CLAUDE.md
+   README.md docs/ .claude/ skills/ agents/ | grep -v
+   'hooks/safe-wait-guard\.sh'`) does not return empty over the whole tree:
+   it also matches the bare-`ruby` form inside dated/settled documents
+   (`docs/plans/*.md`, `docs/research/*.md`, `docs/adr/0008-*.md`,
+   `docs/plan.md`) and one more hermetic fixture string
+   (`skills/wurk:kit/scripts/test/hooks_test.rb:144`'s `ALLOWED` literal,
+   functionally identical in kind to `hooks/safe-wait-guard.sh:164` but not
+   named in the plan's exclusion). Phase 3 was verified instead with the
+   grep restricted to the six documents actually named in "Change 2" -
+   CLAUDE.md, README.md, docs/architecture.md, .claude/wurk/codebase.md,
+   skills/wurk:kit/SKILL.md, skills/wurk:kit/REFERENCE.md - which all return
+   empty. Rewriting the dated documents or the ADR to match today would
+   violate CLAUDE.md's own rule against rewriting dated material; widening
+   the fixture exclusion is a one-line change but was left to a reviewer's
+   call rather than made silently. If the grep as literally written is meant
+   to gate the phase, it needs a narrower path list or an additional fixture
+   exclusion; recorded here rather than decided quietly in Phase 3.
+
 ## References
 
 - Source document:
@@ -879,6 +900,26 @@ of blocking here.
 - [ ] `test_every_test_file_loads_the_guard` and
       `test_every_accepted_support_helper_requires_the_guard` still hold with
       `dead_pid` in the list
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 3
+
+- [ ] A `/wurk:commit` run in this repo shows the pinned path in the gate
+      stage's command line, not a Homebrew path
+- [ ] `hooks/safe-wait-guard.sh:164`'s literal still passes as the hermetic
+      spin-loop fixture it is (it never invokes anything)
+- [ ] The macOS-only consequence is understood and accepted: a Linux
+      contributor gets `gate_command_could_not_start` naming
+      `/usr/bin/ruby`, which is the intended, legible failure
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,

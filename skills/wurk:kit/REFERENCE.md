@@ -290,8 +290,8 @@ aliasing hazard, it does not remove the need to ask non-interactively.
 ## Running the tests
 
 ```sh
-ruby skills/wurk:kit/scripts/test/run.rb                # from the wurk repo
-ruby skills/wurk:kit/scripts/test/run.rb -n /pattern/   # a subset by name
+/usr/bin/ruby skills/wurk:kit/scripts/test/run.rb                # from the wurk repo
+/usr/bin/ruby skills/wurk:kit/scripts/test/run.rb -n /pattern/   # a subset by name
 ```
 
 This suite is wurk's whole quality gate (ADR-0002). It needs no toolchain

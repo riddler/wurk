@@ -44,7 +44,7 @@ ruby ~/.claude/skills/wurk:kit/scripts/lib/manifest.rb check
 ## The gate for this repo
 
 ```sh
-ruby skills/wurk:kit/scripts/test/run.rb
+/usr/bin/ruby skills/wurk:kit/scripts/test/run.rb
 ```
 
 About half a second. Run it before any commit that touches a script. The
