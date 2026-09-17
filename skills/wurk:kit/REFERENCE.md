@@ -778,6 +778,13 @@ the propose pass should look for.
 
 ## Writing a new script
 
+First check that a script is the right home at all:
+`wurk/docs/harness-placement.md` is the ordered procedure for choosing
+between a script, a hook, a skill, an agent template, a shared block,
+`CLAUDE.md`, one of the consumer seams, and memory. A script is the home
+for deterministic mechanics behind the envelope contract; prose that a
+model should weigh belongs in one of the others.
+
 1. Require `lib/envelope`, `lib/sh`, and `lib/cli` - plus `lib/manifest` if
    the script needs any project-specific value. **Never hardcode one.** If
    the value it needs is not in the schema, add it to the schema and to

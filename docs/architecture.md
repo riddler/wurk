@@ -28,6 +28,11 @@ optional extension files; they do not copy skills.
   CLAUDE.md                   authority table; wurk defers to it, never widens it
 ```
 
+These layers say what each home *is*. Which one a given piece of harness
+content belongs in - and when it belongs in a hook, a shared block, or
+memory instead - is a separate question with its own ordered procedure:
+`docs/harness-placement.md`.
+
 ### Layer 1: generic skills
 
 Ported from statifier-ex's post-extraction form: prose organized as
