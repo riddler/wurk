@@ -4,10 +4,13 @@ require "minitest/autorun"
 require_relative "support/home_guard"
 require "json"
 require "tmpdir"
+require "fileutils"
+require_relative "../session_metrics"
 
-# The two opt-in hooks under hooks/: each is run as a real process with a
-# fixture on stdin, the way Claude Code runs it, and judged by stdout and
-# exit status alone. Nothing here reads or writes a settings file. The
+# The opt-in hooks under hooks/: each is run as a real process with a
+# fixture on stdin, the way Claude Code runs it, and judged by stdout, the
+# file it wrote, and exit status alone. Nothing here reads or writes a
+# settings file. The
 # hook scripts carry their own --self-test; this file checks the same
 # contract from Ruby so the kit gate covers it, and adds the sabotage-
 # shaped assertions a shell self-test would not bother with.
@@ -15,6 +18,7 @@ class HooksTest < Minitest::Test
   HOOKS_DIR = File.expand_path("../../../../hooks", __dir__)
   POLICY = File.join(HOOKS_DIR, "main-session-policy.sh")
   GUARD = File.join(HOOKS_DIR, "safe-wait-guard.sh")
+  HARNESS = File.join(HOOKS_DIR, "harness-event.sh")
 
   # A hook's environment never inherits the two variables the policy hook
   # reads, so a test asserting "prints the policy" is not fooled by the
@@ -52,15 +56,15 @@ class HooksTest < Minitest::Test
   # --- both hooks ------------------------------------------------------------
 
   def test_hooks_are_executable_and_parse_under_sh_dash_n
-    [POLICY, GUARD].each do |hook|
+    hook_scripts.each do |hook|
       assert File.executable?(hook), "#{hook} must be chmod +x"
       out = IO.popen(["/bin/sh", "-n", hook], err: [:child, :out], &:read)
       assert $?.success?, "sh -n reported a syntax error in #{hook}: #{out}"
     end
   end
 
-  def test_both_self_tests_pass
-    [POLICY, GUARD].each do |hook|
+  def test_every_hook_self_test_passes
+    hook_scripts.each do |hook|
       out, status = run_hook(hook, stdin: "", args: ["--self-test"])
       assert status.success?, "#{File.basename(hook)} --self-test failed:\n#{out}"
       refute_match(/^FAIL/, out)
@@ -207,6 +211,222 @@ class HooksTest < Minitest::Test
     end
   end
 
+  # --- harness-event ---------------------------------------------------------
+
+  def post_tool_input(tool, response)
+    JSON.generate("session_id" => "s1", "hook_event_name" => "PostToolUse",
+                  "tool_name" => tool, "tool_input" => { "command" => "ls" },
+                  "tool_response" => response)
+  end
+
+  # Runs the hook with a sink of its own and returns [stdout, status, lines].
+  def record(stdin, sink, env: {})
+    out, status = run_hook(HARNESS, stdin: stdin, env: { "WURK_HARNESS_EVENTS" => sink }.merge(env))
+    lines = File.exist?(sink) ? File.readlines(sink).reject { |l| l.strip.empty? } : []
+    [out, status, lines]
+  end
+
+  def with_sink
+    Dir.mktmpdir { |dir| yield File.join(dir, "error-events.jsonl") }
+  end
+
+  # sabotage: drop the "ok" key from the success line -> red. The bead's three
+  # fields are ts, tool and ok; a line without ok cannot answer "what share of
+  # calls failed", which is the only reason to record successes at all.
+  def test_harness_records_a_successful_call
+    with_sink do |sink|
+      out, status, lines = record(post_tool_input("Bash", "stdout" => "a"), sink)
+      assert status.success?
+      assert_equal "", out, "a PostToolUse hook's stdout can reach the model; this one says nothing"
+      assert_equal 1, lines.length
+      event = JSON.parse(lines.first)
+      assert_equal "Bash", event["tool"]
+      assert_equal true, event["ok"]
+      assert_equal "info", event["level"]
+      assert_equal false, event["is_error"]
+      assert_equal event["timestamp"], event["ts"], "ts and timestamp are the same instant"
+      assert_match(/\A\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\z/, event["timestamp"])
+    end
+  end
+
+  # sabotage: match the error flags over the whole input rather than the
+  # tool_response part -> the decoy test below goes red.
+  def test_harness_records_both_error_shapes
+    [{ "is_error" => true }, { "success" => false }].each do |response|
+      with_sink do |sink|
+        _out, status, lines = record(post_tool_input("Read", response), sink)
+        assert status.success?
+        event = JSON.parse(lines.first)
+        assert_equal false, event["ok"], "#{response.inspect} is a failed call"
+        assert_equal "error", event["level"]
+        assert_equal true, event["is_error"]
+      end
+    end
+  end
+
+  def test_harness_does_not_score_error_text_in_the_tool_input_as_an_error
+    with_sink do |sink|
+      input = JSON.generate("hook_event_name" => "PostToolUse", "tool_name" => "Bash",
+                            "tool_input" => { "command" => "grep '\"is_error\": true' log" },
+                            "tool_response" => { "stdout" => "ok" })
+      _out, _status, lines = record(input, sink)
+      assert_equal "info", JSON.parse(lines.first)["level"]
+    end
+  end
+
+  def test_harness_appends_one_line_per_call
+    with_sink do |sink|
+      record(post_tool_input("Bash", "stdout" => "a"), sink)
+      record(post_tool_input("Read", "is_error" => true), sink)
+      _out, _status, lines = record(post_tool_input("Edit", "stdout" => "b"), sink)
+      assert_equal 3, lines.length
+      assert_equal %w[Bash Read Edit], lines.map { |l| JSON.parse(l)["tool"] }
+    end
+  end
+
+  # It is a machine-wide recorder: a subagent's tool calls are exactly the ones
+  # a later transcript parse is worst at seeing, so unlike the policy hook this
+  # one must NOT suppress itself inside a subagent.
+  def test_harness_records_inside_a_subagent_too
+    with_sink do |sink|
+      input = JSON.generate("hook_event_name" => "PostToolUse", "tool_name" => "Bash",
+                            "agent_id" => "a1", "agent_type" => "worker",
+                            "tool_response" => { "is_error" => true })
+      _out, _status, lines = record(input, sink, env: { "CLAUDE_AGENT_ID" => "a1" })
+      assert_equal 1, lines.length
+    end
+  end
+
+  def test_harness_honors_the_operator_escape_hatch
+    %w[off 0].each do |value|
+      with_sink do |sink|
+        _out, status, lines = record(post_tool_input("Bash", "stdout" => "a"), "#{sink}-unused",
+                                     env: { "WURK_HARNESS_EVENTS" => value })
+        assert status.success?
+        assert_empty lines
+        refute File.exist?(sink), "WURK_HARNESS_EVENTS=#{value} must write nothing"
+      end
+    end
+  end
+
+  def test_harness_creates_a_missing_sink_directory
+    Dir.mktmpdir do |dir|
+      sink = File.join(dir, "deep", "er", "error-events.jsonl")
+      _out, status, lines = record(post_tool_input("Bash", "stdout" => "a"), sink)
+      assert status.success?
+      assert_equal 1, lines.length
+    end
+  end
+
+  def test_harness_fails_open_on_garbage_and_missing_input
+    ["not json {{{", "", "{}"].each do |stdin|
+      with_sink do |sink|
+        out, status, = record(stdin, sink)
+        assert status.success?, "the hook must exit 0 on #{stdin.inspect}"
+        assert_equal "", out
+      end
+    end
+  end
+
+  def test_harness_records_an_unnamed_tool_rather_than_dropping_the_call
+    with_sink do |sink|
+      input = JSON.generate("hook_event_name" => "PostToolUse", "tool_response" => { "is_error" => true })
+      _out, _status, lines = record(input, sink)
+      assert_equal "unknown", JSON.parse(lines.first)["tool"]
+      assert_equal "error", JSON.parse(lines.first)["level"]
+    end
+  end
+
+  def test_harness_is_silent_when_the_sink_cannot_be_written
+    Dir.mktmpdir do |dir|
+      sink = File.join(dir, "error-events.jsonl")
+      File.write(sink, "")
+      File.chmod(0o400, sink)
+      out, status, = record(post_tool_input("Bash", "stdout" => "a"), sink)
+      assert status.success?, "an unwritable sink is not worth failing a tool call over"
+      assert_equal "", out
+    ensure
+      File.chmod(0o600, sink) if sink && File.exist?(sink)
+    end
+  end
+
+  # The sink resolution order, which no other test reaches: the env override
+  # wins, then metrics.error_events out of the machine config, then a default
+  # under the user's state dir. Each case runs the hook with a HOME of its
+  # own, so nothing here can touch the real machine's config or sink.
+  #
+  # sabotage: drop the config_sink branch from sink_path -> the middle case
+  # goes red (the event lands in the default path instead).
+  def test_harness_reads_the_sink_from_the_machine_config
+    Dir.mktmpdir do |home|
+      configured = File.join(home, "configured.jsonl")
+      FileUtils.mkdir_p(File.join(home, ".claude"))
+      File.write(File.join(home, ".claude", "wurk.local.json"),
+                 JSON.pretty_generate("metrics" => { "error_events" => configured }))
+      _out, status = run_hook(HARNESS, stdin: post_tool_input("Bash", "is_error" => true),
+                                       env: { "HOME" => home, "WURK_HARNESS_EVENTS" => nil })
+      assert status.success?
+      assert File.exist?(configured), "the hook must honor metrics.error_events"
+      assert_equal "error", JSON.parse(File.readlines(configured).first)["level"]
+    end
+  end
+
+  # sabotage: default the sink to a path inside the repo or the kit -> red.
+  # The sink is machine state; a checkout must never accumulate it.
+  def test_harness_defaults_to_the_users_state_dir
+    Dir.mktmpdir do |home|
+      _out, status = run_hook(HARNESS, stdin: post_tool_input("Bash", "stdout" => "a"),
+                                       env: { "HOME" => home, "WURK_HARNESS_EVENTS" => nil,
+                                              "XDG_STATE_HOME" => nil })
+      assert status.success?
+      default = File.join(home, ".local", "state", "wurk", "error-events.jsonl")
+      assert File.exist?(default), "expected the default sink at #{default}"
+    end
+  end
+
+  def test_harness_prefers_the_env_override_to_the_machine_config
+    Dir.mktmpdir do |home|
+      configured = File.join(home, "configured.jsonl")
+      override = File.join(home, "override.jsonl")
+      FileUtils.mkdir_p(File.join(home, ".claude"))
+      File.write(File.join(home, ".claude", "wurk.local.json"),
+                 JSON.generate("metrics" => { "error_events" => configured }))
+      run_hook(HARNESS, stdin: post_tool_input("Bash", "stdout" => "a"),
+                        env: { "HOME" => home, "WURK_HARNESS_EVENTS" => override })
+      assert File.exist?(override)
+      refute File.exist?(configured), "the env override must win outright"
+    end
+  end
+
+  # The end-to-end agreement the two halves were written against: the hook is
+  # the writer of the sink session_metrics.rb reads, so what it appends must
+  # count as an error event there without either side being adjusted.
+  #
+  # sabotage: rename the hook's "timestamp" key to "ts" alone -> the since
+  # filter below goes red; drop "level"/"is_error" -> the count goes to 0.
+  def test_session_metrics_counts_what_the_hook_writes
+    with_sink do |sink|
+      record(post_tool_input("Bash", "stdout" => "a"), sink)
+      record(post_tool_input("Read", "is_error" => true), sink)
+      record(post_tool_input("Edit", "success" => false), sink)
+
+      events = SessionMetrics.error_events(sink)
+      assert events["exists"]
+      assert_equal 2, events["count"], "the two failed calls, not the successful one"
+      assert_equal 0, events["malformed_lines"], "every line the hook writes must parse"
+
+      signals = SessionMetrics.signals([], events)
+      signal = signals.find { |s| s["kind"] == "error_events" }
+      refute_nil signal, "a written error event must surface as a signal"
+      assert_equal 2, signal["count"]
+      assert_equal sink, signal["path"]
+
+      future = Time.now.utc + 3600
+      assert_equal 0, SessionMetrics.error_events(sink, since: future)["count"],
+                   "the hook's timestamp must be the key the since filter reads"
+    end
+  end
+
   # --- the deny-message contract, over every hook ----------------------------
 
   # A refusal names what to change, so the next attempt can pass. In a hook
@@ -219,6 +439,10 @@ class HooksTest < Minitest::Test
   # deny path at all. A hook that is neither listed here nor emitting a deny
   # fails: a new hook is a guard by default.
   HOOKS_WITHOUT_A_DENY_PATH = {
+    "harness-event.sh" =>
+      "PostToolUse hook: it runs after the tool has already run, so it has " \
+      "nothing left to deny. It only appends a telemetry line and exits 0; " \
+      "every failure path drops the line silently rather than reporting one.",
     "main-session-policy.sh" =>
       "SessionStart hook: it either injects context or stays silent, and it " \
       "fails open. It has no deny path, no failure message, and nothing it " \

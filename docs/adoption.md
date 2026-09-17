@@ -284,7 +284,7 @@ Fix the manifest, not the script.
   root, per ADR-0014. Consistent with a pilot's footprint, since hooks are
   untracked.
 - **Session hooks.** `ruby install.rb --with hooks` from the wurk checkout
-  links two Claude Code hooks into `~/.claude/hooks/`; it is opt-in and
+  links three Claude Code hooks into `~/.claude/hooks/`; it is opt-in and
   the default install is unchanged. `wurk-main-session-policy.sh`
   (SessionStart) tells the top-level session that it coordinates and
   delegates rather than codes, and suppresses itself inside subagents by
@@ -293,10 +293,55 @@ Fix the manifest, not the script.
   wait shapes the conductor and worker prose forbid - a while/until loop
   with no sleep, a backgrounded loop with no trap, `pgrep -f` in a loop
   that does not exclude `$$` - and names the fix in the denial; it is
-  fail-open, so a malformed input lets the call through. Linking is not
-  wiring: the installer prints the `settings.json` snippet (absolute
-  paths) to merge into `~/.claude/settings.json` or a project's
-  `.claude/settings.json`, and never edits a settings file itself.
+  fail-open, so a malformed input lets the call through.
+  `wurk-harness-event.sh` (PostToolUse on every tool) appends one JSON
+  line per tool call - `{"timestamp", "ts", "tool", "ok", "level",
+  "is_error"}` - to this machine's telemetry sink, so tool calls are
+  counted as they happen across every session on the machine rather than
+  reconstructed per project from transcripts. It requires no `jq`, never
+  suppresses itself (a subagent's calls are the ones a transcript parse
+  sees worst), prints nothing, and is fail-open: an unreadable input or an
+  unwritable sink drops the line and exits 0. Its sink is
+  `$WURK_HARNESS_EVENTS`, else `metrics.error_events` from the machine
+  config (`docs/machine-config.md`), else
+  `${XDG_STATE_HOME:-~/.local/state}/wurk/error-events.jsonl` - machine
+  state, never a repo path. `session_metrics.rb signals` reads that same
+  sink, so the two fit together with nothing to configure beyond the path.
+  Set `WURK_HARNESS_EVENTS=off` to turn the recorder off without unwiring
+  it.
+
+  Linking is not wiring: the installer prints the `settings.json` snippet
+  (absolute paths) to merge into `~/.claude/settings.json` or a project's
+  `.claude/settings.json`, and never edits a settings file itself. It looks
+  like this, with `<home>` the real home directory:
+
+  ```json
+  {
+    "hooks": {
+      "PostToolUse": [
+        {"matcher": "",
+         "hooks": [{"type": "command",
+                    "command": "<home>/.claude/hooks/wurk-harness-event.sh",
+                    "timeout": 10}]}
+      ],
+      "PreToolUse": [
+        {"matcher": "Bash",
+         "hooks": [{"type": "command",
+                    "command": "<home>/.claude/hooks/wurk-safe-wait-guard.sh",
+                    "timeout": 10}]}
+      ],
+      "SessionStart": [
+        {"matcher": "startup",
+         "hooks": [{"type": "command",
+                    "command": "<home>/.claude/hooks/wurk-main-session-policy.sh",
+                    "timeout": 10}]}
+      ]
+    }
+  }
+  ```
+
+  An empty `matcher` is every tool, which is what a per-call recorder
+  needs; narrowing it blinds the sink to whatever the matcher leaves out.
 - **An upstream tracker.** If tickets are filed and read in Jira, Linear
   or Notion, read `docs/two-tracker-pattern.md` before minting the first
   bead, so the external ref convention is in place from bead one.
