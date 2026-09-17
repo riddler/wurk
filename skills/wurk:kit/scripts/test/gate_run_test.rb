@@ -11,6 +11,7 @@ require_relative "../lib/lock"
 require_relative "support/manifest_helper"
 require_relative "support/fake_sh"
 require_relative "support/user_config_helper"
+require_relative "support/dead_pid"
 
 # GateRun: `start` (detached launch, optional lock acquisition), `supervise`
 # (the detached child - never exercised via a real spawn here, since FakeSh
@@ -322,8 +323,7 @@ end
 
   def test_poll_with_dead_supervisor_pid_and_no_sentinel_is_abandoned
     Dir.mktmpdir do |dir|
-      dead_pid = fork { exit(0) }
-      Process.wait(dead_pid)
+      dead_pid = DeadPid.obtain
 
       build_run_dir(dir, pid: dead_pid, deadline_at: Time.now.utc + 3600)
 
