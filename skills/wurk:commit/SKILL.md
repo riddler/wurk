@@ -39,6 +39,16 @@ seen, where a commit is undone with `git reset --soft HEAD~1`. It is not
 authorization to push, open a PR/MR, or close a bead - those have their own
 triggers in the repo's CLAUDE.md authority table.
 
+**A reported commit is not a commit.** `--auto` runs as somebody's
+advancement gate - a loop's phase, a dispatched worker's turn - and what
+advances them is the sha this skill produced, never a message saying the
+work is finished. Two things follow. Step 4's immediate verification is
+what makes the sha real, so never report a commit you have not read back
+from `git log`. And never end the turn between the Step 0 gate and the
+commit: a green gate with nothing committed advances nothing and leaves
+the work as uncommitted edits in a worktree. Block on the gate, then
+commit, in the same turn.
+
 **Auto mode refuses, reports, and stops** rather than committing when:
 
 - the quality gate is red (Step 0)

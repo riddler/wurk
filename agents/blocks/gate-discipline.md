@@ -55,3 +55,16 @@ Gate discipline (learned the expensive way, campaigns 004 and 007):
   names the loop shape) if held; ALWAYS rmdir after your run, pass or
   fail. If you exhaust the wait twice, probe ps for a live gate process
   and report staleness - never break another holder's lock yourself.
+- **Completed is not done.** A child reporting "completed", or a gate
+  run returning, tells you one thing only: you have no live child. It is
+  not permission to yield. Your task is done when your own definition of
+  done is ON DISK - the commit made, the request opened where the mode
+  says so, the bead notes written, the result file written - and you do
+  all of it in the SAME turn, before you stop. Never park mid-gate
+  expecting to be resumed: block on the run with the foreground wait
+  above, read the verdict, and finish. Another harness measured the
+  residual failure over three days: turn after turn ended on a detached
+  verification gate with nothing committed, no request open and no
+  report written, because a completed child status read as permission to
+  stop - and the work existed only as uncommitted edits in a worktree
+  nobody came back to.
