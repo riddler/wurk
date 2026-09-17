@@ -155,6 +155,12 @@ in each listed template, and the lint names whichever of the three is
 missing. A new agent needs a template; a hand-written `.md` beside the
 templates is `ungenerated_agent`.
 
+**Later (2026-09-17):** the prior question - whether the content belongs in
+an agent at all, rather than in `CLAUDE.md`, a skill, a hook, a kit script,
+one of the consumer seams, or memory - is answered by
+`docs/harness-placement.md`, which carries the ordered decision procedure
+and routes the block-versus-template-prose call back to this ADR.
+
 ## Consequences
 
 - The first generated output is the prior prose plus one banner line per
