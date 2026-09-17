@@ -1,0 +1,12 @@
+diff --git a/lib/queue_reader.rb b/lib/queue_reader.rb
+--- a/lib/queue_reader.rb
++++ b/lib/queue_reader.rb
+@@ -4,6 +4,10 @@ class QueueReader
+   def next_item
+     @items.shift
+   end
++
++  def empty?
++    @items.empty?
++  end
+ end

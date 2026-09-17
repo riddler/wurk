@@ -800,6 +800,43 @@ the propose pass should look for.
   fail-closed parse branch, every skip reason - against the `judge` fixture
   manifest, never against a repo's real `.claude/wurk.json`.
 
+## `critic_eval.rb`: the review-agent trust bar
+
+Scores SAVED review-agent output against a labeled fixture corpus, so a
+consumer can say whether one of its `mr.review_agents` has earned the
+authority `/wurk:mr` already gives a must-fix finding - the round does not
+open the request with one in it. The corpus layout, the meta fields, and
+the 0.8 precision/recall bar are documented once, in
+`docs/recipes/review-agents.md` ("Trusting a critic"); this section is the
+script contract.
+
+- **It never runs a model, and shells out to nothing.** The agent run is a
+  hand-run or skill-driven step that saves each case output to
+  `<outputs>/<case-id>.md`; the script reads those files. Deterministic in,
+  deterministic out - the same saved outputs score the same way twice, and
+  a red bar is never an agent having a bad afternoon. It takes no manifest
+  either: corpus and outputs are paths, the agent name is a filter.
+- **Findings are parsed by two rules.** A line naming exactly one severity
+  word starts a finding (a line naming two or more is a vocabulary legend,
+  not three findings), and that finding's body runs to the next finding or
+  the next heading - the rank and the explanation are almost never the same
+  line, and a corpus expectation is matched against the body.
+- **Four outcomes, two ratios.** hit / miss / false_positive /
+  true_negative per case; `data.precision`, `data.recall`, `data.counts`,
+  `data.cases` and `data.meets_bar` for the run. A ratio with no
+  denominator is `null`, never `1.0`, and `meets_bar` is false when either
+  is - an unmeasured half is not a passed half.
+- **Below the bar is a warning, not a block.** `below_trust_bar` carries
+  the numbers; the run still exits 0 and the script never edits a manifest.
+  Promoting an agent to blocking is a call with a person's name on it
+  (ADR-0008). What does block is an incomplete evaluation: a case with no
+  saved output (`missing_output`), an unreadable or wrongly-labeled
+  `meta.json` (`bad_meta`, `bad_label`), a missing directory. A saved
+  output with no case only warns (`unmatched_output`).
+- `test/critic_eval_test.rb` drives the scoring rules on synthetic lines
+  and the CLI on the four-case worked corpus under
+  `test/fixtures/critic_eval/`, which scores 0.5 / 0.5 on purpose.
+
 ## Writing a new script
 
 First check that a script is the right home at all:

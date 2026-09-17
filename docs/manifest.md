@@ -528,6 +528,12 @@ declare both, neither, or either one.
   the list blocks too - the round is deliberately single, so a second
   instance of the same agent is another run rather than another opinion.
 
+Declaring an agent here is what makes its must-fix findings blocking, so it
+is also the promotion: `docs/recipes/review-agents.md` ("Trusting a critic")
+states the bar an agent clears first - precision and recall of at least 0.8
+over a labeled corpus, scored by `critic_eval.rb` - and an agent below it
+runs advisory, which is spelled by leaving it out of this list.
+
 **Absent means no round, silently.** Present-or-absent, never
 half-present, the same rule `gate.sabotage`, `judge` and `rebase` follow: an
 `mr` section with a missing or empty `review_agents` is a schema error, not
