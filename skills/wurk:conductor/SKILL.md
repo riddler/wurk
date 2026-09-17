@@ -13,6 +13,28 @@ journal, and the landings. (Landing mechanics - merges into a local
 integration branch, composing textual conflicts, invariant checks - are
 conductor work, not implementation.)
 
+## Confirming your own commands
+
+Never suppress or discard the output of a state-changing command YOU
+run - a tracker write (`bd close`, `bd update`, a sync push), a landing
+(a merge, a branch delete, a worktree removal), a lock operation
+(acquire, release, clear), an exclude line. No `>/dev/null`, no `2>&1`
+into nothing, and no reading the exit status alone of a command whose
+refusal arrives as prose. Empty or discarded output is UNCONFIRMED:
+re-run it with full output before anything depends on it having
+worked - a journal line, a bead status, a landing, the morning report.
+
+The worker dispatch carries this rule in its MECHANICS block and it
+binds you identically, for a reason the workers do not meet: your
+state-changing commands run in bulk, at the end of a long night, over
+beads you can no longer hold individually in mind. One campaign closed
+eleven beads as `>/dev/null 2>&1`; two of the closes were REFUSED for
+open dependency edges, the run did not notice, and the failure surfaced
+only because every bead was audited at wrap (Journal and morning
+report, which now requires that audit). Without it the campaign would
+have reported complete with two beads still `in_progress` and the
+tracker disagreeing with the journal.
+
 ## Configuration
 
 If the invoking project has a fleet manifest (e.g. `.claude/wurk-fleet.json`),
@@ -622,14 +644,16 @@ worktree isolation when parallel workers share directories.
 ### Worker stalls, resumes, takeovers
 
 A stopped worker proves nothing about its background children. Before
-ANY resume: probe the worktree (fresh commits, mtimes) and the machine
-(live gate processes). Expect this failure mode: workers end their turn
-on an auto-backgrounded gate that dies silently (three occurrences in
-one campaign). The cure is that every dispatch names one gate path and
-leaves no third option - short gate: "FOREGROUND, explicit 600000ms
-timeout; if auto-backgrounded anyway, poll the output file, do not end
-your turn"; long gate: "`gate_run.rb start`, then its `poll_command`
-until the state leaves `running`, and re-read `status` on any resume".
+ANY resume: probe the worktree with two spaced whole-tree samples
+(Staleness, below - one sample cannot tell a quiet worktree from a
+slow one) and the machine (live gate processes). Expect this failure
+mode: workers end their turn on an auto-backgrounded gate that dies
+silently (three occurrences in one campaign). The cure is that every
+dispatch names one gate path and leaves no third option - short gate:
+"FOREGROUND, explicit 600000ms timeout; if auto-backgrounded anyway,
+poll the output file, do not end your turn"; long gate: "`gate_run.rb
+start`, then its `poll_command` until the state leaves `running`, and
+re-read `status` on any resume".
 The killer is the improvised middle - a bare background gate with no
 supervisor - which is what a worker builds when the dispatch demands a
 foreground run its gate budget cannot deliver.
@@ -660,9 +684,71 @@ Escalation ladder:
    critically", "stand down any live writer first"; workers run
    /wurk:verify --unattended after implementation - it machine-checks
    and fixes what it can, and human-only items stay deferred). The
-   fresh worker's tier is the rubric's answer for the bead as it now
-   stands, and a bead that has stalled a worker is by that fact no
-   longer fully specified: it goes to `opus`.
+   inventory is one you VERIFIED yourself, not a summary of the dead
+   worker's last message: path counts, a diffstat, and which paths are
+   staged, unstaged and untracked, each named. Ask the fresh worker to
+   report KEPT / CHANGED / DISCARDED against that inventory, item by
+   item, so the takeover's own result says what it did with a dead
+   worker's draft - two such takeovers reported one draft kept whole
+   and one with five items changed, and a "continued the work" line
+   would have hidden the difference. The fresh worker's tier is the
+   rubric's answer for the bead as it now stands, and a bead that has
+   stalled a worker is by that fact no longer fully specified: it goes
+   to `opus`.
+
+**An infrastructure kill is not a stall, and it enters the ladder at
+rung 4.** A worker terminated by something outside the campaign - an
+API spend limit or a 429 on the model it was dispatched at, a harness
+restart, the machine sleeping, an OOM kill - did not stall. The lower
+rungs are written for a worker that stopped on its own and they are
+pure waste here: the same model against the same limit fails the same
+way, and there is no live process left to probe or to stand down.
+Route it straight to rung 4 - retire, inspect the worktree yourself,
+fresh worker with the takeover brief - and journal the kill as an
+`[incident]` naming what killed it, so the retro can tell a night that
+lost workers to infrastructure from one that lost them to its own
+dispatches.
+
+Three things follow, and none of them is rung 3. The tier escalation
+answers a bead the model could not carry; an infrastructure kill says
+nothing about the bead, so it neither triggers rung 3 nor SPENDS it -
+a `sonnet` worker killed by a spend limit still has its one escalation
+intact if the fresh worker later stalls. What the re-dispatch may
+change is the model when the kill was model-specific: fill the TIER
+slot with a tier the limit does not cover and have its one-line reason
+say the change is an availability re-dispatch, not an escalation, so
+the journal never reads as a rung the ladder did not climb. Second,
+the kill is not a work failure and the bead is not tainted - it keeps
+its status and its notes, nothing about it is queued for a ruling, and
+the takeover brief describes a worktree rather than a mistake. Third,
+an infrastructure kill is not a self-clearable obstacle (Self-clears):
+there is nothing machine-local to put back, and a limit that no longer
+admits ANY dispatch is not an obstacle to clear but a run that cannot
+continue - wrap it `ABORTED` with the limit as the reason, never
+`WRAPPED`.
+
+**Every resume and takeover brief forbids new subagents, and asserts
+nothing about a lock.** Two clauses, each from a resume that raced:
+
+- No new writers. A brief phrased "continue the pipeline" has minted a
+  duplicate implement loop more than once - three writers on one
+  branch at the worst - so every rung above says it and every brief
+  you compose repeats it rather than implying it: continue directly,
+  dispatch no new subagents, and stand down any live writer before
+  writing anything yourself.
+- Never state that a lock or a gate slot IS free. That claim is stale
+  by construction - you read it, the brief travels, and the worker
+  acts on a reading minutes old that was never its own - and every
+  resume phrased that way eventually raced. A brief hands over the
+  same gate-semaphore slot a fresh dispatch would (Phase 3) and
+  nothing more: under contending gates, "acquire the campaign mutex,
+  the repo lock and a machine slot in that fixed order via `lock.rb
+  acquire`, bounded wait, else stop-and-report", never "a slot is
+  free"; under non-contending gates, the same explicit negative the
+  dispatch template carries, which asserts no slot because there is no
+  slot to assert. A resumed worker that finds a lock held stops and
+  reports. Breaking one stays yours, and only against an owner you
+  have verified stale.
 
 After any mixed-writer episode: full gate against HEAD; provenance
 listed in the result/PR body.
@@ -714,12 +800,33 @@ movement, `ps` for a live gate process rooted in that worktree - before
 assuming the worker alive OR dead. Journal the check as [stale] with
 what each probe returned.
 
-Both silent (no live agent, no movement) -> the worker is dead; take
-the escalation ladder above from rung 4 (retire, inspect, fresh worker
-with a takeover brief), or from rung 3, the one-step tier escalation,
-when the dead worker was a `sonnet` dispatch. One alive -> journal
-[stale] with the evidence and keep waiting; a slow gate or a long
-implement phase is not a dead worker. Resist the pull to redispatch on a stale mtime alone: a
+**One sample cannot tell a quiet worktree from a slow one - take two,
+spaced.** A worktree probe is a photograph, and a detached implement
+loop whose edits fall between two photographs is indistinguishable
+from a dead worker: no live agent process, a dead gate-slot pid, no
+mtime inside the window you happened to check, and a writer still
+running the whole time (measured once, in another harness, on its
+campaign 025). So the worktree half of the probe is TWO samples,
+separated by enough time for a live writer to touch something - a
+minute is ample, and the heartbeat's own interval is the free version
+of it - and each sample is WHOLE-TREE rather than the files you expect
+to move: the newest commit, `git status --porcelain`, and the newest
+mtime anywhere under the worktree, plan artifacts, scratch files and
+untracked drafts included. A research or planning phase writes nothing
+the bead's eventual diff would ever show, which is exactly the worker
+a narrow sample declares dead. Only two samples that MATCH prove
+quiet; any difference between them is a live writer and ends the
+enquiry there. Journal both samples in the `[stale]` line, not just
+the conclusion, so the next sweep can compare against them instead of
+starting over.
+
+Both silent (no live agent, and two spaced whole-tree samples that
+match each other) -> the worker is dead; take the escalation ladder
+above from rung 4 (retire, inspect, fresh worker with a takeover
+brief), or from rung 3, the one-step tier escalation, when the dead
+worker was a `sonnet` dispatch. One alive -> journal [stale] with the
+evidence and keep waiting; a slow gate or a long implement phase is not
+a dead worker. Resist the pull to redispatch on a stale mtime alone: a
 duplicate worker on a live bead is the collision Phase 3's probe exists
 to prevent, and this time you would be the peer.
 
@@ -817,6 +924,18 @@ with no journaled pre-decision behind it is stop-and-queue, never a
 conductor judgement, because closing someone else's bead is a decision
 the operator makes. Journal the supersede as its own landing line.
 
+Read the refusal before you choose a resolution, because "blocked by
+open <id>" does not say the blocker is REAL. The edge may be stale:
+one campaign met two such refusals whose blocker was a bead the
+refused bead had been dispatched explicitly not to touch, and the
+correct fix there was removing the edge, not forcing the close. Which
+of the two you are looking at is a read, not a guess - a real blocker
+resolves through the journaled pre-decision above, and a stale edge is
+queued for the operator naming both bead ids and why you believe the
+edge is stale, since deleting an edge someone drew is a decision about
+their graph. `--force` is never the conductor's answer to a refusal it
+has not understood.
+
 When Phase 0 journaled that the forge deletes merged branches, "remote
 ref does not exist" against a request the forge reports merged is the
 expected outcome - journal it as success, not as an error to retry or
@@ -890,7 +1009,9 @@ Before ANY push, MR, or tracker push: run the project's outbound scan
 see ADR-0014). Any hit: do not push, do not rephrase-and-retry - queue with
 the strings quoted. Clearing a hit is the operator's call, never the
 conductor's; the conductor's job ends at refusing and quoting. Empty
-scan/push output is unconfirmed - re-run with full output.
+scan/push output is unconfirmed - re-run with full output; the scan is
+one instance of Confirming your own commands, above, not a rule local
+to this section.
 
 **Quote the hit where it cannot be published.** The operator cannot rule
 on "something matched" - they need the literal that tripped the scan - so
@@ -993,6 +1114,18 @@ everything in it must be publishable. Deciding which paths are campaign
 state, and whether a given path is inside a publish set, is the
 conductor's judgement; a script can write the exclude line, it cannot
 make the call.
+
+**Audit the tracker against the journal before you write the report.**
+Read the ACTUAL status of every bead the campaign touched - one `bd
+show` per bead, or one listing over the campaign's ids - and compare
+each against what the journal says the campaign did to it. A
+disagreement is a finding, not a typo to correct on the way past: it
+goes into the report as its own item above the queue, carrying both
+values, whichever way it points. Do not repair it silently and never
+report the journal's version, because a tracker that disagrees with
+the journal is the one failure the operator cannot discover from the
+report itself. The audit costs one read per bead and it is what caught
+the suppressed-output failure in Confirming your own commands.
 
 Final act: the morning report - what landed (branch, SHA, gate,
 PR/merge), graph end state, discovered beads, the queue with required
