@@ -72,6 +72,25 @@ Process:
    2026-08-26: unattended verify passes keep turning up and fixing real
    findings). Fix what it catches within the bead's scope, re-run the
    gate after any fix, and report what stayed deferred.
+
+   **That pass is scoped to YOUR bead, and an empty backlog is not a
+   pass.** Two opposite failure modes, both seen in one campaign (gitlab,
+   2026-09-12): one worker skipped the pass because its bead had no plan
+   document, another extended it into documents its bead never cited.
+   - Scope: the pass covers the bead's own plan and research artifacts
+     plus any document the bead itself cites, and nothing else. Other
+     beads' plans carry deferred items too; those items belong to whoever
+     owns those beads and sit outside your audited scope. Never walk them
+     and never write a fix into them.
+   - Empty backlog: a bead specified well enough to work with no plan
+     stage has no documents, so `backlog.rb` warns `no_documents` with
+     zero totals. That is not "verified" and not a licence to skip. The
+     substitute pass is to machine-check every acceptance criterion on
+     the BEAD against the live artifact, reporting each as checked (with
+     the evidence that checked it) or as needing a human. Every bead in
+     campaign 017 hit this and the substitute pass caught real defects.
+   Say which of the two you ran, and report the substitute pass's
+   per-criterion outcomes the way you report deferred items.
 3. Commit via wurk:commit. Open an MR via wurk:mr ONLY if the dispatch
    authorized it; in local-only campaigns wurk:mr is skipped entirely
    and the conductor merges your branch.

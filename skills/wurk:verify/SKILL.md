@@ -74,6 +74,24 @@ report is a snapshot from the moment a stage finished; the documents are the
 current truth, and a document can carry items no report ever mentioned (a
 human edited it since, or `--doc` names something `/wurk:work` never saw).
 
+**What step 1 enumerated is the whole pass.** That set is the bead's own
+plans and research, or exactly the `--doc` paths given, plus documents the
+subject itself cites; no later step adds to it. A `no_documents` warning
+with zero totals means this subject has no document backlog - it is never
+an invitation to walk another bead's plans. Their deferred items belong to
+whoever owns those beads, and a caller working under an audited scope (a
+conductor's repo worker, typically) would be writing outside it.
+
+**An empty backlog is not a verification either.** When the subject is a
+bead worked with no plan stage, nothing is deferred because nothing
+deferred anything, and a caller who ran this skill to check the work still
+owes that check. Substitute the bead's own acceptance criteria for the
+document backlog: read each one against the live artifact and report it as
+checked with the evidence that checked it, or as needing a human. Say in
+the summary that this was a substitute pass over acceptance criteria - an
+empty backlog reported as walked and a substitute pass reported as run
+mean different things to whoever reads it next.
+
 ## Step 2: Walk the items
 
 One at a time, in document order, deferred items before open questions
