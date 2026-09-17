@@ -46,6 +46,11 @@ it goes to the morning queue instead.
 **Single-repo campaigns need no manifest.** The campaign file itself
 carries the policy (mode, consent pointer, wave plan, hazards). No
 ownership map, no mirrors, no cross-repo linkage - skip those phases.
+What that file must carry, which of its sections `campaign_state.rb`
+reads, and the drafting rules two campaigns paid for are in this
+skill's REFERENCE.md, under
+"The plan's sections - the rest of the schema". Draft a plan from
+there rather than from this paragraph.
 
 ## Concurrent campaigns
 
@@ -299,6 +304,76 @@ budget: it decides nothing about the campaign's work. It is also not
 covered by any carve-out and needs none: the receipt is what makes it
 legitimate, and a self-clear without the receipt is a
 `[conductor-error]` on yourself.
+
+### A successor campaign - what a continuation inherits
+
+"Keep conducting" is two words, it is the cheapest instruction an
+operator can give, and it is the likeliest way one ends up with a
+campaign they did not intend. A continuation that names no scope, no
+mode and no carve-outs is not a small invocation; it is an invocation
+whose whole policy has to come from somewhere, and the only candidate
+is the campaign that just wrapped. So the inheritance is fixed here
+rather than judged per continuation.
+
+**Inherited by default**, because each is a property of how the
+operator works rather than of one campaign's scope:
+
+- **Mode.** MR or LOCAL-ONLY carries forward. A continuation that
+  changes mode says so; nothing else changes it.
+- **The tracker-push authority and the merge authority**, exactly as
+  the predecessor's consent granted or withheld them.
+- **The predecessor's hard stops and standing refusals.** A refusal
+  the predecessor recorded as STANDING - still in force when it ended
+  (Journal and morning report's `[refusal]` rule) - is in force here
+  too. A refusal that outlives its campaign and a fence that outlives
+  its campaign have the same shape, and the conservative reading of
+  both is that they survive.
+
+**Never inherited without being said again**, because each is an
+authority rather than a habit:
+
+- **Scope.** A continuation has no scope until one is named. The
+  default reading, when the predecessor's retro produced a backlog and
+  the continuation names nothing else, is THAT backlog - and it is a
+  reading to state back, not a licence. "Keep conducting" can as
+  easily mean "keep working the same set" or "scope is now everything
+  ready", and those are three different campaigns.
+- **Carve-outs.** Every carve-out is dead at wrap. A carve-out is
+  granted for one named bead in one campaign, and a successor that
+  re-uses one is self-widening. The operator re-grants it or it does
+  not exist.
+- **A by-name fence** ("do not touch <bead>, <bead>, <bead>"). Treat a
+  fence as a property of the BEADS, so it survives into the successor -
+  the conservative reading, and the one that cannot damage anything.
+  Then say so in the restatement, because a fence that was only ever
+  about the predecessor's scope is needlessly sticky and the operator
+  is the one who can tell you which it was in one word.
+
+**A successor has its own plan and its own consent file.** Neither is
+inherited (REFERENCE.md's multi-campaign rule 5: consent stays
+campaign-scoped). The continuation is what authorizes writing them, not
+what replaces them. The successor's plan carries the
+`## Inheritance` section REFERENCE.md's schema requires: the
+predecessor's id and terminal status, the original consent quoted, the
+continuation quoted, and the reading of the second against the first.
+
+**State the inherited policy back before the first dispatch, and
+journal it.** One `[operator]` entry, or a `[ruling-taken]` where you
+decided a clause the continuation left open, naming for each clause
+what you read it as and what you read it FROM. Then, where a human is
+reachable, offer the restatement for correction before dispatching;
+where none is (an `--armed` successor), the restatement is journaled
+and the campaign proceeds only on the clauses it can source - anything
+else is `[ruling-queued]` and the beads behind it are `[held]`. The
+point of the restatement is timing, not ceremony: a wrong reading
+caught before the first dispatch costs a sentence, and the same wrong
+reading caught at wrap costs a night of work done under an authority
+nobody granted.
+
+**A predecessor that ABORTED is not continued.** Whatever stopped it is
+still in the environment, exactly as `queue_predecessor_aborted` says
+for a queued successor. The continuation is refused with the fault as
+its reason; the operator clears it and re-arms.
 
 ## Phase 0 - Sync
 
@@ -1318,6 +1393,24 @@ dispatch onward. The dispatch template in the appendix is skill
 prose, so it follows the same rule - one template per campaign unless
 an `[adoption]` line marks the switch.
 
+**Which of the three moments can fire at all is a property of the
+MODE.** All three are moments of a merge reaching the copy that is
+actually read - the installed skill and agent files, the kit scripts on
+disk - and not of a branch existing. In MR mode the conductor merges
+nothing: every request stays open until the operator merges it, after
+the campaign has ended. So in MR mode the two no-opt-out moments never
+fire during the campaign, a dogfooding campaign adopts none of what it
+writes, and each landing's `[adoption]` line says exactly that - kind,
+sha, and "moment: the operator's merge, after this campaign". It is not
+a formality: it means the campaign that wrote a rule ran entirely under
+the old text and the first run under the new text is the SUCCESSOR, so
+the adoption is an inheritance to hand forward (the report's handoff
+section) rather than a switch inside this journal. In LOCAL-ONLY mode
+the conductor's own landing merge IS a merge, so the moments do fire
+mid-campaign, as soon as the merged text is the text in force - the
+checkout Phase 0 recorded under "Record the text you run on" - and the
+`[adoption]` line marks the dispatch from which each applies.
+
 **A landed kit script falsifies prose the conductor cannot see.** The
 script kind has a second effect the other two do not. A script that
 GAINS a capability breaks nothing: every skill that documented a
@@ -1615,6 +1708,40 @@ Final act: the morning report - what landed (branch, SHA, gate,
 PR/merge), graph end state, discovered beads, the queue with required
 ordering, judgement calls, deferred verification items - plus the Phase
 6 retro.
+
+**The report's last section is what the next campaign inherits.** The
+queue tells the operator what to do; the handoff tells the next
+conductor what it is walking into, and a continuation ("keep
+conducting") may arrive with nothing else behind it (Invocation's
+successor rule). Six items, each one a thing a successor cannot derive
+from the tracker:
+
+1. **Open requests, in their required merge order**, one chain per
+   stack, with the forge facts Phase 0 journaled beside them: the merge
+   method the forge allows, and whether it deletes a merged branch.
+   Under a rebase-only forge, merging a parent REWRITES its commits and
+   every child then needs a rebase (`/wurk:refresh`) before it can
+   merge - a successor that does not know the order, or does not know
+   the rebase is required, meets a conflict per branch. State the order
+   even when there is one request and no stack; "nothing is stacked" is
+   also information.
+2. **Beads still open and why**, which in MR mode is every bead the
+   campaign worked, because the conductor closes nothing and the closes
+   ride on merges that have not happened yet.
+3. **What was adopted and what was not** (Phase L's adoption rule and
+   its mode paragraph). In MR mode the honest line is "nothing adopted;
+   every landing takes effect for the successor".
+4. **Discovered and retro beads filed**, each with its area labels and,
+   where one accumulated several asks at a single seam, the note saying
+   it may be split when worked.
+5. **Unresolved rulings, each with the number of times it came up.** A
+   question five workers raised independently is a different item from
+   one worker's edge case, and the count is the part a successor cannot
+   reconstruct from the queue.
+6. **Lanes never dispatched, with the reason.** A lane held on another
+   human's live claim is an unfinished lane that is nobody's fault, and
+   saying so is what stops the successor from reading it as dropped work
+   and re-dispatching it into that claim.
 
 ## Phase 6 - Retro (always, even aborted)
 

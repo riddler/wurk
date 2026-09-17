@@ -300,6 +300,205 @@ morning report. A mutation this mode never performs: `arm`, `disarm`, or
 writing a consent file - it reads what the operator set and refuses when
 that is not enough.
 
+### The plan's sections - the rest of the schema
+
+`campaign_state.rb` reads four things out of a plan: its H1, its
+`Status:` line, and the bodies of `## Mode` and `## Scope`. Everything
+else is read by a conductor, and the sections below are the ones the
+phases in SKILL.md actually go looking for. A missing one fails no
+script; it fails hours later, in a dispatch that had to guess.
+
+| Section | Required | Who reads it |
+|---|---|---|
+| `# Campaign <id>` H1 | yes | `campaign_state.rb`; `<id>` equals the basename, and there is no colon after `Campaign` |
+| `Status:` line | yes | `campaign_state.rb`; column 1, in the grammar of "The Status line - the plan's front matter" above |
+| header block - id, mode, repo, tracker, drafted, armed, conductor, consent, journal | yes | humans, and the claiming conductor: the `conductor:` row is where a session writes its claim at Phase 0 |
+| `## Goal`, carrying an explicit **Exit** condition | yes | Phase 6 and the morning report - the exit is how a reader decides the campaign is done |
+| `## Consent` | yes | the pointer to `<id>-consent.md`, whose ADOPTED status is what `arm` reads |
+| `## Mode` | yes | `campaign_state.rb`, and every dispatch's mode override |
+| `## Scope` | yes | `campaign_state.rb`; this is the footprint the multi-campaign protocol's rule 2 compares between two RUNNING campaigns |
+| `## Phase 0 preconditions` | yes | Phase 0, one numbered item per decision it owes |
+| `## Waves` | yes | Phase 2's graph render, and the order every dispatch runs in |
+| `## Hazards` | yes | Phase 1's claim check, and the dispatch template's per-repo hazard slot |
+| `## Closing invariant` | yes | Phase 1, which rejects it unless it is a predicate over paths, and the bead that classifies against it |
+| `## Inheritance` | successors only | SKILL.md's "A successor campaign - what a continuation inherits", under Invocation |
+| journal path, outbound content, hard stops, retro targets | as they apply | Phase L, the Outbound content section, Phase 6 - a single-repo plan may fold the journal path into the header block, but a campaign with a scan command or a hard stop beyond the skill's own states it in its own section |
+
+Then the rules. Every one of them was paid for by a plan that ran.
+
+**Prose never asserts arm state.** `arm` and `disarm` rewrite the
+Status line and nothing else, so a sentence claiming the campaign is
+armed - or is not - drifts the moment either runs. One plan carried a
+paragraph asserting the opposite of its own header for several hours
+after it was armed, and a reader caught it, not the tooling. State the
+precondition instead ("`arm` refuses unless the consent file reads
+ADOPTED"), which is true whatever the status is.
+
+**Say the mode word in the body of `## Mode`, not only in its
+heading.** The heading match is a prefix, so `## Mode - <mode>` is a
+legal heading and its suffix is discarded: the record carries the BODY.
+A body whose first line is "Settled by the operator on <date>" gives a
+scheduler's status display a record with no mode in it. Put the mode
+word in the first line of the body and let the heading repeat it.
+
+**Title the footprint section `## Scope`.** The multi-campaign protocol
+calls the concept a footprint and a plan may use that word freely in
+the prose, but the heading the script matches is `Scope`. A plan headed
+`## Footprint` reports `scope: null` and a campaign comparing
+footprints reads nothing.
+
+**A fact that can move while the campaign runs is stated as a claim to
+re-verify, never as a fact.** File lengths, bead counts, label sets,
+request states, gate timings: each was true when the plan was drafted
+and the campaign itself is what invalidates them. One plan's line count
+for the file its own lane rewrote was 75 lines stale before the first
+dispatch and more than 750 out by the last step. The form that works is the one a
+gate measurement already uses - the number, then "re-measure at Phase 0
+rather than trusting this line; it is a starting expectation, not a
+substitute". That is also what makes the campaign-file claim check in
+SKILL.md's "Phase 1 - Ground truth" a check rather than a re-read.
+
+**A hazard states its magnitude, because the magnitude is what the
+planning uses.** "One bead carries both area labels" and "four beads
+do" are the same hazard and two different wave plans. A hazard with a
+count in it is also a claim under the rule above, and gets re-counted.
+
+**The closing invariant is a predicate over paths, and its path list is
+a claim like any other.** The rule itself is in SKILL.md; what belongs
+here is the drafting consequence. One plan's invariant named a path
+that had become a generated artifact and omitted four paths its own
+beads legitimately touched - all four in-bead on audit. So draft the
+invariant as the predicate (every path in the diff is attributable to a
+campaign bead by its `Refs:` trailer, or to the default branch's own
+movement) and treat any path list beside it as an expectation to
+classify against, never as the definition of what is allowed.
+
+**Amendments go in the consent file, dated, in the operator's words.**
+The plan is edited freely while it is drafted; the consent quote is
+not, because it is what every dispatch pastes verbatim. An amendment
+that changes the quote records the date, what changed, what did not,
+and the operator's instruction that authorized it - and says so
+explicitly when the edit came after the operator had already said "as
+written". A plan whose own body carries its amendment history splits
+the record: the dispatch reads the quote, so the quote's history lives
+with the quote.
+
+**A rule that landed after the plan was drafted is named, not silently
+inherited.** The installed skill text is authoritative and a plan can
+neither opt out of it nor restate it usefully. What the plan CAN do is
+add a Phase 0 precondition item naming each rule that landed since it
+was drafted and what it means here - so a reader of the plan alone can
+tell an inherited rule from an overlooked one, and so the conductor
+does not discover at wrap that a status word changed meaning under it.
+This is the same reasoning as the successor rule in SKILL.md, applied
+inside one campaign's own drafting window.
+
+**The template**, with every slot a placeholder - a plan is a
+consumer-specific document and every value below comes from the
+consumer's manifest, tracker or forge:
+
+    # Campaign <id>
+
+    Status: DRAFTED <date>
+
+        id:          <id>
+        mode:        <MR | LOCAL-ONLY>
+        repo:        <repo root, or the fleet's roster>
+        tracker:     <bead prefix> (beads.sync = <local | git | dolthub>)
+        drafted:     <date>
+        armed:       <written by campaign_state.rb arm>
+        conductor:   -            # the claiming session writes its id here
+        consent:     <campaigns dir>/<id>-consent.md
+        journal:     <journal dir>/<date>-campaign-<id>.md
+
+    ## Goal
+
+    <what the campaign is for.>
+
+    Exit: <the condition under which it is done, checkable bead by bead.>
+
+    ## Consent
+
+    Lives in `<id>-consent.md`, the file `campaign_state.rb` reads and the
+    only one whose ADOPTED status can arm this campaign.
+
+    Carve-outs: <named, each naming the ONE bead it applies to, or "none">.
+
+    ## Mode - <mode>
+
+    <mode> mode. <what that means for branching, landing, the tracker push,
+    and who merges.>
+
+    ## Scope
+
+        writes:  <every path, tracker and remote this campaign may write>
+        reads:   everything else
+
+    ## Phase 0 preconditions
+
+    1. <sync state expected.>
+    2. **Gate measured <date>: <result, wall clock>.** Re-measure at Phase
+       0 rather than trusting this line; it is a starting expectation, not
+       a substitute.
+    3. **Gate path: <SHORT | LONG>.** <why, against the host's timeout cap.>
+    4. **Gate semaphore: <NONE | the lock dirs and slot count>.** <what the
+       run occupies, or the explicit negative.>
+    5. <forge merge policy, read from the forge before the first landing.>
+    6. **Rules landed on the default branch since this plan was drafted.**
+       <each, with what it means here.>
+
+    ## Waves
+
+    <lanes and steps, serial or parallel, each step's beads with their
+    priorities; the hazard for each bead that has one. Dependency edges are
+    in the tracker - the plan orders what the graph does not.>
+
+    ## Hazards
+
+    - <each hazard, with its magnitude, as a claim Phase 1 re-checks.>
+
+    ## Closing invariant
+
+    <the predicate over paths, plus the bead-state and tree checks the exit
+    condition needs. The verifying bead classifies; it does not confirm.>
+
+### A successor's `## Inheritance` section
+
+A campaign invoked as a continuation of another one ("keep conducting")
+carries one extra required section, because the continuation itself is
+too short to carry the policy. SKILL.md's
+"A successor campaign - what a continuation inherits" says what is
+inherited and what must be restated; this section is where the
+successor's plan writes that reading down, and its shape is fixed so a
+reader can audit it against the predecessor:
+
+- **Predecessor**: the campaign id, its terminal status, and its
+  morning report's path. An `ABORTED` predecessor is a stop, not an
+  inheritance - the fault is still in the environment.
+- **The original consent, quoted.** Verbatim, from the predecessor's
+  consent file.
+- **The continuation, quoted.** Verbatim, in the operator's words,
+  however short.
+- **How the second was read against the first**, clause by clause: mode
+  carried or restated, each carve-out carried or dropped, each by-name
+  fence carried or released, and what the new scope is. A clause the
+  continuation does not settle is listed here as a queued ruling, not
+  resolved in this section.
+- **The unfinished inheritance**: the predecessor's open requests with
+  their required merge order, the beads still open behind them, the
+  discovered and retro beads it filed, its unresolved rulings, and any
+  lane it never dispatched with the reason. This is the handoff section
+  of the predecessor's own morning report (SKILL.md, "The report's last
+  section is what the next campaign inherits"), carried forward rather
+  than re-derived - and a predecessor whose report has no such section
+  is itself a finding, because the successor is then reconstructing
+  from a tracker that cannot show merge order.
+
+The successor's own consent file is still its own (multi-campaign rule
+5: nothing carries across campaigns by itself). The Inheritance section
+is a reading offered for correction before the first dispatch, never a
+substitute for the ADOPTED status that arms the successor.
+
 ## Linkage-ledger schema
 
 The ledger lives at the path declared in the fleet manifest's
