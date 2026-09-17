@@ -319,11 +319,18 @@ Read it with `UserConfig#metrics_prices` (a hash, `{}` when absent) and
 ### `metrics.error_events`
 
 A non-blank path to this machine's telemetry sink: a JSONL file that an
-opt-in hook appends error events to, one JSON object per line. Absent means
+opt-in hook appends events to, one JSON object per line. Absent means
 no sink, and a configured path that **does not exist yet is normal** - the
-hook that writes it is a separate, later opt-in, so every reader of this
-value is absent-safe and a missing file reads as zero events rather than as
-a fault.
+hook that writes it is a separate opt-in that may not be wired, so every
+reader of this value is absent-safe and a missing file reads as zero events
+rather than as a fault.
+
+The writer is `hooks/harness-event.sh`, linked by `install.rb --with hooks`
+and wired into `PostToolUse` by hand (`docs/adoption.md`). It records one
+line per tool call, not only the failures, and marks the failures with
+`level: "error"` and `is_error: true` - which is what `session_metrics.rb`
+counts. It reads this key itself, at sh level, after `$WURK_HARNESS_EVENTS`
+and before its own default under the user's state dir.
 
 Read it with `UserConfig#metrics_error_events_path` (nil when absent).
 

@@ -73,7 +73,11 @@ module Install
     # Which hook event each shipped hook wires into, and its matcher. A hook
     # file this table does not name is still linked, but the printed
     # snippet cannot place it.
+    # An empty matcher means every tool, which is what harness-event.sh wants:
+    # it records one line per tool call, so narrowing it would blind the sink
+    # to whatever the matcher left out.
     HOOK_EVENTS = {
+      "harness-event.sh" => { event: "PostToolUse", matcher: "" },
       "main-session-policy.sh" => { event: "SessionStart", matcher: "startup" },
       "safe-wait-guard.sh" => { event: "PreToolUse", matcher: "Bash" }
     }.freeze
