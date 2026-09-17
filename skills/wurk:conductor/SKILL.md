@@ -1859,7 +1859,7 @@ ONE campaign, which is the reason some friction never gets filed at
 all: the same improvisation in two runs a week apart, a refusal that
 keeps recurring, a question three campaigns each answered privately.
 No conductor session can see that, because each sees only its own run.
-The between-campaigns reader is the **wurk-shipwright** agent, which
+The between-campaigns reader is the **wurk-retro-reader** agent, which
 keeps a cursor over the campaigns directory, mines every report,
 journal and worker result file newer than it, clusters friction ACROSS
 campaigns, and files an evidence-backed bead for each cluster that

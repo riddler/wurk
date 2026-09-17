@@ -32,7 +32,7 @@ Phases 3 (predicator-ex adoption) and 4 (fixative) have not started. See
 skills/wurk:*/       generic skills (wurk:work, wurk:plan, wurk:commit, ...)
 skills/wurk:kit/     shared foundation: REFERENCE.md + the Ruby scripts layer
 agents/              eight read-only research agents + wurk-repo-worker,
-                     wurk-fleet-scout, wurk-shipwright
+                     wurk-fleet-scout, wurk-retro-reader
                      (generated from *.md.in + blocks/ by build_agents.rb; edit those)
 install.rb           symlinks skills + agents into ~/.claude
 docs/                plan, architecture, manifest schema, gate contract
