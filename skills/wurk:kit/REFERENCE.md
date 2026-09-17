@@ -173,6 +173,30 @@ env.block!(code: "branch_exists", message: "branch #{name} already exists")
 exit env.emit
 ```
 
+### A blocked message names what to change
+
+A `blocked` entry is read by an agent deciding what to do next, so its
+message says **what to change so the next attempt passes**, not only what
+went wrong. "branch abc-foo already exists" states the condition; "branch
+abc-foo already exists; pick another slug, or remove the old worktree
+first" states the condition and the move. The fix belongs in `message`, or
+in a `fix` key beside it when a caller needs to route on it separately.
+A warning that a caller may act on is written the same way.
+
+The same rule holds for the hooks under `hooks/`, where a deny reason
+carries a literal `Fix:` clause - and there it *is* mechanical:
+`test/hooks_test.rb` checks every hook's deny reasons for that clause and
+requires a hook with no deny path to be listed, with a reason, in its
+`HOOKS_WITHOUT_A_DENY_PATH` exempt list.
+
+On the script side it stays a convention, deliberately. No static check can
+tell a message that names a fix from one that only sounds like it, and a
+check strict enough to catch a bare message flags the `blocked` codes whose
+only honest content is a condition a human has to rule on - a preflight
+refusing to touch a diverged default branch, a mutex held by a live run.
+Flagging a legitimate refusal costs more than the prose saves, so this is
+read for in review rather than gated on.
+
 ## Exit codes
 
 - **0** - `ok` is `true`.

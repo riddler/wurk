@@ -206,4 +206,89 @@ class HooksTest < Minitest::Test
       assert out.length < 10_000
     end
   end
+
+  # --- the deny-message contract, over every hook ----------------------------
+
+  # A refusal names what to change, so the next attempt can pass. In a hook
+  # that means every deny reason carries a greppable "Fix:" clause. The two
+  # tests below hold that over hooks/*.sh as a whole rather than over one
+  # named hook, the way test_guard_denies_each_bad_wait_shape_and_names_the_fix
+  # does, so a hook added later cannot ship a bare deny and stay green.
+  #
+  # The only way out is this list, and every entry states why the hook has no
+  # deny path at all. A hook that is neither listed here nor emitting a deny
+  # fails: a new hook is a guard by default.
+  HOOKS_WITHOUT_A_DENY_PATH = {
+    "main-session-policy.sh" =>
+      "SessionStart hook: it either injects context or stays silent, and it " \
+      "fails open. It has no deny path, no failure message, and nothing it " \
+      "could name a fix for - every exit is 0 with no decision."
+  }.freeze
+
+  # The PreToolUse deny decision, however the hook spells the JSON.
+  DENY_EMITTER = /permissionDecision"?\s*:\s*"?deny/
+
+  # The convention a deny reason is written under: a shell variable whose name
+  # carries REASON, assigned a single- or double-quoted string (a double-quoted
+  # one may span lines). A hook that builds its reason some other way finds no
+  # reasons here and fails - that is the deny-by-default end of the contract, a
+  # prompt to follow the convention or to justify an exemption, not a green
+  # pass.
+  REASON_ASSIGNMENT =
+    /^[ \t]*([A-Za-z_][A-Za-z0-9_]*REASON[A-Za-z0-9_]*)=(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|([^\n]*))/
+
+  def hook_scripts
+    scripts = Dir[File.join(HOOKS_DIR, "*.sh")].sort
+    refute_empty scripts, "no hooks found under #{HOOKS_DIR}"
+    scripts
+  end
+
+  def deny_reasons(body)
+    body.scan(REASON_ASSIGNMENT).map { |name, dquoted, squoted, bare| [name, dquoted || squoted || bare] }
+  end
+
+  # sabotage: drop the main-session-policy.sh entry -> red (it denies nothing
+  # and would then be required to); add a hook that denies with a bare reason
+  # -> red in the test below.
+  def test_every_hook_either_denies_or_is_exempt_with_a_reason
+    names = hook_scripts.map { |path| File.basename(path) }
+    stale = HOOKS_WITHOUT_A_DENY_PATH.keys - names
+    assert_empty stale, "HOOKS_WITHOUT_A_DENY_PATH names hooks that no longer exist: #{stale.join(', ')}"
+
+    hook_scripts.each do |path|
+      name = File.basename(path)
+      denies = File.read(path).match?(DENY_EMITTER)
+      exemption = HOOKS_WITHOUT_A_DENY_PATH[name]
+      if exemption
+        refute denies, "#{name} is listed as having no deny path but emits one - drop it from the exempt list"
+        assert_operator exemption.length, :>=, 40,
+                        "the HOOKS_WITHOUT_A_DENY_PATH entry for #{name} must say WHY it has no deny path"
+      else
+        assert denies,
+               "#{name} emits no deny decision and is not in HOOKS_WITHOUT_A_DENY_PATH - " \
+               "add the deny, or list it there with the reason it has none"
+      end
+    end
+  end
+
+  # sabotage: drop "Fix:" from any one of safe-wait-guard.sh's R1_REASON,
+  # R2_REASON, R3_REASON -> red, naming that variable.
+  def test_every_hook_deny_reason_names_the_fix
+    hook_scripts.each do |path|
+      name = File.basename(path)
+      body = File.read(path)
+      # A hook with no deny decision is the other test's business, exempt or
+      # not; saying "denies, but ..." about it would name the wrong defect.
+      next unless body.match?(DENY_EMITTER)
+
+      reasons = deny_reasons(body)
+      refute_empty reasons,
+                   "#{name} denies, but no *_REASON= assignment carries its reason text - " \
+                   "the contract test cannot read a reason built any other way"
+      reasons.each do |variable, text|
+        assert_includes text, "Fix:",
+                        "#{name}: #{variable} is a deny reason, so it must name the fix (a 'Fix: ...' clause)"
+      end
+    end
+  end
 end
