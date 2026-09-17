@@ -1,0 +1,5 @@
+{
+  "label": "good",
+  "agent": "wurk-diff-critic",
+  "why": "a clean review whose only severity count is the mandated Verdict summary line; the scorer once read that line as a blocking finding and scored every good case a false positive"
+}

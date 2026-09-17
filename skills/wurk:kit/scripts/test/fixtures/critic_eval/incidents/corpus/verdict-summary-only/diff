@@ -1,0 +1,12 @@
+diff --git a/lib/queue_reader.rb b/lib/queue_reader.rb
+index 1111111..2222222 100644
+--- a/lib/queue_reader.rb
++++ b/lib/queue_reader.rb
+@@ -4,6 +4,9 @@ class QueueReader
+   def initialize(rows)
+     @rows = rows
+   end
++
++  # Rows a worker has claimed but not yet acknowledged.
++  def claimed = @rows.select { |r| r[:state] == "claimed" }
+ end
