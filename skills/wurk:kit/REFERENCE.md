@@ -87,7 +87,9 @@ Schema, validation rules, and the `check` lint: `docs/machine-config.md`.
 The schema has a second section, `outbound_scan` - the machine-configured
 outbound-scan gate (ADR-0014) - and a third and fourth, `machine` (the
 machine's name and its gate-slot cap) and `workloads` (what this machine
-runs, for a daemon or a conductor to ask). Their keys, validation, and what
+runs, for a daemon or a conductor to ask), and a fifth, `metrics` (this
+account's token prices and this machine's telemetry sink, read by
+`session_metrics.rb`). Their keys, validation, and what
 a script does with them are all documented at `docs/machine-config.md`;
 this file states only that the sections exist, and one precedence rule
 below under `lock.rb`.
@@ -722,6 +724,79 @@ argument. The file schema, the campaign record's keys, and every
 `campaign_state.rb`". The one rule worth restating here: `arm` refuses
 without an ADOPTED consent file and never writes one, because consent is
 a human artifact and this script only ever edits the plan's Status line.
+
+## `session_metrics.rb`: harness metrics from session transcripts
+
+Reads Claude Code session transcripts (JSONL) and reports what the harness
+actually did: tool calls by name, tool failure rate, skills fired, tokens
+per model, dollar cost when the machine quotes prices, and where sessions
+sat still. Read-only in the strongest sense the kit has - it never writes a
+transcript, never shells out, never reaches the network, and never puts a
+line of session CONTENT into its output. Names and numbers leave here, and
+nothing else, because the envelope is read by a conductor and may land in a
+journal.
+
+```sh
+ruby skills/wurk:kit/scripts/session_metrics.rb report  [--dir DIR] [--file PATH] [--since ISO8601] [--max-sessions N]
+ruby skills/wurk:kit/scripts/session_metrics.rb signals [--dir DIR] [--file PATH] [--since ISO8601]
+```
+
+`--dir` is the transcripts root and defaults to `~/.claude/projects`;
+`--file` reads one transcript instead. A missing root warns and answers
+with an empty window - "this machine has no transcripts" is a complete
+answer - while a `--file` that is not there blocks. `report` includes
+per-session rows capped at `--max-sessions` (default 50, `0` for all) so
+one envelope stays one envelope; totals are never capped.
+
+`signals` emits ONLY over-threshold items, so a healthy window answers with
+an empty list and a scheduler can route on "is this list non-empty". The
+thresholds: a session failure rate at or above 0.20 over at least 5 tool
+results, any agent-session stall, and any error event in the machine's
+telemetry sink. Everything else is `report`'s job.
+
+**The three measurement rules**, each of which a naive gap metric gets
+wrong in a way that still looks plausible:
+
+- **Floor and ceiling.** A gap under 300s is ordinary latency - a model
+  thinking, a gate running. A gap at or over 4h is a human who closed the
+  laptop and resumed, counted as a `resumption`; counting it as a stall
+  makes an overnight break the largest incident in the window. Only a gap
+  between the two is a stall.
+- **Turn boundary.** A gap that ends at a fresh user turn is idle time
+  BETWEEN turns - the session was waiting for a person. But a user record
+  is not automatically a fresh turn: one whose content carries
+  `tool_result` blocks is the harness returning a tool's output mid-turn,
+  and a long gap in front of THAT is exactly the stall worth seeing. The
+  distinction is the content of the record, not its type.
+- **Agent vs interactive.** Gaps in an interactive session are human think
+  time and say nothing about the harness; the same gap in an agent session
+  is a real stall. They are counted separately and only the agent ones
+  become signals. A session is read as interactive unless the transcript
+  positively shows automation and shows no human - an absent prompt source
+  counts as human, because misreading a person's lunch break as an agent
+  stall manufactures signals, while the opposite error only withholds one.
+  A subagent's records are agent records whatever session surrounds them.
+
+**Cost** is tokens times a per-model price table read from the machine
+config (`metrics.prices`, `docs/machine-config.md`). The kit ships no
+prices: an absent table means cost is `null`, never a guess, and one
+unpriced model makes the total `null` rather than pricing part of a window
+and presenting it as the whole. **Error events** come from the sink at
+`metrics.error_events`, read absent-safe - the hook that writes it is a
+separate opt-in, so a configured path with no file yet is normal and reads
+as zero.
+
+Parsing is defensive throughout: an unknown field is ignored, a malformed
+line is counted in `malformed_lines` and skipped (with a warning), an
+unreadable file warns, and a record with an unparseable timestamp drops
+out of the gap pass instead of ending the run. A transcript is an
+append-only log written by a program that ships faster than this one; it
+will grow fields, and none of them are a reason for a metrics run to die.
+
+Its tests run over synthetic fixtures under `test/fixtures/sessions/`. A
+real transcript from a machine's own `~/.claude/projects` is a MANUAL
+check and never a fixture: committing one would put session content into
+the tree permanently.
 
 ## `build_agents.rb`: agent definitions from templates and blocks
 
