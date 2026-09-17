@@ -1423,6 +1423,31 @@ time (other worker gates, another campaign's landing) alongside the
 result, since a concurrency-shaped flake only shows up under load a
 single clean run never sees.
 
+**Re-check a named safety property on the merged tree, both modes.**
+When a bead's acceptance names a safety property - a "must never", a
+refusal, an invariant asserted in both directions - re-check THAT
+property on the merged tree yourself before the close, and journal the
+claim, how you re-checked it and the result as a `[verify]` entry. A
+worker's green gate is not proof of it: the suite ran on the branch's
+own pre-merge base, and a property can hold there while nothing in the
+suite exercises it on the tree that actually landed. This is not the
+landing invariant check, which is one generic campaign-wide command
+and cannot see a single bead's named property. Nor is it
+"Repeat the gate after landing", which re-runs the SAME suite to
+expose an order-dependent flake and therefore cannot answer a question
+the suite never asked. Constructing the check is judgement and no step can hand
+it to you: read the acceptance text, decide what a violation would
+look like, and exercise it against the merged tree the way a caller
+would - a conductor who verified such a property from the config alone
+would have missed exactly the case its acceptance named, and the check
+that found it loaded the real code path in both directions. Two runs
+have improvised this; one of them found a worker's stated count wrong
+and changed what got filed, which is why the result belongs in
+`[verify]` rather than inside the worker's `[complete]`. A property
+you cannot check that way is journaled as unverified WITH the reason
+and queued for the operator, never landed silently on the worker's
+word.
+
 **Adoption, when a landing rewrites the running conductor.** In a
 dogfooding campaign (Phase 0 recorded the text in force) a merge can
 change the conductor skill, the worker agent definition, or a kit
