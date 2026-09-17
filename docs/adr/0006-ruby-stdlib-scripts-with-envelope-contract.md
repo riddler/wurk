@@ -1,8 +1,10 @@
 # ADR-0006: Kit scripts stay Ruby-stdlib with the statifier envelope contract
 
-Status: accepted (2026-08-08), amended (2026-09-13) - see "Amendment
-(2026-09-13)" below. The amendment narrows the `--dry-run` rule by one
-bounded carve-out; every other decision in this record stands as written.
+Status: accepted (2026-08-08), amended (2026-09-13, 2026-09-16) - see
+"Amendment (2026-09-13)" and "Amendment (2026-09-16)" below. The 2026-09-13
+amendment narrows the `--dry-run` rule by one bounded carve-out; the
+2026-09-16 amendment adds an enforcement mechanism for decision 2's version
+floor. Every other decision in this record stands as written.
 
 ## Context
 
@@ -197,3 +199,37 @@ its own argument, and REFERENCE.md's kit-author checklist says so.
   mechanical "only one script may `Sh.run` outside a `dry_run` guard" check
   was not added, because the scripts already vary in how they guard, and a
   false-negative scan would be worse than the prose.
+
+## Amendment (2026-09-16): the floor is named in the gate command, not left to PATH
+
+Decided under wu-tms. This amendment adds an enforcement mechanism for the
+version floor decided in decision 2 above; every other decision in this
+record stands as written.
+
+Decision 2's enforcement is a static scan of kit source for post-2.6 method
+names, and that scan is structurally unable to catch the failure wu-tms
+found. The difference between `/usr/bin/ruby` and a newer `ruby` on PATH is
+not only which core methods exist: it is also which versions of the
+*bundled stdlib gems* are loaded. Minitest 5.11.3 ships with 2.6.10 and runs
+its after-run handlers in a forked child; minitest 6.0.0 ships with 4.0.7
+and does not. No method name appears anywhere in our source, so no scan
+over our source can see it. The kit suite was red on the floor and green on
+PATH for as long as the manifest has existed.
+
+So the floor is now named where the machine reads it: `gate.full` and
+`gate.loop` in `.claude/wurk.json` carry `/usr/bin/ruby` as `argv[0]`. The
+method-name scan stays - it catches a different thing, at edit time rather
+than run time - and the two together are the enforcement of decision 2.
+
+Consequence: this repo's own gate is macOS-only. That was already implied
+by "the version floor is macOS system Ruby" and is now literal. A run on
+another OS produces a `gate_command_could_not_start` block naming the path,
+which is a better failure than a green measured on the wrong interpreter.
+Nothing changes for a consumer: a consumer runs kit *scripts*, which are
+stdlib Ruby on any 2.6-or-newer interpreter, and names its own gate command.
+
+The generic half of the rule - that a project with a version floor names
+its interpreter in its gate command - is stated in `docs/gate-contract.md`'s
+tier-0 section, which is where a rule that applies to every consumer
+belongs. This record carries wurk's own value, which that document must
+not.
