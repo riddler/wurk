@@ -590,3 +590,120 @@ class CampaignStateCliTest < Minitest::Test
     [nil, e.status]
   end
 end
+
+# The QUEUED status: sequencing one campaign behind another so a scheduler
+# keying off `armed` never sees two ARMED plans and never needs a human at
+# the handoff.
+class CampaignStateQueueTest < Minitest::Test
+  include CampaignFixtures
+
+  def setup
+    @dir = Dir.mktmpdir
+    @previous_clock = CampaignState.clock
+    CampaignState.clock = -> { FIXED_NOW }
+  end
+
+  def teardown
+    CampaignState.clock = @previous_clock
+    FileUtils.remove_entry(@dir)
+  end
+
+  def run_cli(argv)
+    io = StringIO.new
+    code = CampaignStateCli.run(argv, io: io)
+    [code, JSON.parse(io.string)]
+  end
+
+  def locks_dir
+    File.join(@dir, "locks")
+  end
+
+  def queue_fixture(predecessor_status:)
+    write_plan(@dir, "042", status: "#{predecessor_status} 2026-09-14 18:41 -0600")
+    write_consent(@dir, "042")
+    write_plan(@dir, "043", status: "QUEUED 2026-09-14 19:00 -0600 after 042")
+    write_consent(@dir, "043")
+  end
+
+  def test_parse_status_captures_the_after_id
+    parsed = CampaignState.parse_status("Status: QUEUED 2026-09-14 19:00 -0600 after 042 prose tail\n")
+    assert_equal "QUEUED", parsed[:status]
+    assert_equal "042", parsed[:after]
+
+    assert_nil CampaignState.parse_status("Status: ARMED 2026-09-14 19:00 -0600\n")[:after]
+  end
+
+  def test_queued_holds_while_the_predecessor_is_armed
+    queue_fixture(predecessor_status: "ARMED")
+    _, env = run_cli(["list", "--dir", @dir])
+    q = env["data"]["campaigns"].find { |c| c["id"] == "043" }
+    refute q["armed"], "queued campaign must not report armed while the predecessor is not WRAPPED"
+    refute q["runnable"]
+    assert_equal "042", q["queued_after"]
+    refute q["queue"]["satisfied"]
+    assert_equal ["042"], env["data"]["runnable"]
+  end
+
+  def test_queued_promotes_when_the_predecessor_wraps
+    queue_fixture(predecessor_status: "WRAPPED")
+    _, env = run_cli(["list", "--dir", @dir])
+    q = env["data"]["campaigns"].find { |c| c["id"] == "043" }
+    assert q["armed"], "queued campaign reports armed once the predecessor is WRAPPED"
+    assert q["queue"]["satisfied"]
+    assert_equal "QUEUED", q["status"], "virtual promotion never rewrites the file"
+    assert_equal ["043"], env["data"]["runnable"]
+  end
+
+  def test_queued_holds_while_the_wrapped_predecessors_mutex_is_still_held
+    queue_fixture(predecessor_status: "WRAPPED")
+    hold_mutex(@dir, "042")
+    _, env = run_cli(["list", "--dir", @dir])
+    q = env["data"]["campaigns"].find { |c| c["id"] == "043" }
+    refute q["armed"], "WRAPPED is flipped while the mutex is still held; the successor must not start in that window"
+    refute q["queue"]["satisfied"]
+  end
+
+  def test_queued_after_a_missing_predecessor_warns_and_holds
+    write_plan(@dir, "043", status: "QUEUED 2026-09-14 19:00 -0600 after 042")
+    write_consent(@dir, "043")
+    _, env = run_cli(["list", "--dir", @dir])
+    q = env["data"]["campaigns"].find { |c| c["id"] == "043" }
+    refute q["armed"], "a typo'd predecessor must hold the queue, not release it"
+    assert env["warnings"].any? { |w| w["code"] == "queue_predecessor_missing" }, env["warnings"].inspect
+  end
+
+  def test_queued_without_after_warns_and_holds
+    write_plan(@dir, "043", status: "QUEUED 2026-09-14 19:00 -0600")
+    write_consent(@dir, "043")
+    _, env = run_cli(["list", "--dir", @dir])
+    refute env["data"]["campaigns"].first["armed"]
+    assert env["warnings"].any? { |w| w["code"] == "queued_without_after" }, env["warnings"].inspect
+  end
+
+  def test_arm_after_writes_the_queued_line_and_plain_arm_promotes
+    write_plan(@dir, "042", status: "ARMED 2026-09-14 18:41 -0600")
+    write_consent(@dir, "042")
+    write_plan(@dir, "043", status: "DRAFTED 2026-09-14 18:00 -0600")
+    write_consent(@dir, "043")
+
+    _, env = run_cli(["arm", "043", "--dir", @dir, "--after", "042"])
+    assert env["ok"], env.inspect
+    assert_equal "QUEUED", env["data"]["after"]
+    line = File.read(File.join(@dir, "043.md"))[/^Status:.*$/]
+    assert_match(/\AStatus: QUEUED 2026-09-14 20:00 -0600 after 042/, line)
+
+    # Plain arm on the QUEUED plan is the manual promotion path.
+    _, env = run_cli(["arm", "043", "--dir", @dir])
+    assert env["ok"], env.inspect
+    line = File.read(File.join(@dir, "043.md"))[/^Status:.*$/]
+    assert_match(/\AStatus: ARMED 2026-09-14 20:00 -0600/, line)
+  end
+
+  def test_arm_after_refuses_self
+    write_plan(@dir, "043", status: "DRAFTED 2026-09-14 18:00 -0600")
+    write_consent(@dir, "043")
+    _, env = run_cli(["arm", "043", "--dir", @dir, "--after", "043"])
+    refute env["ok"]
+    assert env["blocked"].any? { |b| b["code"] == "queued_after_self" }, env.inspect
+  end
+end

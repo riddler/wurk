@@ -31,18 +31,22 @@ module CampaignState
   # The plan's Status vocabulary. RUNNING is deliberately absent: a running
   # campaign is one whose mutex is held, which is a fact about the lock dir
   # and not something a file can claim about itself.
-  PLAN_STATUSES = %w[DRAFTED ARMED WRAPPED].freeze
+  PLAN_STATUSES = %w[DRAFTED QUEUED ARMED WRAPPED].freeze
   CONSENT_STATUSES = %w[DRAFTED ADOPTED].freeze
   ADOPTED = "ADOPTED"
   ARMED = "ARMED"
   DRAFTED = "DRAFTED"
   WRAPPED = "WRAPPED"
+  QUEUED = "QUEUED"
 
   # `Status: WORD [stamp]` at the start of a line. The stamp is a date with an
   # optional time and zone offset, in the shape the conductor writes by hand
   # ("2026-09-14 18:41 -0600"); anything after it on the line is prose that
   # a rewrite keeps verbatim.
   STATUS_LINE = /\A(Status:[ \t]*)([A-Z]+)((?:[ \t]+\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?(?:[ \t]*(?:[-+]\d{2}:?\d{2}|Z))?)?)/.freeze
+  # `after <id>` immediately following the stamp on a QUEUED Status line;
+  # the id names the plan (same campaigns dir) this one queues behind.
+  AFTER_TAIL = /\A[ \t]+after[ \t]+([A-Za-z0-9._-]+)/.freeze
   H1 = /\A#[ \t]+(.+?)[ \t]*\z/.freeze
   PLAN_H1 = /\A#[ \t]+Campaign[ \t]+(\S+)[ \t]*\z/.freeze
   H2 = /\A##[ \t]+(.+?)[ \t]*\z/.freeze
@@ -87,9 +91,10 @@ module CampaignState
         next unless match
 
         stamp = match[3].strip
-        return { status: match[2], stamp: stamp.empty? ? nil : stamp, line: lineno }
+        after = line.chomp[match[0].length..].to_s[AFTER_TAIL, 1]
+        return { status: match[2], stamp: stamp.empty? ? nil : stamp, after: after, line: lineno }
       end
-      { status: nil, stamp: nil, line: nil }
+      { status: nil, stamp: nil, after: nil, line: nil }
     end
 
     def known_status?(word)
@@ -125,8 +130,9 @@ module CampaignState
     # everything after the stamp on that line. With no Status line, inserts
     # one as its own paragraph after the first H1 (or at the top when there
     # is no H1). Returns the new content; never touches the filesystem.
-    def rewrite_status(content, word, now: clock.call)
+    def rewrite_status(content, word, now: clock.call, tail: nil)
       new_head = "Status: #{word} #{stamp(now)}"
+      new_head += " #{tail}" if tail
       lines = content.lines
       parsed = parse_status(content)
 
@@ -180,7 +186,13 @@ module CampaignState
       consent = inspect_consent(consent_path(dir, id))
       mutex = inspect_mutex(mutex_dir(locks_dir, id))
 
-      armed = status[:status] == ARMED
+      queued = status[:status] == QUEUED
+      queue = queued ? inspect_queue(dir, status[:after], locks_dir: locks_dir) : nil
+
+      # A satisfied QUEUED plan is virtually promoted: it reports armed
+      # without a file write, so a scheduler keying off `armed` starts it
+      # on its next tick and never sees two ARMED plans during the wait.
+      armed = status[:status] == ARMED || (queued && queue[:satisfied])
       running = mutex[:held] && !mutex[:stale]
       {
         id: id,
@@ -188,6 +200,9 @@ module CampaignState
         title: first_h1(content),
         status: status[:status],
         status_stamp: status[:stamp],
+        queued: queued,
+        queued_after: status[:after],
+        queue: queue,
         armed: armed,
         running: running,
         runnable: armed && consent[:adopted] && !running,
@@ -195,6 +210,29 @@ module CampaignState
         scope: section(content, "Scope"),
         consent: consent,
         mutex: mutex
+      }
+    end
+
+    # The predecessor check for one QUEUED plan. Satisfied only when the
+    # predecessor plan (same campaigns dir) is WRAPPED and its mutex is not
+    # live-held: WRAPPED is flipped while the conductor still holds the
+    # mutex, and the successor must not start inside that window. A missing
+    # or invalid predecessor is never satisfied - a typo must hold the
+    # queue, not release it. Only the predecessor's own Status word is
+    # read, so a chain (C after B after A) advances one wrap at a time.
+    def inspect_queue(dir, after, locks_dir:)
+      return { after: nil, satisfied: false, predecessor_status: nil, predecessor_exists: false } unless after
+
+      path = File.join(dir, "#{after}.md")
+      exists = File.file?(path) && first_h1(File.read(path)) =~ PLAN_H1 && Regexp.last_match(1) == after
+      predecessor_status = exists ? parse_status(File.read(path))[:status] : nil
+      predecessor_mutex = inspect_mutex(mutex_dir(locks_dir, after))
+      predecessor_running = predecessor_mutex[:held] && !predecessor_mutex[:stale]
+      {
+        after: after,
+        satisfied: exists && predecessor_status == WRAPPED && !predecessor_running,
+        predecessor_status: predecessor_status,
+        predecessor_exists: !!exists
       }
     end
 
@@ -216,7 +254,7 @@ end
 # line and nothing else. Every subcommand takes the same location flags.
 module CampaignStateCli
   SUBCOMMANDS = %w[list show arm disarm].freeze
-  USAGE = "campaign_state.rb <list|show ID|arm ID|disarm ID> [--dir DIR ...] [--locks-dir DIR] [--dry-run]"
+  USAGE = "campaign_state.rb <list|show ID|arm ID [--after ID]|disarm ID> [--dir DIR ...] [--locks-dir DIR] [--dry-run]"
 
   class << self
     def run(argv, io: $stdout)
@@ -231,6 +269,7 @@ module CampaignStateCli
       parser, options = Cli.build(USAGE, options) do |opts|
         opts.on("--dir DIR", "campaigns directory (repeatable; default #{CampaignState::DEFAULT_DIR})") { |v| options[:dirs] << v }
         opts.on("--locks-dir DIR", "where campaign mutexes live (default <first --dir>/#{CampaignState::LOCKS_SUBDIR})") { |v| options[:locks_dir] = v }
+        opts.on("--after ID", "arm only: queue behind campaign ID (writes Status: QUEUED ... after ID)") { |v| options[:after] = v }
       end
       args = Cli.parse!(parser, argv)
 
@@ -322,7 +361,23 @@ module CampaignStateCli
         return env.emit(io)
       end
 
-      if campaign[:armed]
+      if options[:after]
+        if options[:after] == id
+          env.block!(code: "queued_after_self", message: "#{id} cannot queue behind itself")
+          return env.emit(io)
+        end
+        if campaign[:status] == CampaignState::QUEUED && campaign[:queued_after] == options[:after]
+          env.warn(code: "already_queued", message: "#{id} is already QUEUED after #{options[:after]} (#{campaign[:status_stamp]})")
+          return env.emit(io)
+        end
+        rewrite(env, options, path, campaign, CampaignState::QUEUED, tail: "after #{options[:after]}")
+        return env.emit(io)
+      end
+
+      # Plain arm on a QUEUED plan is the manual promotion path: the file
+      # flips to ARMED even when the queue already reports it virtually
+      # armed, so the file stops depending on the predecessor's state.
+      if campaign[:armed] && campaign[:status] != CampaignState::QUEUED
         env.warn(code: "already_armed", message: "#{id} is already ARMED (#{campaign[:status_stamp]})")
         return env.emit(io)
       end
@@ -380,6 +435,12 @@ module CampaignStateCli
       if campaign[:status] && !CampaignState.known_status?(campaign[:status])
         env.warn(code: "unknown_status", message: "#{id}: Status #{campaign[:status].inspect} is outside #{CampaignState::PLAN_STATUSES.join('/')}; treated as not armed")
       end
+      if campaign[:queued] && !campaign[:queued_after]
+        env.warn(code: "queued_without_after", message: "#{id}: Status QUEUED names no predecessor (expected \"Status: QUEUED <stamp> after <id>\"); treated as not armed")
+      end
+      if campaign[:queued] && campaign[:queued_after] && !campaign[:queue][:predecessor_exists]
+        env.warn(code: "queue_predecessor_missing", message: "#{id}: queued after #{campaign[:queued_after]}, but no such campaign plan exists; the queue holds until it does")
+      end
       if campaign[:armed] && !campaign[:consent][:exists]
         env.warn(code: "consent_missing", message: "#{id} is ARMED but has no consent file at #{campaign[:consent][:path]}")
       end
@@ -389,11 +450,11 @@ module CampaignStateCli
       campaign
     end
 
-    def rewrite(env, options, path, campaign, word)
+    def rewrite(env, options, path, campaign, word, tail: nil)
       now = CampaignState.clock.call
       content = File.read(path)
-      rewritten = CampaignState.rewrite_status(content, word, now: now)
-      env.commands << "rewrite Status line in #{path}: #{campaign[:status] || 'none'} -> #{word} #{CampaignState.stamp(now)}"
+      rewritten = CampaignState.rewrite_status(content, word, now: now, tail: tail)
+      env.commands << "rewrite Status line in #{path}: #{campaign[:status] || 'none'} -> #{word} #{CampaignState.stamp(now)}#{tail ? " #{tail}" : ''}"
       env.data[:after] = word
       env.data[:changed] = true
       return if options[:dry_run]

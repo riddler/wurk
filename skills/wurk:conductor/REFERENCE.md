@@ -158,9 +158,11 @@ starts with `Status:`, in the shape the conductor already writes by hand:
     Status: ARMED 2026-09-14 18:41 -0600 (consent adopted verbatim in the conductor session). Arming was ...
 
 The grammar is `Status: <WORD> [<stamp>] <anything>`. `<WORD>` is one of
-`DRAFTED`, `ARMED`, `WRAPPED`; `<stamp>` is a date, optionally with a
+`DRAFTED`, `QUEUED`, `ARMED`, `WRAPPED`; `<stamp>` is a date, optionally with a
 time and zone offset (`2026-09-14`, `2026-09-14 18:41 -0600`); everything
-after the stamp is prose. A plan with no Status line reads as `status:
+after the stamp is prose (except that on a QUEUED line the stamp may
+be followed by `after <id>`, naming the plan this one queues behind -
+see "Queueing" below). A plan with no Status line reads as `status:
 null` and is treated as DRAFTED. A word outside the vocabulary is
 reported verbatim with an `unknown_status` warning and is never treated
 as armed. There is no YAML front matter and no second schema: the
@@ -174,6 +176,34 @@ about itself, so the script derives it and the file never records it.
 
 The consent file carries the same line shape with the words `DRAFTED` and
 `ADOPTED`. Only `ADOPTED` counts.
+
+### Queueing - one campaign behind another
+
+A scheduler keying off `armed` refuses when two plans are ARMED at once
+(deliberately: two ARMED plans is an ambiguity only the operator can
+resolve). That made "run B tonight, after A wraps" need a human awake at
+the handoff. `QUEUED` closes that gap:
+
+    Status: QUEUED 2026-09-16 21:30 -0600 after 042
+
+A QUEUED plan reports `armed: false` - invisible to the scheduler -
+until its predecessor (`<after>.md`, same campaigns directory) is
+`WRAPPED` **and** the predecessor's mutex is not live-held. Then it is
+*virtually promoted*: the record reports `armed: true` and (with an
+ADOPTED consent) turns up in `data.runnable`, with no file write. The
+file still says QUEUED while the successor runs; the wrap flips it to
+WRAPPED as usual. The mutex condition matters because WRAPPED is flipped
+while the conductor still holds the mutex - the successor must not start
+inside that window.
+
+A missing or invalid predecessor holds the queue (warning
+`queue_predecessor_missing`), never releases it - a typo must fail safe.
+`QUEUED` with no `after` id also holds (`queued_without_after`). Chains
+(`044 after 043 after 042`) advance one wrap at a time, because
+satisfaction requires the predecessor to be WRAPPED, not merely armed.
+The record carries `queued`, `queued_after`, and `queue{after,
+satisfied, predecessor_status, predecessor_exists}` so a scheduler's
+status display can say what it is waiting for.
 
 ### Subcommands
 
@@ -194,7 +224,11 @@ under the current directory) and `--locks-dir DIR`.
   scheduler acts on, and the script never manufactures the consent that
   makes it legitimate. Refuses `campaign_wrapped`. Already armed: ok,
   `changed: false`, warning `already_armed`. `--dry-run` reports the
-  rewrite in `commands` and touches nothing.
+  rewrite in `commands` and touches nothing. With `--after ID`, writes
+  `QUEUED <now> after ID` instead (refusing `queued_after_self`); plain
+  `arm` on a QUEUED plan is the manual promotion path and flips the file
+  to `ARMED <now>` even when the queue already reports it virtually
+  armed.
 - **`disarm ID`** - rewrites the Status to `DRAFTED <now>` the same way.
   Refuses `campaign_running` while the mutex is live-held: the conductor
   holding it has already read ARMED and the file flip would only mislead
