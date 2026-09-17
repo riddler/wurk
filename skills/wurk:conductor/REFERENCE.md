@@ -358,6 +358,22 @@ rather than trusting this line; it is a starting expectation, not a
 substitute". That is also what makes the campaign-file claim check in
 SKILL.md's "Phase 1 - Ground truth" a check rather than a re-read.
 
+**A plan is drafted from a tracker pulled in the same sitting.** A `git
+fetch` moves the code and nothing else: under `beads.sync` of `dolthub`
+or `git` the tracker is its own remote, so a checkout brought a dozen
+commits forward can sit beside a local db hours behind it, still
+reporting beads as open whose close records landed with those commits.
+One plan was drafted minutes after such a pull, read the open list, and
+wrote two beads into its `## Scope` and a Phase 0 precondition as
+near-neighbours to read; both had merged that morning. Phase 0's own
+tracker pull cannot catch this, because it runs after the plan exists.
+So pull the tracker before the survey that becomes the plan, and record
+that you did: the `drafted:` header row carries the tracker stamp beside
+the git sha - the sha the plan was drafted on, and the time the tracker
+was last pulled or pushed - so Phase 1 can tell a fresh draft from one
+whose bead states are a guess. A `drafted:` row carrying a sha and no
+tracker stamp is the stale case until a reader proves otherwise.
+
 **A hazard states its magnitude, because the magnitude is what the
 planning uses.** "One bead carries both area labels" and "four beads
 do" are the same hazard and two different wave plans. A hazard with a
@@ -405,7 +421,7 @@ consumer's manifest, tracker or forge:
         mode:        <MR | LOCAL-ONLY>
         repo:        <repo root, or the fleet's roster>
         tracker:     <bead prefix> (beads.sync = <local | git | dolthub>)
-        drafted:     <date>
+        drafted:     <date>, on <default branch> at <sha>; tracker pulled <time>
         armed:       <written by campaign_state.rb arm>
         conductor:   -            # the claiming session writes its id here
         consent:     <campaigns dir>/<id>-consent.md
