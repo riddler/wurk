@@ -298,6 +298,11 @@ This suite is wurk's whole quality gate (ADR-0002). It needs no toolchain
 beyond system Ruby, and it takes about half a second. Run it before any
 commit that touches a script.
 
+What this suite cannot see is a shell regression that only appears under a
+bash 4.4+ `/bin/sh`: on macOS `/bin/sh` is bash 3.2. That gap has its own
+opt-in lane, `portability_lane.rb` below, which the default suite reports
+as a skip rather than running - see `docs/gate-contract.md`.
+
 **A consumer repo that gates its own `.claude/` should stop measuring the
 kit.** While these scripts lived in statifier-ex, its `mix quality` ran them
 as a `Script tests` stage, and that mattered: `.claude/**` was not a
@@ -540,6 +545,39 @@ Standard kit exit codes (see above), with one script-specific rule: `poll`
 and `status` never fail or block on `"running"` - only `"finished"` (via the
 gate's own `ok`), `"abandoned"`, and `"not_found"` can make either exit
 nonzero.
+
+## `portability_lane.rb`: the Linux `/bin/sh` lane
+
+Runs one test file inside a Linux container whose `/bin/sh` is bash 4.4 or
+newer, so a shell regression invisible on macOS (where `/bin/sh` is bash
+3.2.57) is catchable here. It mounts the repo read-only, repoints
+`/bin/sh` at the image bash, and by default runs the hook tests - the
+suite whose blind spot the lane exists for.
+
+```sh
+ruby skills/wurk:kit/scripts/portability_lane.rb
+```
+
+Flags: `--image IMAGE`, `--test PATH` (relative to the repo root),
+`--runtime CMD`, `--timeout SECONDS`, and `--dry-run` (renders the
+container command, starts nothing).
+
+It is deliberately not part of the default gate, and the reasons are a
+contract rather than a preference: the default gate stays stdlib-only
+system Ruby, stays green on a machine with no container runtime and no
+network, and keeps its measured duration. A missing runtime, a runtime
+whose daemon is down, and an image that cannot be pulled are all
+`data.status: "skipped"` with a `data.skip_code` naming which, one
+warning, and exit 0. A container whose `/bin/sh` does not report bash 4.4+
+blocks with `sh_not_modern_bash` even when the run passed, because a green
+run under an old shell is the blind spot itself. `data.output` carries the
+container output whole.
+
+The default suite reports the lane instead of running it:
+`PortabilityLaneTest#test_the_lane_itself` skips with a reason naming
+either the missing runtime or the opt-in, and
+`WURK_PORTABILITY_LANE=1` turns it into a real run. The full rationale and
+the skip taxonomy live in `docs/gate-contract.md`.
 
 ## `lock.rb`: the mkdir-mutex
 

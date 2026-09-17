@@ -96,3 +96,79 @@ Two independent capabilities:
 
 The skills always state which tier a green came from. Weaker is acceptable;
 vaguer is not.
+
+## The portability lane: what shell the gate ran under
+
+Tiers answer "what did the gate report". This section answers a question
+none of them do: which shell, and therefore which shell's behavior, the gate
+was able to see at all.
+
+Wurk ships `#!/bin/sh` hooks under `hooks/`, and the kit's hook tests run
+them through their shebang. On macOS `/bin/sh` is bash 3.2.57, which
+predates bash 4.4's `command substitution: ignored null byte in input`
+warning entirely, so a regression that only manifests under a modern bash
+cannot turn the default gate red on a developer machine - and the default
+gate is the only gate this repo has. That is not hypothetical: the hook
+`read_input` NUL-byte regression was green on macOS both before and after
+its fix, reproduced only on a Linux image whose `/bin/sh` is bash 5.1, and
+was found by an outside contributor rather than by the maintainer's gate
+(wu-269, wu-kxo, wu-5yo).
+
+`skills/wurk:kit/scripts/portability_lane.rb` is the lane that closes that
+gap. It mounts the repo read-only into a Linux container, repoints
+`/bin/sh` at the image's bash, and runs one test file there - by default the
+hook tests, the suite whose blind spot the lane exists for.
+
+```sh
+/usr/bin/ruby skills/wurk:kit/scripts/portability_lane.rb
+/usr/bin/ruby skills/wurk:kit/scripts/portability_lane.rb --image IMAGE --test PATH
+```
+
+### It is not part of the default gate, on purpose
+
+Two properties of the default gate are load-bearing and the lane must not
+move either:
+
+- **Stdlib-only system Ruby, and green on a machine with no container
+  runtime and no network.** A missing runtime is a *reported skip*, never a
+  red gate. A lane that made a container runtime mandatory would break the
+  contract it exists to strengthen.
+- **Its measured duration.** Callers treat the default gate as a short
+  foreground run and size their waits on that number. A container pull on
+  that path would change it.
+
+So the lane is its own entry point, and the default suite carries only an
+opt-in test (`PortabilityLaneTest#test_the_lane_itself`) which reports the
+lane as skipped and names why - either "no container runtime on PATH" or
+"opt-in only". Its runtime probe is a PATH lookup, not a subprocess, so the
+report costs nothing. To run the lane through the suite:
+
+```sh
+WURK_PORTABILITY_LANE=1 /usr/bin/ruby skills/wurk:kit/scripts/test/run.rb -n /the_lane_itself/
+```
+
+Everything else in that file runs against `FakeSh` and starts no container.
+
+### What is a skip and what is a failure
+
+The distinction is the whole safety property: "the lane could not be
+exercised" is never reported as "the lane found a regression".
+
+| `data.skip_code` | Means |
+|---|---|
+| `runtime_missing` | no runtime binary on PATH |
+| `runtime_unavailable` | the binary is installed but the daemon does not answer |
+| `image_unavailable` | the image is not in the local image store and could not be pulled (no network) |
+
+All three are `data.status: "skipped"`, one warning, `ok: true`, exit 0. An
+image already in the local store needs no network, which is what makes the
+lane runnable offline once it has run once.
+
+Not ok: the test run inside the container failing (`status: "failed"`),
+running out of its budget (`status: "timeout"`), and one case worth naming -
+a container whose `/bin/sh` does not report bash 4.4 or newer *blocks* with
+`sh_not_modern_bash` even when the run passed. A green run under an ancient
+`/bin/sh` reproduces the macOS blind spot exactly, so it must never read as
+a pass; the lane verifies the shell it got rather than trusting the image
+tag. `data.output` carries the container's combined output whole, never
+truncated, because that output is the evidence the lane produces.
