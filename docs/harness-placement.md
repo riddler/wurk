@@ -155,7 +155,10 @@ earlier rungs reach further for less.
    guessing at the failure; a rule that keeps being broken is not going to
    start working because it was restated more firmly. A hook when the thing
    to catch is something nobody chose to run; a kit check when it belongs
-   to a step someone already runs.
+   to a step someone already runs. `docs/recipes/lesson-to-guard.md` is
+   this rung in detail - the triage question, the refusal rule for
+   judgement-only and flaky checks, the third form (a contract test over
+   the tree), and the scaffold a guard carries before it lands.
 3. **Does every session in this repo need it?** No trigger, no task it
    belongs to, wanted before the work starts. `CLAUDE.md`. Stop.
 4. **Is it task-triggered, or long?** A procedure for one kind of work, or
