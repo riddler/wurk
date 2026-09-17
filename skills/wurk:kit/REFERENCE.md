@@ -725,6 +725,33 @@ argument. The file schema, the campaign record's keys, and every
 without an ADOPTED consent file and never writes one, because consent is
 a human artifact and this script only ever edits the plan's Status line.
 
+## `report_check.rb`: does a worker's report file actually parse
+
+Takes one or more paths - a campaign's reports directory, or a single
+`<bead-id>-report.json` - and reports, per file, whether it parses as the
+JSON the conductor's contract says it holds. A file that does not parse
+comes back as a `blocked` `report_not_json` entry naming the path, what
+shape was found instead (`fenced`, `prose`, `empty`, or a malformed
+`bare` document), and a `Fix:` clause: the worker re-emits the report as
+bare JSON with no markdown fence and no prose preamble. A named file that
+is not there yet is the `report_missing` warning, not a block, because
+the sweep asks about beads still in flight; a directory that does not
+exist is `reports_path_missing` and one holding no reports is
+`no_reports`.
+
+It is a reader: it never edits, moves or deletes a report, and it never
+rescues a fenced file into JSON - a reader that tolerates the shape is how
+the shape spreads. Like `campaign_state.rb` it takes no manifest, runs no
+`Sh`, and has no default directory, so the reports dir stays the caller's
+seam value (the fleet manifest's `campaignState.reports`) and is never
+spelled in the script. Nothing mutates, so `--dry-run` has nothing to
+skip. The guard exists because prose did not hold: in one measured
+campaign four of eight report files opened with a code fence or a prose
+H1, and every later reader that parses rather than eyeballs lost those
+workers' results silently. The conductor runs it at the sweep
+(`skills/wurk:conductor/SKILL.md`, "Sweep on every wake, and a heartbeat
+so wakes happen").
+
 ## `session_metrics.rb`: harness metrics from session transcripts
 
 Reads Claude Code session transcripts (JSONL) and reports what the harness
