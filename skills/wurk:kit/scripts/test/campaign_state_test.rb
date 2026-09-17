@@ -9,6 +9,7 @@ require "time"
 require_relative "../campaign_state"
 require_relative "../lib/lock"
 require_relative "support/home_guard"
+require_relative "support/dead_pid"
 
 # Every fixture here is built in a tmpdir by the test itself. The kit's own
 # campaign directory is live state for whatever campaign is running while
@@ -577,10 +578,10 @@ class CampaignStateCliTest < Minitest::Test
 
   private
 
+  # A pid that is certainly dead: spawned, exited, reaped. Never fork - see
+  # support/dead_pid.rb (wu-tms).
   def dead_pid
-    pid = fork { exit(0) }
-    Process.wait(pid)
-    pid
+    DeadPid.obtain
   end
 
   def capture_exit

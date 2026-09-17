@@ -8,6 +8,7 @@ require "fileutils"
 require_relative "../lib/lock"
 require_relative "../lock"
 require_relative "support/user_config_helper"
+require_relative "support/dead_pid"
 
 # A no-op sleeper that just counts calls, so a bounded-wait test never
 # sleeps for real. Paired with FakeClock below, this is the seam the plan's
@@ -268,8 +269,7 @@ class LockLibTest < Minitest::Test
   # --- probe: pid liveness ----------------------------------------------------
 
   def test_probe_on_a_lock_owned_by_a_reaped_forked_pid_reports_dead_and_stale
-    dead_pid = fork { exit(0) }
-    Process.wait(dead_pid)
+    dead_pid = DeadPid.obtain
 
     dir = lock_dir
     Lock.try_acquire(dir, owner("pid" => dead_pid.to_s))
@@ -374,8 +374,7 @@ class LockLibTest < Minitest::Test
   end
 
   def test_clear_succeeds_on_a_dead_holder
-    dead_pid = fork { exit(0) }
-    Process.wait(dead_pid)
+    dead_pid = DeadPid.obtain
 
     dir = lock_dir
     Lock.try_acquire(dir, owner("pid" => dead_pid.to_s))
@@ -612,8 +611,7 @@ class LockCliTest < Minitest::Test
   end
 
   def test_clear_succeeds_on_a_dead_holder_via_cli
-    dead_pid = fork { exit(0) }
-    Process.wait(dead_pid)
+    dead_pid = DeadPid.obtain
     run_cli(%W[acquire --gate-lock #{lock_dir} --campaign c1 --bead zz-1 --pid #{dead_pid}])
 
     code, env = run_cli(%W[clear --dir #{lock_dir}])
@@ -624,8 +622,7 @@ class LockCliTest < Minitest::Test
   end
 
   def test_clear_dry_run_removes_nothing
-    dead_pid = fork { exit(0) }
-    Process.wait(dead_pid)
+    dead_pid = DeadPid.obtain
     run_cli(%W[acquire --gate-lock #{lock_dir} --campaign c1 --bead zz-1 --pid #{dead_pid}])
 
     code, env = run_cli(%W[clear --dir #{lock_dir} --dry-run])

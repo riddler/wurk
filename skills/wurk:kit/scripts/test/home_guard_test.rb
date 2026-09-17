@@ -9,7 +9,7 @@ require_relative "../lib/user_config"
 # helper, and no test deletes HOME out from under it. See wu-yi7.11.
 class HomeGuardTest < Minitest::Test
   TEST_DIR = File.expand_path(__dir__)
-  SUPPORTS_WITH_GUARD = %w[home_guard manifest_helper user_config_helper fake_sh].freeze
+  SUPPORTS_WITH_GUARD = %w[home_guard manifest_helper user_config_helper fake_sh dead_pid].freeze
 
   # sabotage: drop the ENV["HOME"] assignment from HomeGuard.install! -> red
   def test_home_points_at_the_guard_dir_and_never_at_the_original
