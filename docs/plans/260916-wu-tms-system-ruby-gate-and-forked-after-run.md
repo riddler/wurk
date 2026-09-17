@@ -743,12 +743,12 @@ reproductions and the line references are left exactly as they were.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes (unchanged by a doc-only commit, but run it -
+- [x] Full quality gate passes (unchanged by a doc-only commit, but run it -
       `contract_test.rb` re-reads ADR-0006's decision text to detect drift
       between the prose and the enforcement, so an edit to that file is not
       risk-free)
-- [ ] `grep -rn '/usr/bin/ruby' docs/gate-contract.md` returns nothing
-- [ ] The research document's only 2026-09-16-dated addition carries a bold
+- [x] `grep -rn '/usr/bin/ruby' docs/gate-contract.md` returns nothing
+- [x] The research document's only 2026-09-16-dated addition carries a bold
       `**Later (...)**` label
 
 #### Manual Verification:
@@ -928,5 +928,21 @@ next phase. In looped (`--loop`) execution, this phase's Automated
 Verification gates advancement automatically (via `/wurk:commit --auto`), and
 Manual Verification items are deferred and surfaced once at the end instead
 of blocking here.
+
+---
+
+### Phase 4
+
+- [ ] ADR-0006 still reads as one record with two amendments, not as a record
+      rewritten to match today
+- [ ] The gate-contract.md paragraph would be true and useful for a consumer
+      with no version floor at all (it should simply not apply, not mislead)
+- [ ] The research annotation is one pointer at the definitional mention, not
+      a sweep - the stale line numbers elsewhere in that document stay stale
+      on purpose
+
+**Implementation Note**: Doc-only phase; the gate is a formality here but is
+still the phase gate. In looped execution the Manual Verification items are
+deferred and surfaced at the end.
 
 ---

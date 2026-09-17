@@ -23,6 +23,13 @@ say so: a tier-0 green is "the gate command passed", never "a full attested
 gate is green". Tiers are about what a gate command reports, not where it
 runs; where it runs is `gate.cwd`, see `docs/manifest.md`.
 
+A project whose gate runs on a language version floor names the interpreter
+in its gate command rather than relying on PATH. `gate.full`'s argv[0] is
+where a project says which interpreter its gate is contractually run under,
+and nothing in the kit resolves, versions, or substitutes it - it goes to
+execvp as written. A bare interpreter name means "whatever this operator's
+PATH found", which is a different measurement per machine.
+
 Rules that hold at every tier: never truncate gate output; a scoped or quick
 green is not a full green; never go green by weakening the check.
 

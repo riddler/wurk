@@ -128,6 +128,12 @@ deliberately scoped to non-test files
 regex matches `fork\s*\(`, not the brace form
 ([`skills/wurk:kit/scripts/test/contract_test.rb:138-139`](https://github.com/riddler/wurk/blob/d3a2a204840289d8667ae3601ff59950c6b6a9fa/skills/wurk:kit/scripts/test/contract_test.rb#L138-L139)).
 
+**Later (2026-09-16):** these six sites were converted to `DeadPid.obtain`
+(`skills/wurk:kit/scripts/test/support/dead_pid.rb`) under wu-tms, and
+`HomeGuardTest#test_no_test_file_forks` now fails the suite if a test file
+forks again. Grepping the tree for `fork { exit(0) }` finds nothing; the
+plan is `docs/plans/260916-wu-tms-system-ruby-gate-and-forked-after-run.md`.
+
 #### The minitest difference
 
 System Ruby 2.6.10 bundles minitest 5.11.3. Its `autorun` registers a nested
