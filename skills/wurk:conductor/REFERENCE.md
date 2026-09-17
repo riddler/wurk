@@ -555,11 +555,11 @@ every wake" and "Staleness"). `campaignState` and `policy` are already
 among the field names the skill reads (top of this file); both keys
 live under them rather than under a new top-level key.
 
-## Between-campaigns synthesis - the shipwright
+## Between-campaigns synthesis - the retro reader
 
 Phase 6 is a single campaign's retro. Friction only visible across
-campaigns is mined afterwards by the **wurk-shipwright** agent
-(`agents/wurk-shipwright.md`), which no conductor spawns: it runs
+campaigns is mined afterwards by the **wurk-retro-reader** agent
+(`agents/wurk-retro-reader.md`), which no conductor spawns: it runs
 between campaigns, on an operator's or a scheduler's call, and takes
 the campaigns directory as its one required input. It is a reader that
 FILES - it never edits a skill, agent, hook, script or manifest, never
@@ -572,7 +572,7 @@ their journal is feeding.
 
 ### The cursor
 
-State lives at `<campaigns dir>/shipwright/cursor.json` and
+State lives at `<campaigns dir>/retro-reader/cursor.json` and
 `journal.md` - campaign state, under the same `.git/info/exclude`
 treatment the campaign journal gets, never committed. The cursor holds
 the modification time of the newest artifact the last run mined, **at

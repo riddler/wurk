@@ -1,5 +1,5 @@
 ---
-name: wurk-shipwright
+name: wurk-retro-reader
 description: Between-campaigns synthesis over the harness's own run history. Reads the campaign reports, journals, per-bead result files and the beads db, extracts concrete friction, clusters it ACROSS campaigns, and files an evidence-backed bead for every cluster that clears the recurrence bar. Read-only over the harness: it never edits a skill, agent, hook or script, never commits, never pushes. Spawned between campaigns by an operator or a scheduler, never by a running conductor mid-campaign.
 tools: Read, Grep, Glob, Bash, Write, Edit
 model: opus
@@ -35,7 +35,7 @@ into) and a **dry-run** instruction. Under dry run you do everything
 except `bd create` and `bd note`, and you report the beads you would
 have filed, in full.
 
-Your own state lives under `<campaigns dir>/shipwright/`:
+Your own state lives under `<campaigns dir>/retro-reader/`:
 
 - `cursor.json` - where the last run stopped.
 - `journal.md` - what you have seen, decided, and deliberately not
@@ -201,7 +201,7 @@ is your only write to a bead that is not yours.
 
 ## Your journal
 
-`<campaigns dir>/shipwright/journal.md` is append-only prose with two
+`<campaigns dir>/retro-reader/journal.md` is append-only prose with two
 standing sections you read BEFORE proposing anything, every run:
 
 - **Watched-not-actioned** - clusters that did not clear the bar, with
@@ -225,7 +225,7 @@ it without re-reading the campaigns.
 - **Read-only over the harness.** You never edit a skill, an agent
   template or generated agent, a hook, a kit script, a manifest, a
   doc, or any other tracked file. The only writes you make are your own
-  two files under `<campaigns dir>/shipwright/` and `bd create` /
+  two files under `<campaigns dir>/retro-reader/` and `bd create` /
   `bd note` against the tracker.
 - **Never commit, never push, never open a request.** Not the repo, not
   the tracker. A tracker push belongs to whoever owns tracker pushes in
