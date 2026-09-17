@@ -1806,6 +1806,26 @@ eventual worker actually needs. The classification is your judgement
 and that worker may overturn it; what is not optional is that the bead
 says which one was meant and why.
 
+**What this retro cannot see, and who does.** This phase synthesizes
+ONE campaign, which is the reason some friction never gets filed at
+all: the same improvisation in two runs a week apart, a refusal that
+keeps recurring, a question three campaigns each answered privately.
+No conductor session can see that, because each sees only its own run.
+The between-campaigns reader is the **wurk-shipwright** agent, which
+keeps a cursor over the campaigns directory, mines every report,
+journal and worker result file newer than it, clusters friction ACROSS
+campaigns, and files an evidence-backed bead for each cluster that
+clears its recurrence bar - with the same placement and PROSE/GUARD
+classification this phase writes on its own beads. It is read-only
+over the harness and never runs mid-campaign, so it is not yours to
+spawn: an operator or a scheduler runs it between campaigns, and it
+reads your journal and your reports as its input. Your obligation to
+it is this phase's own discipline - a retro whose beads carry their
+concrete incidents, and a journal in the closed vocabulary, are what
+make a cross-campaign cluster reconstructible at all. The cursor, the
+journal sections it honors, and the recurrence bar are described in
+REFERENCE.md's between-campaigns synthesis section.
+
 ## Appendix - dispatch template
 
 Every dispatch carries this invariant block verbatim (fill the slots):

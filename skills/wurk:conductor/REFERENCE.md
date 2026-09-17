@@ -554,3 +554,88 @@ the worker, swept on every wake by the conductor (SKILL.md, "Sweep on
 every wake" and "Staleness"). `campaignState` and `policy` are already
 among the field names the skill reads (top of this file); both keys
 live under them rather than under a new top-level key.
+
+## Between-campaigns synthesis - the shipwright
+
+Phase 6 is a single campaign's retro. Friction only visible across
+campaigns is mined afterwards by the **wurk-shipwright** agent
+(`agents/wurk-shipwright.md`), which no conductor spawns: it runs
+between campaigns, on an operator's or a scheduler's call, and takes
+the campaigns directory as its one required input. It is a reader that
+FILES - it never edits a skill, agent, hook, script or manifest, never
+commits, never pushes, never closes or edits a bead. The beads it
+files are worked later through the normal pipeline.
+
+Three contracts are worth stating here because the agent's prose
+assumes them and a reader of the conductor needs them to know what
+their journal is feeding.
+
+### The cursor
+
+State lives at `<campaigns dir>/shipwright/cursor.json` and
+`journal.md` - campaign state, under the same `.git/info/exclude`
+treatment the campaign journal gets, never committed. The cursor holds
+the modification time of the newest artifact the last run mined, **at
+sub-second precision**, with the run timestamp and the artifact path
+that set it.
+
+The precision is a requirement, not a detail. A cursor truncated to
+whole seconds is not newer than an artifact written at `.6` within the
+same second, so the newest artifact is re-selected on every run and
+each run re-proposes the same cluster - the failure looks like an agent
+that cannot stop repeating itself. Store an ISO 8601 timestamp with
+fractional seconds or a float epoch, and compare with strict
+greater-than. A missing or unparseable cursor is a cold start: mine
+everything and say so. The cursor is written last, after the filing,
+so a run that dies mid-filing does not claim a window it never
+covered.
+
+The cursor bounds SELECTION, not reading. Artifacts newer than it are
+what can trigger a run's proposals; older artifacts are read freely as
+evidence, because a cluster is by definition partly older than the
+cursor.
+
+### The journal's two standing sections
+
+`journal.md` is append-only, one dated entry per run, and carries two
+sections the agent reads before proposing anything:
+
+- **Watched-not-actioned** - clusters that did not clear the bar, with
+  their evidence. The run that sees the second incident promotes the
+  entry and files a bead citing the first, instead of starting the
+  case from zero.
+- **Decisions / Won't-change** - classes decided against, each with its
+  reason and date. The agent HONORS this: a class recorded here is not
+  re-proposed in any wording unless a later run brings evidence the
+  decision did not have, and then the bead says what is new.
+
+Without those two sections the agent thrashes - it re-files the class
+it filed last month and re-proposes the idea the operator already
+rejected, and the operator learns to ignore it. They are what makes a
+standing reader affordable to keep.
+
+### The recurrence bar
+
+A cluster earns a bead at either bar, and at neither otherwise:
+
+- **two or more independent runs** in which the class occurred -
+  independent meaning different campaigns, since two workers in one
+  campaign hitting one passage is a single run's evidence; or
+- **one unambiguous factual gap** - a rule whose violation is a fact
+  rather than a judgement, that landed anyway.
+
+This is the same bar `docs/recipes/lesson-to-guard.md` sets for a
+guard, applied a rung earlier: there it decides whether a class earns a
+machine check, here whether it earns a bead at all. Everything under
+the bar goes to Watched-not-actioned. Each filed bead carries the
+incidents quoted with their campaign ids and artifact paths, the
+proposed home from `docs/harness-placement.md` with the rung that chose
+it, the PROSE-or-GUARD line Phase 6 also writes, and which bar it
+cleared. A class that already has a bead gets a `bd note` with the new
+incident rather than a twin, because split evidence is how a class
+stops clearing a bar it already cleared.
+
+`skills/wurk:kit/scripts/session_metrics.rb` is an optional input: when
+it exists, its signals are metric-backed evidence beside the prose;
+when it does not, the agent proceeds report-only. A metric strengthens
+a cluster the prose already supports and never creates one alone.
