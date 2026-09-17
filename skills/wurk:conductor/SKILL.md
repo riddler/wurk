@@ -878,6 +878,10 @@ worktree isolation when parallel workers share directories.
   manifest names no `campaignState.reports`; mkdir it before the first
   dispatch. The file is the record; the worker's returned message,
   task-notifications, SendMessage replies and Monitor events are hints.
+  Say in the dispatch that the record is bare JSON - no markdown fence,
+  no prose preamble - because the sweep parses it (`report_check.rb`, in
+  "Sweep on every wake, and a heartbeat so wakes happen") rather than
+  reading it with its eyes.
   Reason: another harness measured dropped notifications in production,
   and a conductor that treats a notification as the record learns about
   a finished worker only when it happens to look.
@@ -1061,6 +1065,25 @@ dir>`), and the newest commit / mtime in the bead's worktree (`git -C
 <worktree> log -1 --format='%ci %h %s'`, plus `git status --porcelain`
 for uncommitted movement). Journal the sweep briefly as [probe] when it
 changes anything.
+
+**Parse the report before you read it**, with the kit's check over the
+reports dir (or over the one file the sweep is about):
+
+    ruby ~/.claude/skills/wurk:kit/scripts/report_check.rb <reports dir>
+
+A `blocked` `report_not_json` says a report file landed in a shape
+nothing can parse (a markdown fence around it, a prose heading above it),
+and it names the path and the fix. That entry is `[ruling-queued]` with
+the check's message quoted, and the ruling is the worker re-emitting its
+report as bare JSON: never a silent skip, never your own transcription of
+the file into JSON, and never an edit to the report, which is the
+worker's statement and not yours to rewrite. Eyeballing a fenced file and
+carrying on is how the shape survived four of eight reports in one
+campaign, unnoticed for three campaigns, taking every one of those
+workers' judgementCalls, openQuestions, discoveredDeps and blocked status
+with it. A `report_missing` warning is not that: it means the worker has
+not written its report yet, which is the ordinary state of a bead in
+flight.
 
 The heartbeat: notifications are hints, so do not wait for one. Arm a
 Monitor whose only job is to wake you on a clock, and re-arm it at

@@ -567,7 +567,12 @@ dir; default `.claude/campaigns/reports/<campaign-id>/` under the same
 `.git/info/exclude` treatment the journal gets. Per-bead file
 `<bead-id>-report.json` holds the worker's JSON result; written last by
 the worker, swept on every wake by the conductor (SKILL.md, "Sweep on
-every wake" and "Staleness"). `campaignState` and `policy` are already
+every wake" and "Staleness"). Bare JSON, with no markdown fence and no
+prose preamble: the sweep parses the file rather than reading it, through
+`report_check.rb` (`skills/wurk:kit/REFERENCE.md`, "`report_check.rb`:
+does a worker's report file actually parse"), and one that does not parse
+is a `report_not_json` block the sweep queues as a ruling for the worker
+to re-emit. `campaignState` and `policy` are already
 among the field names the skill reads (top of this file); both keys
 live under them rather than under a new top-level key.
 
