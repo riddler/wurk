@@ -124,6 +124,20 @@ Process:
    under `local` - which is also what an unset key resolves to - it is
    `tracker is local-only, nothing pushed` (nobody ever does, and no
    conductor override can change that).
+
+   **A spec gap goes in a `spec-gap:` bead note.** When the bead's
+   description, its acceptance criteria, or the plan it cites leaves you
+   something you would have to invent - an unstated behavior, a criterion
+   that could be read two ways, a dependency the spec never names - add
+   one `bd note` on the bead whose first characters are `spec-gap:`,
+   state the gap factually, and list it in `openQuestions` as well. That
+   prefix is the one fixed place the conductor reads for this
+   (/wurk:conductor's per-bead implementability pass), so a gap left in
+   a scratch file, an MR comment, or your result alone is a gap nobody
+   answers. The conductor answers by revising the bead or the plan, never
+   by editing your note, so do not rewrite or retract one later - add
+   another. Whether the gap also stops you is the stop-and-report rule's
+   question, not this one: a gap you worked around still gets a note.
 5. Write the report file LAST, when the dispatch names one. The
    dispatch's REPORT slot names an absolute path (the conductor's
    per-bead report file, under the campaign's report dir - campaign

@@ -542,6 +542,28 @@ leaves you unsure which it is goes up as a ruling rather than being
 read generously. Never resolve a conflict by deciding the consent
 wins; that is the self-widening the consent quote exists to stop.
 
+**Scope buildability pass, once the pre-scan is clean and before the
+first dispatch.** The pre-scan asks whether the consent collides with a
+repo's own prohibitions. This asks a different question about the same
+scope: whether the work is buildable AS FILED. Read the campaign's beads
+as a SET, while a structural problem is still cheap to fix - does every
+dependency edge point at something real, in the right direction, and
+still open; do two beads prescribe contradictory text for the same file
+or the same rule; is any bead too thin to dispatch, meaning acceptance
+criteria nobody could machine-check or a description that names no file
+and no behavior. The set is the unit, because a contradiction and a
+reversed edge are invisible one bead at a time - each bead reads fine
+alone.
+
+A bead that fails goes back through `/wurk:issue` or to the operator
+BEFORE the wave starts, and is `[held]` until it returns. Never dispatch
+on the hope that the worker will fill the gap: the worker is inside a
+consent quote that does not let it invent the missing half, so its
+correct move is to stop and report, and the campaign pays for the setup
+twice to learn what one reading would have shown. Journal the pass with
+its negatives, for the pre-scan's reason - a reader resuming cannot
+otherwise tell a clean pass from a skipped one.
+
 ## Phase 2 - Graph
 
 Ready-graph: `bd ready` + open beads, joined with dependency edges and
@@ -641,6 +663,32 @@ worktree isolation when parallel workers share directories.
   nothing moved, say that - for the same reason a non-contending gate
   gets an explicit negative: a worker that sees no slot cannot tell
   "nothing moved" from "the conductor did not check".
+- **Per-bead implementability pass, at the moment you dispatch.** The
+  scope buildability pass (Phase 1) reads the beads as a set at wave
+  zero; this reads ONE bead against the tree as it is now, for the gaps
+  that only bite when someone is about to build it - a dependency that
+  landed and changed the answer, an acceptance criterion the current
+  text already satisfies, a described fix whose target no longer exists.
+  It is the same three questions at one bead's resolution, and it costs
+  little on top of the reading you are already doing to fill the
+  moved-files slot. What you can correct yourself goes into the dispatch
+  as a `[premise-corrected]` slot; what you cannot goes back to the
+  operator or through `/wurk:issue`, and the bead is `[held]` rather
+  than dispatched with a note telling the worker to figure it out.
+- **A worker's spec gap is answered by revising the spec, never the
+  note.** A gap survives both passes sometimes, and the worker that
+  finds it records it in ONE fixed place: a `bd note` on its own bead
+  whose first characters are `spec-gap:` (wurk-repo-worker's
+  bead-notes step). That is the place because the note travels with the
+  bead rather than with the campaign - the campaign dir is swept and the
+  report file is per-run, while the bead is what the next dispatch and
+  the next campaign read - and because a fixed prefix is greppable
+  across every repo in the fleet with no index to maintain. Read those
+  notes when a worker reports, and answer by REVISING the bead: its
+  description, its acceptance criteria, or the plan it cites. Never edit
+  or overwrite the worker's note; it is an observation of what the spec
+  did not say, and a gap answered anywhere but in the spec is a gap the
+  next dispatch inherits.
 - **Worktrees**: create via the wurk:kit script (`worktree_create.rb`,
   `--base <ref>` to cut the branch from anything other than the
   default branch) - not raw git; the kit warms. `--base` is not a
