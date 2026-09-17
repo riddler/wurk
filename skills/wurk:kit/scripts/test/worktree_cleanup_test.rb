@@ -71,12 +71,17 @@ class WorktreeCleanupTest < Minitest::Test
     TXT
   end
 
-  def expect_survey(wt1_pr: :merged, wt2_pr: :none)
+  # wt1_status is the tracker status the survey reads for zz-abc: "closed"
+  # makes the survey raise its advisory closed_bead_worktree block, which is
+  # the state this script has to keep working in.
+  def expect_survey(wt1_pr: :merged, wt2_pr: :none, wt1_status: nil)
     @fake.expect(%w[git worktree list --porcelain], out: porcelain)
 
     @fake.expect(%w[git status --porcelain], out: "")
     @fake.expect(%w[git merge-base --is-ancestor origin/main HEAD], exitstatus: 0)
-    @fake.expect(%w[bd show zz-abc --json], out: '[{"id":"zz-abc","labels":[]}]')
+    zz_abc = { "id" => "zz-abc", "labels" => [] }
+    zz_abc["status"] = wt1_status if wt1_status
+    @fake.expect(%w[bd show zz-abc --json], out: "[#{JSON.generate(zz_abc)}]")
     if wt1_pr == :merged
       @fake.expect(
         ["gh", "pr", "list", "--state", "merged", "--head", "zz-abc-merged-thing",
@@ -93,6 +98,35 @@ class WorktreeCleanupTest < Minitest::Test
        "--json", "number,mergedAt,headRefOid", "--jq", ".[0]"],
       out: "null\n"
     )
+  end
+
+  # The remedy the survey's closed_bead_worktree message names is THIS
+  # script, so a survey that blocks on a closed bead must not stop the sweep
+  # that fixes it - the deadlock the advisory list
+  # (WorktreeSurvey::ADVISORY_BLOCKED_CODES) exists to prevent.
+  #
+  # sabotage: relay the advisory as fatal in worktree_cleanup.rb's enumerate
+  # (restore the plain `unless survey_env["ok"]` check) -> the sweep returns
+  # survey_failed, nothing is removed -> red.
+  def test_a_closed_bead_advisory_does_not_wall_off_the_cleanup_it_names
+    expect_survey(wt1_status: "closed")
+    @fake.expect(%w[git status --porcelain], out: "")
+    @fake.expect(%w[git rev-parse HEAD], out: "deadbeef\n")
+    @fake.expect(
+      ["gh", "pr", "view", "42", "--json", "commits", "--jq", ".commits[].messageBody"],
+      out: "Fixes a thing.\n\nRefs: zz-abc\n"
+    )
+    @fake.expect(["git", "worktree", "remove", WT1], out: "")
+    @fake.expect(%w[git worktree prune], out: "")
+    @fake.expect(["git", "branch", "-D", "zz-abc-merged-thing"], out: "")
+    @fake.expect(%w[git fetch --prune], out: "")
+
+    code, env = run_cleanup
+
+    assert_equal 0, code
+    assert_equal "merged in request #42, removed",
+                 env["data"]["results"].find { |r| r["path"] == WT1 }["result"]
+    assert_equal "closed_bead_worktree", env["warnings"].first["code"]
   end
 
   def test_merged_clean_worktree_is_removed_beads_gathered_no_close_called

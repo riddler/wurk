@@ -282,6 +282,7 @@ never re-derived at night:
 | uncommitted edits to tracked files on the default-branch checkout block the kit preflight's fast-forward (`fast_forward_failed`, `data.preflight.dirty_paths`) | cut the conductor's own worktrees with `worktree_create.rb --stash-dirty` (the consumer's warm wrapper passes it through, or the conductor runs the kit directly); the kit stashes exactly those paths under a named message and reports `data.preflight.stash` | the stash sha, paths, and `restore` command | a dirty path is inside the footprint; the dirt is untracked (the kit never stashes it); the default branch has commits of its own (`local_default_diverged` is a merge-forward for a human) |
 | a stale lock or machine gate slot (owner pid dead, or mtime older than any live gate) | `lock.rb clear` (refuses anything not provably stale) | the owner file's contents and the liveness probe | the owner is alive, or the owner is another campaign's and its journal shows movement |
 | a worktree or branch left by a crashed earlier run of THIS campaign, clean tree | the kit's adopt path (`worktree_create.rb` reports `action: "adopted"`) | the adopted path and sha | the tree is dirty (someone's uncommitted work), or the branch has commits the journal does not account for |
+| a worktree whose BEAD IS CLOSED, left by a finished earlier campaign | none here: `worktree_cleanup.rb <branch>` on the OPERATOR's say-so, never yours | `worktree_survey.rb`'s `closed_bead_worktree` blocked entry, quoted into the ruling | always - a worktree can hold unpushed work, so removing one is never self-cleared. The row exists so the obstacle is QUEUED as a ruling rather than journaled as dirt and met again next campaign |
 | a missing reports / journal / locks dir | `mkdir -p` | the path | never |
 
 **Every self-clear leaves the same receipt, and the receipt is not
@@ -382,7 +383,15 @@ main or dirty checkout in files the campaign touches drops that repo and
 queues a note. Unrelated dirt - e.g. mobile lockfiles under a backend
 campaign, or an uncommitted edit on the default-branch checkout that
 blocks the kit preflight's fast-forward - is a self-clear (above):
-stash it through the kit, leave the receipt, continue. Never resolve
+stash it through the kit, leave the receipt, continue. **A leftover
+worktree is not that kind of dirt.** It cannot be stashed and it may
+hold unpushed work, so it is neither self-cleared nor waved past: the
+kit's worktree survey raises `closed_bead_worktree` for any live
+worktree whose bead is closed, and that entry is `[ruling-queued]` with
+the survey's message quoted, per the self-clear table's row for it.
+Four campaigns in a row journaled the same one as dirt and left it
+because the rule above was read as covering it; it is queued now, not
+re-judged. Never resolve
 tracker sync conflicts autonomously. Journal the tracker pull and its
 result - "pulled, N records" or "tracker is local-only, no pull" - the
 way the gate measurement below is journaled. One campaign fetched git

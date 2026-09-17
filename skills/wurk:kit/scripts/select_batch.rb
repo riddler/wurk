@@ -206,8 +206,13 @@ module SelectBatch
       parsed = JSON.parse(io.string)
       env.commands.concat(parsed["commands"] || [])
 
-      unless parsed["ok"]
-        message = (parsed["blocked"] || []).map { |b| b["message"] }.join("; ")
+      # An advisory block (WorktreeSurvey::ADVISORY_BLOCKED_CODES) is about
+      # the tree, not about the survey's reading of it: the worktree list is
+      # complete, so the held-areas map is still trustworthy and discarding it
+      # would hand a batch a phantom-free view of areas that really are held.
+      fatal = WorktreeSurvey.absorb_advisories(parsed, env)
+      unless fatal.empty?
+        message = fatal.map { |b| b["message"] }.join("; ")
         env.warn(code: "survey_degraded", message: "worktree_survey failed: #{message}; proceeding as if no live worktree holds anything")
         return {}
       end
