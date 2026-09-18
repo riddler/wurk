@@ -41,6 +41,10 @@ class GateTest < Minitest::Test
   # (`Manifest.locate`'s walk-up still finds `.claude/wurk.json` there) - the
   # Phase 2 regression case, where a bare `Dir.pwd`-relative resolution of a
   # root-relative manifest path silently disagrees with a root invocation.
+  # Real git's `--show-toplevel` from `sub/` still answers with the checkout
+  # root, not the subdirectory - callers stub `expect_base_ref`'s `toplevel:`
+  # to the yielded root, never leave it on its `Dir.pwd` default, or the
+  # fixture models a git that does not exist (wu-1zu).
   def in_tmp_cwd(ledger_present: false, fixture: "gate_tier1", from_subdir: false)
     in_tmp_repo(fixture) do |dir|
       if ledger_present
@@ -58,31 +62,37 @@ class GateTest < Minitest::Test
   end
 
   # Stubs the base-ref ladder's remote-first rung as a hit, so BaseRef.resolve
-  # picks `ref` (default "origin/main") without falling back or warning.
-  def expect_base_ref(ref: "origin/main")
+  # picks `ref` (default "origin/main") without falling back or warning, and
+  # the work-tree anchor gate.rb resolves once per run (wu-1zu). `toplevel`
+  # defaults to Dir.pwd, which is what real git reports for every fixture
+  # whose working tree IS the cwd. A fixture whose cwd is NOT its working-tree
+  # root has to say so - see the from_subdir and worktree callers below, which
+  # is the whole point of the parameter.
+  def expect_base_ref(ref: "origin/main", toplevel: nil)
+    @fake.expect(%w[git rev-parse --show-toplevel], out: "#{toplevel || Dir.pwd}\n")
     @fake.expect(["git", "rev-parse", "--verify", "--quiet", ref], exitstatus: 0)
   end
 
-  def expect_no_elixir_diff
-    expect_base_ref
+  def expect_no_elixir_diff(toplevel: nil)
+    expect_base_ref(toplevel: toplevel)
     @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "docs/plans/x.md\n")
     @fake.expect(%w[git status --porcelain], out: "")
   end
 
-  def expect_elixir_diff
-    expect_base_ref
+  def expect_elixir_diff(toplevel: nil)
+    expect_base_ref(toplevel: toplevel)
     @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "lib/acme/foo.ex\n")
     @fake.expect(%w[git status --porcelain], out: "")
   end
 
-  def expect_scripts_only_diff
-    expect_base_ref
+  def expect_scripts_only_diff(toplevel: nil)
+    expect_base_ref(toplevel: toplevel)
     @fake.expect(%w[git diff --name-only origin/main...HEAD], out: ".claude/scripts/gate.rb\n")
     @fake.expect(%w[git status --porcelain], out: "")
   end
 
-  def expect_skills_only_diff
-    expect_base_ref
+  def expect_skills_only_diff(toplevel: nil)
+    expect_base_ref(toplevel: toplevel)
     @fake.expect(%w[git diff --name-only origin/main...HEAD], out: ".claude/skills/commit/SKILL.md\n")
     @fake.expect(%w[git status --porcelain], out: "")
   end
@@ -184,11 +194,14 @@ class GateTest < Minitest::Test
   def test_sabotage_pathspec_uses_the_manifests_default_branch
     # A real located manifest, not with_manifest(manifest_with(...)): the
     # sabotage scan now resolves its `git diff` chdir and its file reads
-    # against manifest.checkout_root, which is two levels above `path` - for
-    # an in-memory manifest built from a fixture path, that is
-    # test/fixtures, not this test's tmp dir. Installing the modified raw at
-    # <tmpdir>/.claude/wurk.json keeps checkout_root aligned with Dir.pwd,
-    # the same as in_tmp_repo.
+    # against the work-tree anchor (`git rev-parse --show-toplevel`, stubbed
+    # to Dir.pwd by expect_base_ref's default), not manifest.checkout_root -
+    # but an in-memory manifest built from a fixture path has its own
+    # checkout_root two levels above `path`, which is test/fixtures, not
+    # this test's tmp dir. Installing the modified raw at
+    # <tmpdir>/.claude/wurk.json keeps checkout_root aligned with Dir.pwd
+    # too, the same as in_tmp_repo, so nothing here can be confused for a
+    # divergence the worktree fixture exists to test.
     Manifest.reset!
     Dir.mktmpdir do |dir|
       FileUtils.mkdir_p(File.join(dir, ".claude"))
@@ -1541,6 +1554,7 @@ class GateTest < Minitest::Test
   # -> red
   def test_unresolvable_base_reports_scanned_false_with_no_base_ref_unverifiable
     in_tmp_cwd do
+      @fake.expect(%w[git rev-parse --show-toplevel], out: "#{Dir.pwd}\n")
       @fake.expect(%w[git rev-parse --verify --quiet origin/main], exitstatus: 1)
       @fake.expect(%w[git rev-parse --verify --quiet main], exitstatus: 1)
       @fake.expect(%w[git status --porcelain], out: "")
@@ -1807,8 +1821,8 @@ class GateTest < Minitest::Test
   # `ledger_path` (i.e. Dir.pwd) instead of `File.join(root, ledger_path)`
   # -> red (ledger_exists would be false even though the ledger is on disk)
   def test_ledger_exists_is_true_when_gate_rb_is_invoked_from_a_subdirectory
-    in_tmp_cwd(ledger_present: true, from_subdir: true) do
-      expect_elixir_diff
+    in_tmp_cwd(ledger_present: true, from_subdir: true) do |root|
+      expect_elixir_diff(toplevel: root)
       expect_no_sabotage_diff
       @fake.expect(%w[make report], out: JSON.generate(GREEN_REPORT))
       @fake.expect(%w[make attest], out: "Full gate green.\n")
@@ -1824,13 +1838,13 @@ class GateTest < Minitest::Test
     end
   end
 
-  # sabotage: drop `chdir: manifest.checkout_root` from the sabotage
-  # `git diff` call -> red (FakeSh records chdir nil, not the checkout root,
-  # and the file read behind the note check resolves against Dir.pwd instead
-  # of the root, missing the noted candidate below)
-  def test_sabotage_diff_and_file_reads_resolve_against_the_checkout_root_from_a_subdirectory
+  # sabotage: resolve the work-tree anchor from Dir.pwd instead of
+  # `git rev-parse --show-toplevel` -> red (FakeSh records chdir as
+  # <root>/sub, not <root>, and the file read behind the note check resolves
+  # under sub/, missing the noted candidate below)
+  def test_sabotage_diff_and_file_reads_resolve_against_the_work_tree_root_from_a_subdirectory
     in_tmp_cwd(from_subdir: true) do |root|
-      expect_elixir_diff
+      expect_elixir_diff(toplevel: root)
       expect_no_sabotage_diff(
         out: "diff --git a/test/foo_test.exs b/test/foo_test.exs\n" \
              "--- a/test/foo_test.exs\n+++ b/test/foo_test.exs\n@@ -0,0 +1,1 @@\n" \
@@ -1847,12 +1861,219 @@ class GateTest < Minitest::Test
       _code, env = run_gate
 
       diff_call = @fake.calls.find { |c| c.argv[0, 2] == %w[git diff] && c.argv.include?("-U0") }
-      # File.expand_path (checkout_root) resolves through macOS's /var ->
+      # File.expand_path (WorkTree.root) resolves through macOS's /var ->
       # /private/var symlink the same way Dir.mktmpdir's raw path does not;
       # File.realpath makes the two comparable without caring which one does.
       assert_equal File.realpath(root), File.realpath(diff_call.chdir)
       assert_equal [], env["data"]["sabotage"]["missing"]
       assert_equal [], env["data"]["sabotage"]["unverifiable"]
+    end
+  end
+
+  # --- wu-1zu: the work-tree anchor ---
+
+  # The reproduction: a sibling worktree whose manifest is found through
+  # Manifest.locate's --git-common-dir fallback (research case A). The
+  # manifest's own checkout carries a NOTED copy of the same declaration, so
+  # an anchor that points there would report a clean result - only the
+  # worktree anchor distinguishes the two.
+  # sabotage: anchor the sabotage diff on manifest.checkout_root again instead
+  # of the threaded work-tree root -> red (diff_call.chdir is the manifest's
+  # checkout, not the worktree, and the unnoted declaration written into the
+  # WORKTREE goes unreported, so `missing` comes back empty)
+  def test_sabotage_diff_and_file_reads_resolve_against_the_worktree_not_the_manifests_checkout
+    in_tmp_worktree("gate_tier1") do |tree, main|
+      @fake.expect(%w[git rev-parse --git-common-dir], out: "#{main}/.git\n")
+      expect_no_elixir_diff(toplevel: tree)
+      expect_no_sabotage_diff(
+        out: "diff --git a/test/foo_test.exs b/test/foo_test.exs\n" \
+             "--- a/test/foo_test.exs\n+++ b/test/foo_test.exs\n@@ -0,0 +1,1 @@\n" \
+             "+  test \"unnoted in the worktree\" do\n"
+      )
+      FileUtils.mkdir_p(File.join(tree, "test"))
+      File.write(File.join(tree, "test", "foo_test.exs"), "  test \"unnoted in the worktree\" do\n")
+      FileUtils.mkdir_p(File.join(main, "test"))
+      File.write(
+        File.join(main, "test", "foo_test.exs"),
+        "  # sabotage: kills the branch -> red\n  test \"unnoted in the worktree\" do\n"
+      )
+
+      _code, env = run_gate
+
+      diff_call = @fake.calls.find { |c| c.argv[0, 2] == %w[git diff] && c.argv.include?("-U0") }
+      assert_equal File.realpath(tree), File.realpath(diff_call.chdir)
+      refute_equal File.realpath(main), File.realpath(diff_call.chdir)
+      assert_equal 1, env["data"]["sabotage"]["missing"].length
+      assert_equal "test/foo_test.exs", env["data"]["sabotage"]["missing"].first["file"]
+      # Proves Manifest.locate really took the fallback branch (and the
+      # walk-up did not escape the fixture to some manifest above
+      # Dir.tmpdir) rather than merely that the assertions above happen to
+      # hold: the --git-common-dir expectation registered above was consumed.
+      @fake.verify!
+    end
+  end
+
+  # The same divergence, reached through Manifest.locate's walk-up landing on
+  # an ANCESTOR's manifest (research case C) rather than the
+  # --git-common-dir fallback - no such stub is registered, so if the fix
+  # only touched the fallback branch, FakeSh would raise UnexpectedCommand
+  # here instead of the assertions below ever running.
+  # sabotage: fix only Manifest.locate's --git-common-dir fallback and leave
+  # the walk-up alone -> red (this fixture reaches the divergence through the
+  # walk-up, so a fallback-only fix still anchors on the ancestor's checkout)
+  def test_sabotage_anchor_is_the_worktree_when_the_walk_up_finds_an_ancestors_manifest
+    in_tmp_worktree("gate_tier1", nested: true) do |tree, main|
+      expect_no_elixir_diff(toplevel: tree)
+      expect_no_sabotage_diff(
+        out: "diff --git a/test/foo_test.exs b/test/foo_test.exs\n" \
+             "--- a/test/foo_test.exs\n+++ b/test/foo_test.exs\n@@ -0,0 +1,1 @@\n" \
+             "+  test \"unnoted, nested worktree\" do\n"
+      )
+      FileUtils.mkdir_p(File.join(tree, "test"))
+      File.write(
+        File.join(tree, "test", "foo_test.exs"),
+        "  test \"unnoted, nested worktree\" do\n"
+      )
+
+      _code, env = run_gate
+
+      diff_call = @fake.calls.find { |c| c.argv[0, 2] == %w[git diff] && c.argv.include?("-U0") }
+      assert_equal File.realpath(tree), File.realpath(diff_call.chdir)
+      refute_equal File.realpath(main), File.realpath(diff_call.chdir)
+      assert_equal 1, env["data"]["sabotage"]["missing"].length
+    end
+  end
+
+  # sabotage: drop the `work_tree_unresolved` warning and silently use
+  # manifest.checkout_root -> red (the warning code is absent, and the silent
+  # fallback is the exact failure shape wu-1zu is about)
+  def test_an_unresolvable_work_tree_warns_and_falls_back_to_the_manifests_checkout_root
+    in_tmp_cwd do
+      @fake.expect(%w[git rev-parse --show-toplevel], exitstatus: 1, err: "fatal: not a git repository")
+      @fake.expect(["git", "rev-parse", "--verify", "--quiet", "origin/main"], exitstatus: 0)
+      @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "docs/plans/x.md\n")
+      @fake.expect(%w[git status --porcelain], out: "")
+      expect_no_sabotage_diff
+
+      _code, env = run_gate
+
+      assert_includes env["warnings"].map { |w| w["code"] }, "work_tree_unresolved"
+      assert_equal Manifest.current.checkout_root, env["data"]["work_tree_root"]
+    end
+  end
+
+  # sabotage: report manifest.checkout_root as data.work_tree_root instead of
+  # the resolved anchor -> red (the two differ in this fixture, which is the
+  # whole reason the fixture exists)
+  def test_work_tree_root_reports_the_tree_the_gate_measured
+    in_tmp_worktree("gate_tier1") do |tree, main|
+      @fake.expect(%w[git rev-parse --git-common-dir], out: "#{main}/.git\n")
+      expect_no_elixir_diff(toplevel: tree)
+      expect_no_sabotage_diff
+
+      _code, env = run_gate
+
+      assert_equal File.realpath(tree), File.realpath(env["data"]["work_tree_root"])
+      refute_equal File.realpath(main), File.realpath(env["data"]["work_tree_root"])
+    end
+  end
+
+  # gate.guard_ledger names a tracked file in the tree being gated, so whether
+  # it exists is a property of the branch under test, not of wherever the
+  # manifest happened to be found. The fixture writes the ledger into the
+  # manifest's checkout only, never into the worktree - the branch-adds-the-
+  # ledger case: the current-checkout-root anchor answers true (wrong), the
+  # work-tree anchor answers false (right). Exercised through all three
+  # gate_guard_from call sites - the carve-out path, the gate-could-not-start
+  # path, and the normal completed-run path - so a revert of any one of them
+  # alone turns this test red, not just the site a narrower fixture would
+  # happen to hit.
+  # sabotage: pass manifest.checkout_root to gate_guard_from instead of the
+  # threaded work-tree root -> red (ledger_exists comes back true from the
+  # ledger in the manifest's checkout, though the tree being gated has none)
+  def test_ledger_exists_answers_about_the_worktree_not_the_manifests_checkout
+    write_ledger = lambda do |main|
+      FileUtils.mkdir_p(File.join(main, "docs"))
+      File.write(File.join(main, "docs", "quality-gate-changes.md"), "# ledger\n")
+    end
+
+    # Carve-out path: gate_guard_from's first call site.
+    in_tmp_worktree("gate_tier1") do |tree, main|
+      @fake.expect(%w[git rev-parse --git-common-dir], out: "#{main}/.git\n")
+      expect_no_elixir_diff(toplevel: tree)
+      expect_no_sabotage_diff
+      write_ledger.call(main)
+
+      _code, env = run_gate
+
+      assert_equal false, env["data"]["gate_guard"]["ledger_exists"],
+                   "carve-out path: ledger_exists answered about the manifest's checkout"
+    end
+
+    # Gate-could-not-start path: gate_guard_from's second call site.
+    in_tmp_worktree("gate_tier1") do |tree, main|
+      @fake.expect(%w[git rev-parse --git-common-dir], out: "#{main}/.git\n")
+      expect_elixir_diff(toplevel: tree)
+      expect_no_sabotage_diff
+      write_ledger.call(main)
+      @fake.expect(%w[make report], start_failed: true,
+                                     err: "could not start command - No such file or directory - make")
+
+      _code, env = run_gate
+
+      assert_equal false, env["data"]["gate_guard"]["ledger_exists"],
+                   "gate-could-not-start path: ledger_exists answered about the manifest's checkout"
+    end
+
+    # Normal completed-run path: gate_guard_from's third call site.
+    in_tmp_worktree("gate_tier1") do |tree, main|
+      @fake.expect(%w[git rev-parse --git-common-dir], out: "#{main}/.git\n")
+      expect_elixir_diff(toplevel: tree)
+      expect_no_sabotage_diff
+      write_ledger.call(main)
+      @fake.expect(%w[make report], out: JSON.generate(GREEN_REPORT))
+      @fake.expect(%w[make attest], out: "Full gate green.\n")
+
+      _code, env = run_gate
+
+      assert_equal false, env["data"]["gate_guard"]["ledger_exists"],
+                   "normal path: ledger_exists answered about the manifest's checkout"
+    end
+  end
+
+  # gate.cwd is scoped execution, not a matching rescope (docs/manifest.md),
+  # but the ROOT that scope is resolved against is the same anchor as every
+  # other wu-1zu site: the work tree, not the checkout the manifest happened
+  # to be found in. The gate_subdir fixture's gate.cwd ("backend") exists in
+  # both the worktree and the manifest's checkout here, so only the anchor
+  # distinguishes the two rendered `(cd ... && make report)` paths.
+  # sabotage: pass manifest.gate_chdir(root: manifest.checkout_root) instead of
+  # the threaded work-tree root -> red (the rendered `(cd ... && make report)`
+  # names <manifest checkout>/backend, and the assertion on
+  # <worktree>/backend fails)
+  def test_the_gate_command_runs_under_the_worktree_when_gate_cwd_is_declared
+    in_tmp_worktree("gate_subdir") do |tree, main|
+      FileUtils.mkdir_p(File.join(tree, "backend"))
+      FileUtils.mkdir_p(File.join(main, "backend"))
+      @fake.expect(%w[git rev-parse --git-common-dir], out: "#{main}/.git\n")
+      expect_base_ref(toplevel: tree)
+      @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "backend/lib/acme/foo.ex\n")
+      @fake.expect(%w[git status --porcelain], out: "")
+      expect_no_subdir_sabotage_diff
+      @fake.expect(%w[make report], out: JSON.generate(GREEN_REPORT))
+      @fake.expect(%w[make attest], out: "Full gate green.\n")
+
+      _code, env = run_gate
+
+      expected_chdir = File.join(File.realpath(tree), "backend")
+      wrong_chdir = File.join(File.realpath(main), "backend")
+      report_call = @fake.calls.find { |c| c.argv == %w[make report] }
+      attest_call = @fake.calls.find { |c| c.argv == %w[make attest] }
+
+      assert_equal expected_chdir, File.realpath(report_call.chdir)
+      assert_equal expected_chdir, File.realpath(attest_call.chdir)
+      assert_equal expected_chdir, File.realpath(env["data"]["gate_cwd"])
+      refute_equal wrong_chdir, File.realpath(report_call.chdir)
     end
   end
 end
