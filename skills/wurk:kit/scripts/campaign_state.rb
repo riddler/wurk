@@ -63,7 +63,11 @@ module CampaignState
   # the id names the plan (same campaigns dir) this one queues behind.
   AFTER_TAIL = /\A[ \t]+after[ \t]+([A-Za-z0-9._-]+)/.freeze
   H1 = /\A#[ \t]+(.+?)[ \t]*\z/.freeze
-  PLAN_H1 = /\A#[ \t]+Campaign[ \t]+(\S+)[ \t]*\z/.freeze
+  # Accepts both "# Campaign <id>" and "# Campaign: <id>" - the colon form
+  # is what a plan actually gets written as in the wild (see wu-0m0); the
+  # trailing \z means "# Campaign <id> consent" still never matches, since
+  # \S+ stops at the space before "consent" and leaves it unaccounted for.
+  PLAN_H1 = /\A#[ \t]+Campaign:?[ \t]+(\S+)[ \t]*\z/.freeze
   H2 = /\A##[ \t]+(.+?)[ \t]*\z/.freeze
 
   # `Machine: <name>` at the very start of a line (column 1) - an indented
@@ -97,11 +101,11 @@ module CampaignState
       @clock || DEFAULT_CLOCK
     end
 
-    # A plan is a top-level *.md under dir whose first H1 is
-    # `# Campaign <id>` with <id> equal to the file's own basename. The
-    # consent file (`<id>-consent.md`, H1 "# Campaign <id> consent"), a
-    # report (`<id>-report.md`) and anything under journal/ therefore never
-    # count, without an exclusion list.
+    # A plan is a top-level *.md under dir whose first H1 is `# Campaign
+    # <id>` or `# Campaign: <id>` with <id> equal to the file's own
+    # basename. The consent file (`<id>-consent.md`, H1 "# Campaign <id>
+    # consent"), a report (`<id>-report.md`) and anything under journal/
+    # therefore never count, without an exclusion list.
     def plan_paths(dir)
       return [] unless Dir.exist?(dir)
 
@@ -109,6 +113,44 @@ module CampaignState
         id = File.basename(path, ".md")
         first_h1(read_utf8(path)) =~ PLAN_H1 && Regexp.last_match(1) == id
       end
+    end
+
+    # Every top-level *.md under dir that plan_paths did NOT recognize as a
+    # plan, minus the expected companions of a plan it DID recognize
+    # (`<id>-consent.md`, `<id>-report.md`). This is the other half of "no
+    # plan is ever silently absent" (wu-0m0): a file that looks like it
+    # might be a plan - wrong H1 form, an id that does not match its own
+    # basename, no H1 at all - is named in a warning instead of vanishing
+    # with no trace. Each entry is {path:, reason:}, a short human
+    # sentence naming what failed to match.
+    def unparsed_campaign_files(dir)
+      return [] unless Dir.exist?(dir)
+
+      plans = plan_paths(dir)
+      companions = plans.flat_map do |path|
+        id = File.basename(path, ".md")
+        ["#{id}-consent.md", "#{id}-report.md"]
+      end
+
+      Dir.glob(File.join(dir, "*.md")).sort.reject do |path|
+        plans.include?(path) || companions.include?(File.basename(path))
+      end.map do |path|
+        { path: path, reason: unparsed_reason(path) }
+      end
+    end
+
+    # The short reason a file did not parse into a plan record, for
+    # unparsed_campaign_files' warning text.
+    def unparsed_reason(path)
+      id = File.basename(path, ".md")
+      h1 = first_h1(read_utf8(path))
+      return "no H1 heading" if h1.nil?
+
+      match = h1.match(PLAN_H1)
+      return "H1 #{h1.inspect} does not match \"# Campaign <id>\" or \"# Campaign: <id>\"" unless match
+      return "H1 names #{match[1].inspect}, not #{id.inspect} (the file's own basename)" unless match[1] == id
+
+      "did not parse as a campaign plan"
     end
 
     def first_h1(content)
@@ -511,6 +553,12 @@ module CampaignStateCli
         CampaignState.plan_paths(dir).each do |path|
           campaigns << inspect_and_warn(env, path, options[:locks_dir], this_machine)
         end
+        CampaignState.unparsed_campaign_files(dir).each do |file|
+          env.warn(
+            code: "unparsed_campaign_file",
+            message: "#{file[:path]}: #{file[:reason]}; not counted as a campaign plan"
+          )
+        end
       end
       campaigns.sort_by! { |c| c[:id] }
 
@@ -642,6 +690,11 @@ module CampaignStateCli
 
     # --- shared -------------------------------------------------------------------
 
+    # show/arm/disarm resolve one named id and never enumerate the
+    # directory, so they never emit unparsed_campaign_file - a stray or
+    # malformed file elsewhere in the dir has nothing to do with the id
+    # the caller asked about. `list` is the enumerator, and is where that
+    # warning belongs.
     def locate(env, options, id)
       options[:dirs].each do |dir|
         path = File.join(dir, "#{id}.md")

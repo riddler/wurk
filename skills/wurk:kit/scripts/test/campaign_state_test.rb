@@ -127,6 +127,52 @@ class CampaignStateLibTest < Minitest::Test
     assert_empty CampaignState.plan_paths(File.join(@dir, "nope"))
   end
 
+  def test_a_plan_may_be_headed_with_a_colon_after_campaign
+    write_plan(@dir, "gitlab", status: "ARMED 2026-09-14 18:41 -0600", heading: "# Campaign: gitlab")
+
+    plans = CampaignState.plan_paths(@dir)
+
+    assert_equal [File.join(@dir, "gitlab.md")], plans
+  end
+
+  def test_a_consent_file_never_counts_as_a_plan_even_with_a_colon_heading
+    write_plan(@dir, "gitlab", status: "ARMED 2026-09-14 18:41 -0600", heading: "# Campaign: gitlab")
+    File.write(File.join(@dir, "gitlab-consent.md"), "# Campaign gitlab consent\n\nStatus: ADOPTED 2026-09-14.\n")
+
+    plans = CampaignState.plan_paths(@dir)
+
+    assert_equal [File.join(@dir, "gitlab.md")], plans
+  end
+
+  # --- unparsed_campaign_files -----------------------------------------------
+
+  def test_unparsed_campaign_files_names_a_file_whose_h1_does_not_match_either_plan_form
+    write_plan(@dir, "260914-alpha", status: "ARMED 2026-09-14 18:41 -0600")
+    File.write(File.join(@dir, "notes.md"), "# Some other document\n")
+
+    unparsed = CampaignState.unparsed_campaign_files(@dir)
+
+    assert_equal [File.join(@dir, "notes.md")], unparsed.map { |f| f[:path] }
+    assert_match(/does not match/, unparsed.first[:reason])
+  end
+
+  def test_unparsed_campaign_files_names_a_file_whose_h1_id_does_not_match_its_basename
+    File.write(File.join(@dir, "260914-copy.md"), "# Campaign 260914-alpha\n\nStatus: ARMED\n")
+
+    unparsed = CampaignState.unparsed_campaign_files(@dir)
+
+    assert_equal [File.join(@dir, "260914-copy.md")], unparsed.map { |f| f[:path] }
+    assert_match(/names "260914-alpha", not "260914-copy"/, unparsed.first[:reason])
+  end
+
+  def test_unparsed_campaign_files_excludes_a_recognized_plans_consent_and_report_companions
+    write_plan(@dir, "260914-alpha", status: "ARMED 2026-09-14 18:41 -0600")
+    write_consent(@dir, "260914-alpha")
+    write_report(@dir, "260914-alpha")
+
+    assert_empty CampaignState.unparsed_campaign_files(@dir)
+  end
+
   # --- status parsing -------------------------------------------------------
 
   def test_parses_the_status_word_and_stamp_from_the_status_line
@@ -342,6 +388,40 @@ class CampaignStateCliTest < Minitest::Test
     campaign = env["data"]["campaigns"].fetch(0)
     assert_equal "DRAFTED", campaign["consent"]["status"]
     refute campaign["runnable"]
+  end
+
+  def test_list_recognizes_a_plan_headed_with_a_colon
+    write_plan(@dir, "gitlab", status: "ARMED 2026-09-14 18:41 -0600", heading: "# Campaign: gitlab")
+    write_consent(@dir, "gitlab")
+
+    _code, env = run_cli(["list", "--dir", @dir])
+
+    assert_equal ["gitlab"], env["data"]["campaigns"].map { |c| c["id"] }
+    assert_equal ["gitlab"], env["data"]["runnable"]
+    assert_empty env["warnings"]
+  end
+
+  def test_list_warns_about_a_stray_md_file_that_did_not_parse_into_a_plan
+    write_plan(@dir, "260914-alpha", status: "ARMED 2026-09-14 18:41 -0600")
+    write_consent(@dir, "260914-alpha")
+    File.write(File.join(@dir, "notes.md"), "# Some other document\n")
+
+    _code, env = run_cli(["list", "--dir", @dir])
+
+    assert_equal ["260914-alpha"], env["data"]["campaigns"].map { |c| c["id"] }
+    warning = env["warnings"].find { |w| w["code"] == "unparsed_campaign_file" }
+    refute_nil warning
+    assert_includes warning["message"], File.join(@dir, "notes.md")
+  end
+
+  def test_list_does_not_warn_about_a_recognized_plans_consent_and_report_files
+    write_plan(@dir, "260914-alpha", status: "ARMED 2026-09-14 18:41 -0600")
+    write_consent(@dir, "260914-alpha")
+    write_report(@dir, "260914-alpha")
+
+    _code, env = run_cli(["list", "--dir", @dir])
+
+    refute_includes env["warnings"].map { |w| w["code"] }, "unparsed_campaign_file"
   end
 
   def test_list_warns_on_an_unknown_status_word_and_never_treats_it_as_armed

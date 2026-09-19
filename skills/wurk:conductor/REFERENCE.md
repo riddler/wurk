@@ -145,13 +145,24 @@ conductor, take or release a lock, or write a consent file.
 
 | File | Role | How it is recognized |
 |---|---|---|
-| `<id>.md` | the plan | a top-level `*.md` whose first H1 is exactly `# Campaign <id>`, with `<id>` equal to the file's basename |
+| `<id>.md` | the plan | a top-level `*.md` whose first H1 is `# Campaign <id>` or `# Campaign: <id>` (colon optional), with `<id>` equal to the file's basename |
 | `<id>-consent.md` | the consent, a human artifact | by name, next to the plan; its H1 is `# Campaign <id> consent` so it is never mistaken for a plan |
 | `<locks-dir>/campaign-<id>/` | the campaign mutex | a `lock.rb` directory (`--campaign-mutex`); `<locks-dir>` defaults to `<campaigns dir>/locks`, a fleet passes `multiCampaign.locksDir` as `--locks-dir` |
 
 Reports (`<id>-report.md`), journals (`journal/`), and any other document
 under the directory are ignored because their H1 does not name their own
 basename as a campaign - there is no exclusion list to maintain.
+
+`list` never lets a plan-like file go silently missing: every top-level
+`*.md` under a campaigns dir that did not parse into a plan record, and
+that is not a recognized plan's own `<id>-consent.md` or `<id>-report.md`,
+is named in an `unparsed_campaign_file` warning (path plus a short reason
+- no H1, an H1 that matches neither plan form, or an H1 whose id does not
+equal the file's own basename). A stray document, a typo'd id, and a plan
+whose H1 the parser cannot read all surface this way instead of vanishing
+from the listing with no trace (wu-0m0). `show`, `arm`, and `disarm`
+resolve one named id directly and do not enumerate the directory, so they
+never emit this warning; `list` is where it belongs.
 
 ### The Status line - the plan's front matter
 

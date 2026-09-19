@@ -737,6 +737,10 @@ argument. The file schema, the campaign record's keys, and every
 `campaign_state.rb`". The one rule worth restating here: `arm` refuses
 without an ADOPTED consent file and never writes one, because consent is
 a human artifact and this script only ever edits the plan's Status line.
+A plan's H1 may read `# Campaign <id>` or `# Campaign: <id>`; `list`
+warns (`unparsed_campaign_file`) about any other top-level `*.md` under
+the dir that did not parse into a plan, so a malformed or misnamed plan
+is never silently absent from the listing.
 It reads no manifest, but it does read machine config
 (`~/.claude/wurk.local.json` via `lib/user_config.rb`), lazily and only
 for a plan that carries a `Machine:` binding. `arm --host NAME` writes
