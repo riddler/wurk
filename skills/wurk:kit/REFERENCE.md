@@ -392,6 +392,19 @@ in_tmp_repo("valid") { ... }   # a scratch dir that carries .claude/wurk.json,
 find its manifest: inside a bare one the walk-up finds nothing and falls
 through to `git rev-parse`, which `FakeSh` correctly refuses.
 
+## `tmux_window.rb open`: the `{id}` seed placeholder
+
+`open <name> <path> <id> <seed>` takes the bead id and the seed prompt as
+separate arguments. `{id}` inside `seed` is the placeholder for the id: every
+occurrence is replaced with the id verbatim (a plain string replace, not
+`format`/`sprintf`, so a seed containing a literal `%` is untouched), on both
+the `--no-finish` path and the default finishing path. This is the one
+definition of the placeholder - nowhere else in the kit or its docs
+describes it; a caller that needs the seed to name the id it was given
+writes `{id}` into the seed and nothing more. A seed with no `{id}` is
+unchanged, byte for byte, from what it produced before the placeholder
+existed.
+
 ## `gate.rb`: the quality-gate wrapper
 
 Runs the consumer's own gate commands - `gate.full`, `gate.loop`,
