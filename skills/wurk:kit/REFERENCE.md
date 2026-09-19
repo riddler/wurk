@@ -741,7 +741,10 @@ It reads no manifest, but it does read machine config
 (`~/.claude/wurk.local.json` via `lib/user_config.rb`), lazily and only
 for a plan that carries a `Machine:` binding. `arm --host NAME` writes
 only this machine's own `machine.name` into that binding and never
-falls back to the OS hostname.
+falls back to the OS hostname. A column-1 `Machine:` line that is not a
+bare name (operator prose, for instance) is malformed, never a bind: it
+is treated as unverified, warns `machine_binding_malformed` naming the
+file and the line, and blocks `arm`/`disarm` until a human edits it.
 
 ## `report_check.rb`: does a worker's report file actually parse
 

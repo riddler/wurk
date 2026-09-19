@@ -64,6 +64,16 @@ module CampaignFixtures
     path
   end
 
+  # Same shape, but takes the whole Machine: line verbatim so a test can
+  # write a malformed one (operator prose, a name with trailing prose)
+  # that write_plan_with_machine's `machine:` keyword cannot produce.
+  def write_plan_with_raw_machine_line(dir, id, status:, machine_line:, body: nil, heading: "# Campaign #{id}")
+    lines = [heading, "", "Status: #{status}", machine_line, "", (body || default_body)]
+    path = File.join(dir, "#{id}.md")
+    File.write(path, "#{lines.join("\n")}\n")
+    path
+  end
+
   def write_consent(dir, id, status: "ADOPTED 2026-09-14 18:41 -0600")
     path = File.join(dir, "#{id}-consent.md")
     File.write(path, "# Campaign #{id} consent\n\nStatus: #{status}.\n\nPlan: `#{id}.md`.\n")
@@ -857,6 +867,132 @@ class CampaignStateMachineBindingTest < Minitest::Test
   def test_parse_machine_ignores_an_indented_line_in_prose
     content = "# Campaign 042\n\nA note to the reader:\n  Machine: mbp (not a real binding)\n\nStatus: ARMED 2026-09-14 18:41 -0600\n"
     assert_nil CampaignState.parse_machine(content)[:machine]
+  end
+
+  # --- malformed Machine: line ---------------------------------------------
+  #
+  # Measured on the riddler fleet, 2026-09-19: RF063.md line 22 was
+  # column-1 operator prose that happens to begin with "Machine:". The
+  # branch this phase fixes captured the whole remainder as the bound
+  # name; the only accepted shape is a bare token (MACHINE_LINE), so
+  # anything else is malformed, never a bind.
+
+  def test_parse_machine_rejects_the_rf063_operator_prose_line
+    content = "# Campaign RF063\n\nStatus: ARMED 2026-09-14 18:41 -0600\n" \
+              "Machine: **personal-air**, QUEUED after RF056 (the operator, 2026-09-19 12:5x MDT). RF063\n\n" \
+              "Body.\n"
+    parsed = CampaignState.parse_machine(content)
+    assert_nil parsed[:machine]
+    assert parsed[:malformed]
+    assert_equal "Machine: **personal-air**, QUEUED after RF056 (the operator, 2026-09-19 12:5x MDT). RF063", parsed[:raw]
+  end
+
+  def test_parse_machine_rejects_a_valid_name_followed_by_trailing_prose
+    content = "# Campaign 042\n\nStatus: ARMED 2026-09-14 18:41 -0600\nMachine: mbp, QUEUED after 041 (the operator)\n\nBody.\n"
+    parsed = CampaignState.parse_machine(content)
+    assert_nil parsed[:machine]
+    assert parsed[:malformed]
+  end
+
+  def test_parse_machine_accepts_a_bare_token_with_trailing_whitespace
+    content = "# Campaign 042\n\nStatus: ARMED 2026-09-14 18:41 -0600\nMachine: mbp   \n\nBody.\n"
+    parsed = CampaignState.parse_machine(content)
+    assert_equal "mbp", parsed[:machine]
+    refute parsed[:malformed]
+  end
+
+  def test_the_rf063_line_is_listed_but_not_armed
+    write_plan_with_raw_machine_line(
+      @dir, "RF063", status: "ARMED 2026-09-14 18:41 -0600",
+      machine_line: "Machine: **personal-air**, QUEUED after RF056 (the operator, 2026-09-19 12:5x MDT). RF063"
+    )
+    write_consent(@dir, "RF063")
+
+    with_user_config("machine" => { "name" => "personal-air" }) do
+      _, env = run_cli(["list", "--dir", @dir])
+      c = env["data"]["campaigns"].first
+      assert_equal "ARMED", c["status"]
+      assert_nil c["machine"]
+      assert_equal "unverified", c["machine_match"]
+      refute c["armed"]
+      refute c["runnable"]
+      assert_equal [], env["data"]["runnable"]
+      assert env["warnings"].any? { |w| w["code"] == "machine_binding_malformed" && w["message"].include?("RF063") }, env["warnings"].inspect
+    end
+  end
+
+  def test_a_valid_name_with_trailing_prose_is_malformed_not_armed
+    write_plan_with_raw_machine_line(
+      @dir, "042", status: "ARMED 2026-09-14 18:41 -0600",
+      machine_line: "Machine: mbp, QUEUED after 041 (the operator)"
+    )
+    write_consent(@dir, "042")
+
+    with_user_config("machine" => { "name" => "mbp" }) do
+      _, env = run_cli(["list", "--dir", @dir])
+      c = env["data"]["campaigns"].first
+      assert_nil c["machine"]
+      assert_equal "unverified", c["machine_match"]
+      refute c["armed"]
+      refute c["runnable"]
+      assert env["warnings"].any? { |w| w["code"] == "machine_binding_malformed" }, env["warnings"].inspect
+    end
+  end
+
+  def test_a_bare_token_with_trailing_whitespace_still_binds
+    write_plan_with_raw_machine_line(
+      @dir, "042", status: "ARMED 2026-09-14 18:41 -0600",
+      machine_line: "Machine: mbp   "
+    )
+    write_consent(@dir, "042")
+
+    with_user_config("machine" => { "name" => "mbp" }) do
+      _, env = run_cli(["list", "--dir", @dir])
+      c = env["data"]["campaigns"].first
+      assert_equal "mbp", c["machine"]
+      assert_equal "this_machine", c["machine_match"]
+      assert c["armed"]
+      assert c["runnable"]
+      assert_equal ["042"], env["data"]["runnable"]
+      assert_equal [], env["warnings"], env["warnings"].inspect
+    end
+  end
+
+  def test_arm_refuses_a_malformed_machine_line
+    path = write_plan_with_raw_machine_line(
+      @dir, "042", status: "ARMED 2026-09-14 18:41 -0600",
+      machine_line: "Machine: mbp, QUEUED after 041 (the operator)"
+    )
+    write_consent(@dir, "042")
+    before = File.read(path)
+
+    with_user_config("machine" => { "name" => "mbp" }) do
+      code, env = run_cli(["arm", "042", "--dir", @dir])
+      assert_equal 1, code
+      assert_equal ["machine_binding_malformed"], env["blocked"].map { |b| b["code"] }
+      assert_equal before, File.read(path)
+    end
+  end
+
+  def test_queued_behind_a_predecessor_with_a_malformed_machine_line_holds
+    write_plan_with_raw_machine_line(
+      @dir, "042", status: "WRAPPED 2026-09-14 18:41 -0600",
+      machine_line: "Machine: **personal-air**, QUEUED after 041 (the operator)"
+    )
+    write_consent(@dir, "042")
+    write_plan(@dir, "043", status: "QUEUED 2026-09-14 19:00 -0600 after 042")
+    write_consent(@dir, "043")
+
+    with_user_config("machine" => { "name" => "personal-air" }) do
+      _, env = run_cli(["list", "--dir", @dir])
+      q = env["data"]["campaigns"].find { |c| c["id"] == "043" }
+      refute q["armed"]
+      refute q["queue"]["satisfied"]
+      assert_nil q["queue"]["predecessor_machine"]
+      assert_equal "unverified", q["queue"]["predecessor_machine_match"]
+      assert env["warnings"].any? { |w| w["code"] == "queue_predecessor_remote" }, env["warnings"].inspect
+      assert_equal [], env["data"]["runnable"]
+    end
   end
 
   # --- bound-to-me / bound-to-other --------------------------------------

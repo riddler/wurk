@@ -68,9 +68,17 @@ module CampaignState
 
   # `Machine: <name>` at the very start of a line (column 1) - an indented
   # `Machine:` inside prose is not the binding, the same way an indented
-  # `Status:` would not be. The value may be blank (a binding present with
-  # no name, which is unverified, never unbound - see machine_match).
-  MACHINE_LINE = /\AMachine:[ \t]*(.*?)[ \t]*\z/.freeze
+  # `Status:` would not be. The only accepted shape after the colon is a
+  # bare name in the same character class AFTER_TAIL already uses for a
+  # predecessor id ([A-Za-z0-9._-]+), optional trailing whitespace, then
+  # end of line (the \z discipline PLAN_H1 uses) - or nothing at all (a
+  # blank binding, which is unverified, never unbound - see
+  # machine_match). Measured on a real fleet: an operator sometimes writes
+  # column-1 prose that happens to start with "Machine:" ("Machine:
+  # **personal-air**, QUEUED after RF056 (the operator, ...)."). That line
+  # must never be captured as the name - see parse_machine's malformed
+  # branch.
+  MACHINE_LINE = /\AMachine:[ \t]*([A-Za-z0-9._-]+)?[ \t]*\z/.freeze
 
   # The four states a campaign's (or a predecessor's) machine binding can
   # be in. "unbound" and "this_machine" both count toward armed/runnable;
@@ -129,29 +137,39 @@ module CampaignState
       PLAN_STATUSES.include?(word)
     end
 
-    # {machine:, line:} from the first column-1 `Machine:` line, or
-    # {machine: nil, line: nil} when the plan carries no binding at all.
-    # `machine` is `""` for a blank binding ("Machine:" with nothing
-    # after it) - distinct from nil, which means the line is absent.
+    # {machine:, line:, malformed:, raw:} from the first column-1
+    # `Machine:` line, or {machine: nil, line: nil, malformed: false,
+    # raw: nil} when the plan carries no binding at all. `machine` is `""`
+    # for a blank binding ("Machine:" with nothing after it) - distinct
+    # from nil, which means either the line is absent (malformed: false)
+    # or present but not in the accepted shape (malformed: true, `raw`
+    # carries the offending line's text for the warning). `machine` never
+    # carries a malformed line's raw text.
     def parse_machine(content)
       content.each_line.with_index(1) do |line, lineno|
-        match = line.chomp.match(MACHINE_LINE)
-        next unless match
+        stripped = line.chomp
+        next unless stripped.start_with?("Machine:")
 
-        return { machine: match[1], line: lineno }
+        match = stripped.match(MACHINE_LINE)
+        return { machine: match[1] || "", line: lineno, malformed: false, raw: nil } if match
+
+        return { machine: nil, line: lineno, malformed: true, raw: stripped }
       end
-      { machine: nil, line: nil }
+      { machine: nil, line: nil, malformed: false, raw: nil }
     end
 
     # Compares a plan's (or a predecessor's) `Machine:` binding against this
-    # machine's own name and returns one of MACHINE_MATCHES. A nil binding
-    # (no `Machine:` line) is "unbound" regardless of this_machine - the
-    # unbound, single-machine case this whole feature must leave untouched.
-    # A blank binding or an unresolved this_machine is "unverified": the
-    # fail-safe direction, since the failure being prevented is two
-    # conductors on one campaign, and a machine that cannot prove the plan
-    # is its own must decline rather than guess.
-    def machine_match(binding, this_machine)
+    # machine's own name and returns one of MACHINE_MATCHES. A malformed
+    # line (see parse_machine) is always "unverified", whatever binding or
+    # this_machine were passed - it was never a name to compare. A nil
+    # binding (no `Machine:` line) is "unbound" regardless of this_machine
+    # - the unbound, single-machine case this whole feature must leave
+    # untouched. A blank binding or an unresolved this_machine is
+    # "unverified": the fail-safe direction, since the failure being
+    # prevented is two conductors on one campaign, and a machine that
+    # cannot prove the plan is its own must decline rather than guess.
+    def machine_match(binding, this_machine, malformed: false)
+      return "unverified" if malformed
       return "unbound" if binding.nil?
       return "unverified" if binding.empty? || this_machine.nil?
 
@@ -292,7 +310,8 @@ module CampaignState
       id = File.basename(path, ".md")
       content = read_utf8(path)
       status = parse_status(content)
-      machine_binding = parse_machine(content)[:machine]
+      machine_parsed = parse_machine(content)
+      machine_binding = machine_parsed[:machine]
       consent = inspect_consent(consent_path(dir, id))
       mutex = inspect_mutex(mutex_dir(locks_dir, id))
 
@@ -300,7 +319,7 @@ module CampaignState
       queue = queued ? inspect_queue(dir, status[:after], locks_dir: locks_dir, this_machine: this_machine) : nil
 
       resolved_machine = machine_binding && !machine_binding.empty? ? this_machine.call : nil
-      machine_match_value = machine_match(machine_binding, resolved_machine)
+      machine_match_value = machine_match(machine_binding, resolved_machine, malformed: machine_parsed[:malformed])
 
       # A satisfied QUEUED plan is virtually promoted: it reports armed
       # without a file write, so a scheduler keying off `armed` starts it
@@ -322,6 +341,7 @@ module CampaignState
         queue: queue,
         machine: machine_binding,
         machine_match: machine_match_value,
+        machine_raw: machine_parsed[:raw],
         armed: armed,
         running: running,
         runnable: armed && consent[:adopted] && !running,
@@ -352,7 +372,7 @@ module CampaignState
       unless after
         return {
           after: nil, satisfied: false, predecessor_status: nil, predecessor_exists: false,
-          predecessor_machine: nil, predecessor_machine_match: nil
+          predecessor_machine: nil, predecessor_machine_match: nil, predecessor_machine_raw: nil
         }
       end
 
@@ -360,9 +380,10 @@ module CampaignState
       exists = File.file?(path) && first_h1(read_utf8(path)) =~ PLAN_H1 && Regexp.last_match(1) == after
       predecessor_content = exists ? read_utf8(path) : nil
       predecessor_status = exists ? parse_status(predecessor_content)[:status] : nil
-      predecessor_binding = exists ? parse_machine(predecessor_content)[:machine] : nil
+      predecessor_parsed = exists ? parse_machine(predecessor_content) : { machine: nil, malformed: false, raw: nil }
+      predecessor_binding = predecessor_parsed[:machine]
       predecessor_resolved = predecessor_binding && !predecessor_binding.empty? ? this_machine.call : nil
-      predecessor_machine_match = machine_match(predecessor_binding, predecessor_resolved)
+      predecessor_machine_match = machine_match(predecessor_binding, predecessor_resolved, malformed: predecessor_parsed[:malformed])
       predecessor_mutex = inspect_mutex(mutex_dir(locks_dir, after))
       predecessor_running = predecessor_mutex[:held] && !predecessor_mutex[:stale]
       {
@@ -372,7 +393,8 @@ module CampaignState
         predecessor_status: predecessor_status,
         predecessor_exists: !!exists,
         predecessor_machine: predecessor_binding,
-        predecessor_machine_match: predecessor_machine_match
+        predecessor_machine_match: predecessor_machine_match,
+        predecessor_machine_raw: predecessor_parsed[:raw]
       }
     end
 
@@ -646,12 +668,22 @@ module CampaignStateCli
         env.warn(code: "queue_predecessor_aborted", message: "#{id}: queued after #{campaign[:queued_after]}, which ABORTED; the queue holds until the operator re-arms #{campaign[:queued_after]} and it WRAPS")
       end
       if campaign[:queued] && campaign[:queue] && %w[other_machine unverified].include?(campaign[:queue][:predecessor_machine_match])
+        predecessor_desc = if campaign[:queue][:predecessor_machine_raw]
+                              "whose Machine: line is malformed (#{campaign[:queue][:predecessor_machine_raw].inspect})"
+                            else
+                              "which is bound to #{campaign[:queue][:predecessor_machine].inspect}"
+                            end
         env.warn(
           code: "queue_predecessor_remote",
-          message: "#{id}: queued after #{campaign[:queued_after]}, which is bound to #{campaign[:queue][:predecessor_machine].inspect}; that predecessor's mutex is not visible from this machine, so the queue holds - plain \"arm #{id}\" (manual promotion) is the operator's path once they know the predecessor has finished"
+          message: "#{id}: queued after #{campaign[:queued_after]}, #{predecessor_desc}; that predecessor's mutex is not visible from this machine, so the queue holds - plain \"arm #{id}\" (manual promotion) is the operator's path once they know the predecessor has finished"
         )
       end
-      if campaign[:machine] == ""
+      if campaign[:machine_raw]
+        env.warn(
+          code: "machine_binding_malformed",
+          message: "#{id}: Machine: line in #{path} is not a bare machine name (#{campaign[:machine_raw].inspect}); the plan is treated as not armed until the line is edited by hand to a bare name, then arm --host can bind it"
+        )
+      elsif campaign[:machine] == ""
         env.warn(code: "machine_binding_blank", message: "#{id}: Machine: line is present but names no machine; treated as unverified and not armed")
       elsif campaign[:machine] && campaign[:machine_match] == "unverified" && %w[ARMED QUEUED].include?(campaign[:status])
         env.warn(
@@ -683,7 +715,13 @@ module CampaignStateCli
         )
         true
       when "unverified"
-        if campaign[:machine] == ""
+        if campaign[:machine_raw]
+          env.block!(
+            code: "machine_binding_malformed",
+            message: "#{id}: Machine: line is not a bare machine name (#{campaign[:machine_raw].inspect}); refusing to arm or disarm until the line is edited by hand to a bare name",
+            needs: "human"
+          )
+        elsif campaign[:machine] == ""
           env.block!(
             code: "machine_binding_blank",
             message: "#{id}: Machine: line is present but names no machine; refusing to arm or disarm until the binding is resolved",
