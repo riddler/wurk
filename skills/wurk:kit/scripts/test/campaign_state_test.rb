@@ -12,6 +12,7 @@ require_relative "../campaign_state"
 require_relative "../lib/lock"
 require_relative "support/home_guard"
 require_relative "support/dead_pid"
+require_relative "support/user_config_helper"
 
 # Every fixture here is built in a tmpdir by the test itself. The kit's own
 # campaign directory is live state for whatever campaign is running while
@@ -50,6 +51,17 @@ module CampaignFixtures
 
       `make test` - SHORT GATE.
     MD
+  end
+
+  # Same shape as write_plan, with an optional Machine: line placed
+  # directly under the Status line - the binding this phase's tests exist
+  # to cover. write_plan itself is left untouched (additions only, per this
+  # repo's rule for this file) rather than growing a new keyword.
+  def write_plan_with_machine(dir, id, status:, machine:, body: nil, heading: "# Campaign #{id}")
+    lines = [heading, "", "Status: #{status}", "Machine: #{machine}", "", (body || default_body)]
+    path = File.join(dir, "#{id}.md")
+    File.write(path, "#{lines.join("\n")}\n")
+    path
   end
 
   def write_consent(dir, id, status: "ADOPTED 2026-09-14 18:41 -0600")
@@ -794,5 +806,261 @@ class CampaignStateLocaleTest < Minitest::Test
     parsed = JSON.parse(out)
     assert parsed["ok"], parsed.inspect
     assert_equal ["260914-cafe"], parsed["data"]["campaigns"].map { |c| c["id"] }
+  end
+end
+
+# wu-dtrb: the plan-to-machine binding. A `Machine: <name>` line opts a plan
+# into per-machine gating - list/show/arm all read the same record, so this
+# suite drives everything through the CLI (list, show) the way the existing
+# CampaignStateQueueTest does, plus a couple of direct CampaignState.parse_machine
+# checks for the parser itself.
+class CampaignStateMachineBindingTest < Minitest::Test
+  include CampaignFixtures
+  include UserConfigHelper
+
+  def setup
+    @dir = Dir.mktmpdir
+    @previous_clock = CampaignState.clock
+    CampaignState.clock = -> { FIXED_NOW }
+  end
+
+  def teardown
+    CampaignState.clock = @previous_clock
+    FileUtils.remove_entry(@dir)
+  end
+
+  def run_cli(argv)
+    io = StringIO.new
+    code = CampaignStateCli.run(argv, io: io)
+    [code, JSON.parse(io.string)]
+  end
+
+  # --- parse_machine ----------------------------------------------------
+
+  def test_parse_machine_reads_the_first_column_one_line
+    content = "# Campaign 042\n\nMachine: mbp\n\nStatus: ARMED 2026-09-14 18:41 -0600\n"
+    assert_equal "mbp", CampaignState.parse_machine(content)[:machine]
+  end
+
+  def test_parse_machine_returns_blank_for_a_blank_line
+    content = "# Campaign 042\n\nMachine:\n\nStatus: ARMED 2026-09-14 18:41 -0600\n"
+    assert_equal "", CampaignState.parse_machine(content)[:machine]
+  end
+
+  def test_parse_machine_returns_nil_when_absent
+    content = "# Campaign 042\n\nStatus: ARMED 2026-09-14 18:41 -0600\n"
+    parsed = CampaignState.parse_machine(content)
+    assert_nil parsed[:machine]
+    assert_nil parsed[:line]
+  end
+
+  def test_parse_machine_ignores_an_indented_line_in_prose
+    content = "# Campaign 042\n\nA note to the reader:\n  Machine: mbp (not a real binding)\n\nStatus: ARMED 2026-09-14 18:41 -0600\n"
+    assert_nil CampaignState.parse_machine(content)[:machine]
+  end
+
+  # --- bound-to-me / bound-to-other --------------------------------------
+
+  def test_bound_to_this_machine_is_armed_and_runnable
+    write_plan_with_machine(@dir, "042", status: "ARMED 2026-09-14 18:41 -0600", machine: "mbp")
+    write_consent(@dir, "042")
+
+    with_user_config("machine" => { "name" => "mbp" }) do
+      _, env = run_cli(["list", "--dir", @dir])
+      c = env["data"]["campaigns"].first
+      assert_equal "mbp", c["machine"]
+      assert_equal "this_machine", c["machine_match"]
+      assert c["armed"]
+      assert c["runnable"]
+      assert_equal ["042"], env["data"]["runnable"]
+      assert_equal [], env["warnings"], env["warnings"].inspect
+    end
+  end
+
+  # sabotage: drop the machine gate from armed -> red here, green in
+  # test_bound_to_this_machine_is_armed_and_runnable.
+  def test_bound_to_another_machine_is_listed_but_not_armed
+    write_plan_with_machine(@dir, "042", status: "ARMED 2026-09-14 18:41 -0600", machine: "mbp")
+    write_consent(@dir, "042")
+
+    with_user_config("machine" => { "name" => "air" }) do
+      _, env = run_cli(["list", "--dir", @dir])
+      c = env["data"]["campaigns"].first
+      assert_equal "ARMED", c["status"]
+      assert_equal "mbp", c["machine"]
+      assert_equal "other_machine", c["machine_match"]
+      refute c["armed"]
+      refute c["runnable"]
+      assert_equal [], env["data"]["runnable"]
+      assert_equal [], env["warnings"], env["warnings"].inspect
+    end
+  end
+
+  # "the measured riddler shape": two ARMED plans, one bound here, one
+  # bound elsewhere -> exactly one record with armed: true.
+  def test_two_armed_plans_one_bound_here_one_elsewhere_only_one_is_armed
+    write_plan_with_machine(@dir, "056", status: "ARMED 2026-09-14 18:00 -0600", machine: "air")
+    write_consent(@dir, "056")
+    write_plan_with_machine(@dir, "059", status: "ARMED 2026-09-14 18:41 -0600", machine: "mbp")
+    write_consent(@dir, "059")
+
+    with_user_config("machine" => { "name" => "mbp" }) do
+      _, env = run_cli(["list", "--dir", @dir])
+      armed = env["data"]["campaigns"].select { |c| c["armed"] }
+      assert_equal ["059"], armed.map { |c| c["id"] }
+      assert_equal ["059"], env["data"]["runnable"]
+    end
+  end
+
+  # --- unbound -------------------------------------------------------------
+
+  def test_unbound_plan_behaves_as_today_under_a_named_machine
+    write_plan(@dir, "042", status: "ARMED 2026-09-14 18:41 -0600")
+    write_consent(@dir, "042")
+
+    with_user_config("machine" => { "name" => "mbp" }) do
+      _, env = run_cli(["list", "--dir", @dir])
+      c = env["data"]["campaigns"].first
+      assert_nil c["machine"]
+      assert_equal "unbound", c["machine_match"]
+      assert c["armed"]
+      assert c["runnable"]
+    end
+  end
+
+  def test_unbound_plan_behaves_as_today_under_no_config
+    write_plan(@dir, "042", status: "ARMED 2026-09-14 18:41 -0600")
+    write_consent(@dir, "042")
+
+    with_user_config(nil) do
+      _, env = run_cli(["list", "--dir", @dir])
+      c = env["data"]["campaigns"].first
+      assert_nil c["machine"]
+      assert_equal "unbound", c["machine_match"]
+      assert c["armed"]
+      assert c["runnable"]
+    end
+  end
+
+  # sabotage: resolve the machine eagerly in run_list -> red here, since the
+  # invalid config installed below would then warn on this unbound plan too.
+  def test_unbound_plan_never_reads_machine_config
+    write_plan(@dir, "042", status: "ARMED 2026-09-14 18:41 -0600")
+    write_consent(@dir, "042")
+
+    with_user_config("machine" => { "name" => "" }) do
+      code, env = run_cli(["list", "--dir", @dir])
+      assert_equal 0, code
+      assert env["ok"], env.inspect
+      assert_equal [], env["warnings"], env["warnings"].inspect
+      assert_equal ["042"], env["data"]["runnable"]
+    end
+  end
+
+  # --- unnamed machine / invalid config -------------------------------------
+
+  def test_unnamed_machine_bound_plan_is_unverified
+    write_plan_with_machine(@dir, "042", status: "ARMED 2026-09-14 18:41 -0600", machine: "mbp")
+    write_consent(@dir, "042")
+
+    with_user_config(nil) do
+      _, env = run_cli(["list", "--dir", @dir])
+      c = env["data"]["campaigns"].first
+      assert_equal "unverified", c["machine_match"]
+      refute c["armed"]
+      assert env["warnings"].any? { |w| w["code"] == "machine_name_unset" && w["message"].include?("machine.name") }, env["warnings"].inspect
+    end
+  end
+
+  def test_invalid_config_bound_plan_is_unverified_and_list_stays_ok
+    write_plan_with_machine(@dir, "042", status: "ARMED 2026-09-14 18:41 -0600", machine: "mbp")
+    write_consent(@dir, "042")
+
+    with_user_config("machine" => { "name" => "" }) do
+      code, env = run_cli(["list", "--dir", @dir])
+      assert_equal 0, code
+      assert env["ok"], env.inspect
+      c = env["data"]["campaigns"].first
+      assert_equal "unverified", c["machine_match"]
+      assert env["warnings"].any? { |w| w["code"] == "user_config_invalid" }, env["warnings"].inspect
+    end
+  end
+
+  def test_blank_machine_line_is_unverified
+    write_plan_with_machine(@dir, "042", status: "ARMED 2026-09-14 18:41 -0600", machine: "")
+    write_consent(@dir, "042")
+
+    with_user_config("machine" => { "name" => "mbp" }) do
+      _, env = run_cli(["list", "--dir", @dir])
+      c = env["data"]["campaigns"].first
+      assert_equal "", c["machine"]
+      assert_equal "unverified", c["machine_match"]
+      refute c["armed"]
+      assert env["warnings"].any? { |w| w["code"] == "machine_binding_blank" }, env["warnings"].inspect
+    end
+  end
+
+  # --- show ------------------------------------------------------------------
+
+  def test_show_exposes_machine_and_machine_match
+    write_plan_with_machine(@dir, "042", status: "ARMED 2026-09-14 18:41 -0600", machine: "mbp")
+    write_consent(@dir, "042")
+
+    with_user_config("machine" => { "name" => "mbp" }) do
+      _, env = run_cli(["show", "042", "--dir", @dir])
+      assert_equal "mbp", env["data"]["campaign"]["machine"]
+      assert_equal "this_machine", env["data"]["campaign"]["machine_match"]
+    end
+  end
+
+  # --- queue -------------------------------------------------------------------
+
+  def remote_queue_fixture
+    write_plan_with_machine(@dir, "042", status: "WRAPPED 2026-09-14 18:41 -0600", machine: "mbp")
+    write_consent(@dir, "042")
+    write_plan(@dir, "043", status: "QUEUED 2026-09-14 19:00 -0600 after 042")
+    write_consent(@dir, "043")
+  end
+
+  # sabotage: drop the predecessor-machine term from satisfied -> red here,
+  # green in test_queued_behind_a_predecessor_bound_here_is_satisfied.
+  def test_queued_behind_a_remote_predecessor_holds
+    remote_queue_fixture
+
+    with_user_config("machine" => { "name" => "air" }) do
+      _, env = run_cli(["list", "--dir", @dir])
+      q = env["data"]["campaigns"].find { |c| c["id"] == "043" }
+      refute q["armed"]
+      refute q["queue"]["satisfied"]
+      assert_equal "mbp", q["queue"]["predecessor_machine"]
+      assert_equal "other_machine", q["queue"]["predecessor_machine_match"]
+      assert env["warnings"].any? { |w| w["code"] == "queue_predecessor_remote" }, env["warnings"].inspect
+      assert_equal [], env["data"]["runnable"]
+    end
+  end
+
+  def test_queued_behind_a_predecessor_bound_here_is_satisfied
+    remote_queue_fixture
+
+    with_user_config("machine" => { "name" => "mbp" }) do
+      _, env = run_cli(["list", "--dir", @dir])
+      q = env["data"]["campaigns"].find { |c| c["id"] == "043" }
+      assert q["armed"]
+      assert q["queue"]["satisfied"]
+      assert_equal ["043"], env["data"]["runnable"]
+    end
+  end
+
+  def test_queued_behind_a_predecessor_on_an_unnamed_machine_holds
+    remote_queue_fixture
+
+    with_user_config(nil) do
+      _, env = run_cli(["list", "--dir", @dir])
+      q = env["data"]["campaigns"].find { |c| c["id"] == "043" }
+      refute q["armed"]
+      refute q["queue"]["satisfied"]
+      assert_equal "unverified", q["queue"]["predecessor_machine_match"]
+      assert env["warnings"].any? { |w| w["code"] == "queue_predecessor_remote" }, env["warnings"].inspect
+    end
   end
 end

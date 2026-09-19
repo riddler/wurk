@@ -7,6 +7,7 @@ require "time"
 require_relative "lib/envelope"
 require_relative "lib/cli"
 require_relative "lib/lock"
+require_relative "lib/user_config"
 
 # CampaignState answers, without parsing markdown by hand, the one question a
 # scheduler needs before it can start a campaign unattended: which campaign
@@ -24,6 +25,13 @@ require_relative "lib/lock"
 # Pure filesystem logic, like lib/lock.rb: no Sh, no manifest. Every path is
 # a CLI argument with a conventional default, so a fleet that keeps its
 # campaign state elsewhere passes --dir (repeatable) and --locks-dir.
+#
+# It reads machine config too, but only lazily and only for a plan that
+# carries a `Machine:` binding: the kit's `~/.claude/wurk.local.json`
+# `machine.name` (lib/user_config.rb) is the authority for whether a bound
+# plan is this machine's own. A harness that mirrors that key in its own
+# config (Howie's howie.json is one) should read this script's answer
+# rather than compare itself - the mirror is known to drift.
 module CampaignState
   DEFAULT_DIR = File.join(".claude", "campaigns")
   LOCKS_SUBDIR = "locks"
@@ -57,6 +65,19 @@ module CampaignState
   H1 = /\A#[ \t]+(.+?)[ \t]*\z/.freeze
   PLAN_H1 = /\A#[ \t]+Campaign[ \t]+(\S+)[ \t]*\z/.freeze
   H2 = /\A##[ \t]+(.+?)[ \t]*\z/.freeze
+
+  # `Machine: <name>` at the very start of a line (column 1) - an indented
+  # `Machine:` inside prose is not the binding, the same way an indented
+  # `Status:` would not be. The value may be blank (a binding present with
+  # no name, which is unverified, never unbound - see machine_match).
+  MACHINE_LINE = /\AMachine:[ \t]*(.*?)[ \t]*\z/.freeze
+
+  # The four states a campaign's (or a predecessor's) machine binding can
+  # be in. "unbound" and "this_machine" both count toward armed/runnable;
+  # "other_machine" and "unverified" both gate it off - the two are kept
+  # distinct because a consumer's warning text differs (a shared fleet dir
+  # vs. a fail-safe this machine cannot resolve).
+  MACHINE_MATCHES = %w[unbound this_machine other_machine unverified].freeze
 
   DEFAULT_CLOCK = -> { Time.now }
 
@@ -106,6 +127,35 @@ module CampaignState
 
     def known_status?(word)
       PLAN_STATUSES.include?(word)
+    end
+
+    # {machine:, line:} from the first column-1 `Machine:` line, or
+    # {machine: nil, line: nil} when the plan carries no binding at all.
+    # `machine` is `""` for a blank binding ("Machine:" with nothing
+    # after it) - distinct from nil, which means the line is absent.
+    def parse_machine(content)
+      content.each_line.with_index(1) do |line, lineno|
+        match = line.chomp.match(MACHINE_LINE)
+        next unless match
+
+        return { machine: match[1], line: lineno }
+      end
+      { machine: nil, line: nil }
+    end
+
+    # Compares a plan's (or a predecessor's) `Machine:` binding against this
+    # machine's own name and returns one of MACHINE_MATCHES. A nil binding
+    # (no `Machine:` line) is "unbound" regardless of this_machine - the
+    # unbound, single-machine case this whole feature must leave untouched.
+    # A blank binding or an unresolved this_machine is "unverified": the
+    # fail-safe direction, since the failure being prevented is two
+    # conductors on one campaign, and a machine that cannot prove the plan
+    # is its own must decline rather than guess.
+    def machine_match(binding, this_machine)
+      return "unbound" if binding.nil?
+      return "unverified" if binding.empty? || this_machine.nil?
+
+      binding == this_machine ? "this_machine" : "other_machine"
     end
 
     # The body of the first `## <name>...` section (heading prefix match, so
@@ -194,22 +244,35 @@ module CampaignState
     end
 
     # One campaign's full record: the shape `list` puts under
-    # data.campaigns[] and `show` under data.campaign.
-    def inspect_plan(path, locks_dir:)
+    # data.campaigns[] and `show` under data.campaign. `this_machine` is a
+    # callable, invoked at most once and only when this plan (or, via
+    # inspect_queue, its predecessor) actually carries a `Machine:`
+    # binding with a name in it - an unbound plan never touches machine
+    # config, which is what lets every existing single-machine caller and
+    # test keep working unchanged with the default (`-> { nil }`).
+    def inspect_plan(path, locks_dir:, this_machine: -> { nil })
       dir = File.dirname(path)
       id = File.basename(path, ".md")
       content = read_utf8(path)
       status = parse_status(content)
+      machine_binding = parse_machine(content)[:machine]
       consent = inspect_consent(consent_path(dir, id))
       mutex = inspect_mutex(mutex_dir(locks_dir, id))
 
       queued = status[:status] == QUEUED
-      queue = queued ? inspect_queue(dir, status[:after], locks_dir: locks_dir) : nil
+      queue = queued ? inspect_queue(dir, status[:after], locks_dir: locks_dir, this_machine: this_machine) : nil
+
+      resolved_machine = machine_binding && !machine_binding.empty? ? this_machine.call : nil
+      machine_match_value = machine_match(machine_binding, resolved_machine)
 
       # A satisfied QUEUED plan is virtually promoted: it reports armed
       # without a file write, so a scheduler keying off `armed` starts it
       # on its next tick and never sees two ARMED plans during the wait.
-      armed = status[:status] == ARMED || (queued && queue[:satisfied])
+      # A plan bound to another machine (or unverifiable on this one) is
+      # never armed, whatever its Status word says - the binding is a gate
+      # on top of the existing rule, not a replacement for it.
+      armed = (status[:status] == ARMED || (queued && queue[:satisfied])) &&
+              %w[unbound this_machine].include?(machine_match_value)
       running = mutex[:held] && !mutex[:stale]
       {
         id: id,
@@ -220,6 +283,8 @@ module CampaignState
         queued: queued,
         queued_after: status[:after],
         queue: queue,
+        machine: machine_binding,
+        machine_match: machine_match_value,
         armed: armed,
         running: running,
         runnable: armed && consent[:adopted] && !running,
@@ -239,19 +304,38 @@ module CampaignState
     # either: whatever stopped it is still there. Only the predecessor's
     # own Status word is read, so a chain (C after B after A) advances one
     # wrap at a time.
-    def inspect_queue(dir, after, locks_dir:)
-      return { after: nil, satisfied: false, predecessor_status: nil, predecessor_exists: false } unless after
+    #
+    # A predecessor bound to another machine (or unverifiable on this one)
+    # also holds the queue: this machine cannot see that machine's mutex,
+    # so WRAPPED-and-unheld here is not proof the predecessor is actually
+    # done. `this_machine` is the same lazy callable inspect_plan takes,
+    # threaded through so it is invoked only when the predecessor itself
+    # carries a named binding.
+    def inspect_queue(dir, after, locks_dir:, this_machine: -> { nil })
+      unless after
+        return {
+          after: nil, satisfied: false, predecessor_status: nil, predecessor_exists: false,
+          predecessor_machine: nil, predecessor_machine_match: nil
+        }
+      end
 
       path = File.join(dir, "#{after}.md")
       exists = File.file?(path) && first_h1(read_utf8(path)) =~ PLAN_H1 && Regexp.last_match(1) == after
-      predecessor_status = exists ? parse_status(read_utf8(path))[:status] : nil
+      predecessor_content = exists ? read_utf8(path) : nil
+      predecessor_status = exists ? parse_status(predecessor_content)[:status] : nil
+      predecessor_binding = exists ? parse_machine(predecessor_content)[:machine] : nil
+      predecessor_resolved = predecessor_binding && !predecessor_binding.empty? ? this_machine.call : nil
+      predecessor_machine_match = machine_match(predecessor_binding, predecessor_resolved)
       predecessor_mutex = inspect_mutex(mutex_dir(locks_dir, after))
       predecessor_running = predecessor_mutex[:held] && !predecessor_mutex[:stale]
       {
         after: after,
-        satisfied: exists && predecessor_status == WRAPPED && !predecessor_running,
+        satisfied: exists && predecessor_status == WRAPPED && !predecessor_running &&
+                   %w[unbound this_machine].include?(predecessor_machine_match),
         predecessor_status: predecessor_status,
-        predecessor_exists: !!exists
+        predecessor_exists: !!exists,
+        predecessor_machine: predecessor_binding,
+        predecessor_machine_match: predecessor_machine_match
       }
     end
 
@@ -300,19 +384,51 @@ module CampaignStateCli
       env.data[:dirs] = options[:dirs]
       env.data[:locks_dir] = options[:locks_dir]
 
+      this_machine = machine_resolver(env)
+
       case subcommand
-      when "list" then run_list(env, options, io)
+      when "list" then run_list(env, options, io, this_machine)
       else
         id = args.first
         if id.to_s.strip.empty?
           warn "usage: #{USAGE}\n\n#{parser}"
           exit 2
         end
-        send("run_#{subcommand}", env, options, id, io)
+        send("run_#{subcommand}", env, options, id, io, this_machine)
       end
     end
 
     private
+
+    # A per-run memo: this_machine.call resolves UserConfig.current's
+    # machine.name at most once per invocation, however many bound plans
+    # (or bound predecessors) end up asking for it. An invalid config or
+    # unparseable wurk.local.json warns once (user_config_invalid, message
+    # is the errors - UserConfig.parse already strips any file content out
+    # of a JSON::ParserError's own message) and resolves nil, which
+    # machine_match treats as unverified. Unknown-key warnings are NOT
+    # relayed here - user_config.rb check owns those, and they are noise
+    # for a reader of `list`/`show`.
+    def machine_resolver(env)
+      resolved = false
+      value = nil
+      lambda do
+        unless resolved
+          resolved = true
+          begin
+            config = UserConfig.current
+            if config.valid?
+              value = config.machine_name
+            else
+              env.warn(code: "user_config_invalid", message: config.errors.join("; "))
+            end
+          rescue JSON::ParserError => e
+            env.warn(code: "user_config_invalid", message: e.message)
+          end
+        end
+        value
+      end
+    end
 
     # --- list -----------------------------------------------------------------
     #
@@ -320,7 +436,7 @@ module CampaignStateCli
     # warning, not a block: "nothing is armed" is a complete answer for a
     # scheduler asking a repo that has never run a campaign.
 
-    def run_list(env, options, io)
+    def run_list(env, options, io, this_machine)
       campaigns = []
       options[:dirs].each do |dir|
         unless Dir.exist?(dir)
@@ -328,7 +444,7 @@ module CampaignStateCli
           next
         end
         CampaignState.plan_paths(dir).each do |path|
-          campaigns << inspect_and_warn(env, path, options[:locks_dir])
+          campaigns << inspect_and_warn(env, path, options[:locks_dir], this_machine)
         end
       end
       campaigns.sort_by! { |c| c[:id] }
@@ -340,11 +456,11 @@ module CampaignStateCli
 
     # --- show -----------------------------------------------------------------
 
-    def run_show(env, options, id, io)
+    def run_show(env, options, id, io, this_machine)
       path = locate(env, options, id)
       return env.emit(io) unless path
 
-      env.data[:campaign] = inspect_and_warn(env, path, options[:locks_dir])
+      env.data[:campaign] = inspect_and_warn(env, path, options[:locks_dir], this_machine)
       env.emit(io)
     end
 
@@ -355,11 +471,11 @@ module CampaignStateCli
     # the failure this script exists to make impossible. It never creates or
     # edits the consent file to get past its own refusal.
 
-    def run_arm(env, options, id, io)
+    def run_arm(env, options, id, io, this_machine)
       path = locate(env, options, id)
       return env.emit(io) unless path
 
-      campaign = inspect_and_warn(env, path, options[:locks_dir])
+      campaign = inspect_and_warn(env, path, options[:locks_dir], this_machine)
       env.data[:campaign] = campaign
       env.data[:dry_run] = options[:dry_run]
       env.data[:before] = campaign[:status]
@@ -395,7 +511,7 @@ module CampaignStateCli
           env.warn(code: "already_queued", message: "#{id} is already QUEUED after #{options[:after]} (#{campaign[:status_stamp]})")
           return env.emit(io)
         end
-        rewrite(env, options, path, campaign, CampaignState::QUEUED, tail: "after #{options[:after]}")
+        rewrite(env, options, path, campaign, CampaignState::QUEUED, this_machine, tail: "after #{options[:after]}")
         return env.emit(io)
       end
 
@@ -407,7 +523,7 @@ module CampaignStateCli
         return env.emit(io)
       end
 
-      rewrite(env, options, path, campaign, CampaignState::ARMED)
+      rewrite(env, options, path, campaign, CampaignState::ARMED, this_machine)
       env.emit(io)
     end
 
@@ -417,11 +533,11 @@ module CampaignStateCli
     # live-held: the conductor holding it has already read ARMED, and the
     # file flip would not stop it - only mislead the next reader.
 
-    def run_disarm(env, options, id, io)
+    def run_disarm(env, options, id, io, this_machine)
       path = locate(env, options, id)
       return env.emit(io) unless path
 
-      campaign = inspect_and_warn(env, path, options[:locks_dir])
+      campaign = inspect_and_warn(env, path, options[:locks_dir], this_machine)
       env.data[:campaign] = campaign
       env.data[:dry_run] = options[:dry_run]
       env.data[:before] = campaign[:status]
@@ -438,7 +554,7 @@ module CampaignStateCli
         return env.emit(io)
       end
 
-      rewrite(env, options, path, campaign, CampaignState::DRAFTED)
+      rewrite(env, options, path, campaign, CampaignState::DRAFTED, this_machine)
       env.emit(io)
     end
 
@@ -453,8 +569,8 @@ module CampaignStateCli
       nil
     end
 
-    def inspect_and_warn(env, path, locks_dir)
-      campaign = CampaignState.inspect_plan(path, locks_dir: locks_dir)
+    def inspect_and_warn(env, path, locks_dir, this_machine)
+      campaign = CampaignState.inspect_plan(path, locks_dir: locks_dir, this_machine: this_machine)
       id = campaign[:id]
 
       if campaign[:status] && !CampaignState.known_status?(campaign[:status])
@@ -469,6 +585,20 @@ module CampaignStateCli
       if campaign[:queued] && campaign[:queue][:predecessor_status] == CampaignState::ABORTED
         env.warn(code: "queue_predecessor_aborted", message: "#{id}: queued after #{campaign[:queued_after]}, which ABORTED; the queue holds until the operator re-arms #{campaign[:queued_after]} and it WRAPS")
       end
+      if campaign[:queued] && campaign[:queue] && %w[other_machine unverified].include?(campaign[:queue][:predecessor_machine_match])
+        env.warn(
+          code: "queue_predecessor_remote",
+          message: "#{id}: queued after #{campaign[:queued_after]}, which is bound to #{campaign[:queue][:predecessor_machine].inspect}; that predecessor's mutex is not visible from this machine, so the queue holds - plain \"arm #{id}\" (manual promotion) is the operator's path once they know the predecessor has finished"
+        )
+      end
+      if campaign[:machine] == ""
+        env.warn(code: "machine_binding_blank", message: "#{id}: Machine: line is present but names no machine; treated as unverified and not armed")
+      elsif campaign[:machine] && campaign[:machine_match] == "unverified" && %w[ARMED QUEUED].include?(campaign[:status])
+        env.warn(
+          code: "machine_name_unset",
+          message: "#{id}: bound to #{campaign[:machine].inspect}, but this machine has no ~/.claude/wurk.local.json machine.name set; the plan is treated as not armed"
+        )
+      end
       if campaign[:armed] && !campaign[:consent][:exists]
         env.warn(code: "consent_missing", message: "#{id} is ARMED but has no consent file at #{campaign[:consent][:path]}")
       end
@@ -478,7 +608,7 @@ module CampaignStateCli
       campaign
     end
 
-    def rewrite(env, options, path, campaign, word, tail: nil)
+    def rewrite(env, options, path, campaign, word, this_machine, tail: nil)
       now = CampaignState.clock.call
       content = CampaignState.read_utf8(path)
       rewritten = CampaignState.rewrite_status(content, word, now: now, tail: tail)
@@ -488,7 +618,7 @@ module CampaignStateCli
       return if options[:dry_run]
 
       CampaignState.write_atomically(path, rewritten)
-      env.data[:campaign] = CampaignState.inspect_plan(path, locks_dir: options[:locks_dir])
+      env.data[:campaign] = CampaignState.inspect_plan(path, locks_dir: options[:locks_dir], this_machine: this_machine)
     end
   end
 end
