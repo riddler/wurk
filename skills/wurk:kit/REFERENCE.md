@@ -739,7 +739,9 @@ without an ADOPTED consent file and never writes one, because consent is
 a human artifact and this script only ever edits the plan's Status line.
 It reads no manifest, but it does read machine config
 (`~/.claude/wurk.local.json` via `lib/user_config.rb`), lazily and only
-for a plan that carries a `Machine:` binding.
+for a plan that carries a `Machine:` binding. `arm --host NAME` writes
+only this machine's own `machine.name` into that binding and never
+falls back to the OS hostname.
 
 ## `report_check.rb`: does a worker's report file actually parse
 

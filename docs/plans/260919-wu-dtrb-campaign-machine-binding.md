@@ -474,15 +474,15 @@ only this machine's own name and never falls back to a hostname.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `/usr/bin/ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] Full quality gate passes: `/usr/bin/ruby skills/wurk:kit/scripts/test/run.rb`
       (including `contract_test.rb`, which covers `--dry-run` and the banned
       operations)
-- [ ] The arm/disarm binding tests are green: `/usr/bin/ruby skills/wurk:kit/scripts/test/campaign_state_test.rb -n "/host|bound_to_other|Machine/"`
-- [ ] Still no existing test changed expectation:
+- [x] The arm/disarm binding tests are green: `/usr/bin/ruby skills/wurk:kit/scripts/test/campaign_state_test.rb -n "/host|bound_to_other|Machine/"`
+- [x] Still no existing test changed expectation:
       `git diff main -U0 -- skills/wurk:kit/scripts/test/campaign_state_test.rb | grep -c '^-[^-]'`
       prints `0`
-- [ ] `ruby skills/wurk:kit/scripts/campaign_state.rb list --host x` exits 2
-- [ ] `grep -n "host_not_this_machine\|bound_to_other_machine" skills/wurk:conductor/REFERENCE.md`
+- [x] `ruby skills/wurk:kit/scripts/campaign_state.rb list --host x` exits 2
+- [x] `grep -n "host_not_this_machine\|bound_to_other_machine" skills/wurk:conductor/REFERENCE.md`
       finds both codes
 
 #### Manual Verification:
@@ -613,6 +613,24 @@ before considering the plan fully landed.
 - [ ] No regressions in related features: `list` against a real, unbound
       campaigns dir on this machine reports exactly what it did before the
       change (compare `data.runnable` and `warnings` from `main` vs branch)
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 2
+
+- [ ] Manual Testing Steps 5-7 below behave as described
+- [ ] The `arm --host` refusal messages are actionable to an operator who
+      has never seen `wurk.local.json` (the key path is in the message)
+- [ ] No regressions in related features: plain `arm`/`disarm`/`arm --after`
+      on unbound plans behave exactly as before
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,

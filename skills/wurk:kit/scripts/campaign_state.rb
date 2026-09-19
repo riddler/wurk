@@ -212,6 +212,43 @@ module CampaignState
       lines.join
     end
 
+    # Rewrites the plan's Machine line to `name`, or inserts one when the
+    # plan carries none. When a Machine: line already exists, only its
+    # value changes (the same word-only rewrite rewrite_status does for
+    # Status); otherwise a new line is inserted directly after the Status
+    # line - the shape `arm --host` produces, composing after
+    # rewrite_status, or landing on a plan that already had one - or after
+    # the H1 the same way rewrite_status does when the plan has no Status
+    # line either. Returns the new content; never touches the filesystem.
+    def rewrite_machine(content, name)
+      lines = content.lines
+      parsed = parse_machine(content)
+
+      if parsed[:line]
+        index = parsed[:line] - 1
+        eol = lines[index].end_with?("\n") ? "\n" : ""
+        lines[index] = "Machine: #{name}#{eol}"
+        return lines.join
+      end
+
+      status = parse_status(content)
+      if status[:line]
+        lines.insert(status[:line], "Machine: #{name}\n")
+        return lines.join
+      end
+
+      new_head = "Machine: #{name}"
+      h1_index = lines.index { |l| l.chomp =~ H1 }
+      insert = ["#{new_head}\n", "\n"]
+      if h1_index
+        lines.insert(h1_index + 1, "\n", *insert)
+        lines.delete_at(h1_index + 4) if lines[h1_index + 4] == "\n" && lines[h1_index + 3] == "\n"
+      else
+        lines.unshift(*insert)
+      end
+      lines.join
+    end
+
     def stamp(time)
       time.strftime("%Y-%m-%d %H:%M %z")
     end
@@ -357,7 +394,7 @@ end
 # line and nothing else. Every subcommand takes the same location flags.
 module CampaignStateCli
   SUBCOMMANDS = %w[list show arm disarm].freeze
-  USAGE = "campaign_state.rb <list|show ID|arm ID [--after ID]|disarm ID> [--dir DIR ...] [--locks-dir DIR] [--dry-run]"
+  USAGE = "campaign_state.rb <list|show ID|arm ID [--after ID] [--host NAME]|disarm ID> [--dir DIR ...] [--locks-dir DIR] [--dry-run]"
 
   class << self
     def run(argv, io: $stdout)
@@ -373,8 +410,14 @@ module CampaignStateCli
         opts.on("--dir DIR", "campaigns directory (repeatable; default #{CampaignState::DEFAULT_DIR})") { |v| options[:dirs] << v }
         opts.on("--locks-dir DIR", "where campaign mutexes live (default <first --dir>/#{CampaignState::LOCKS_SUBDIR})") { |v| options[:locks_dir] = v }
         opts.on("--after ID", "arm only: queue behind campaign ID (writes Status: QUEUED ... after ID)") { |v| options[:after] = v }
+        opts.on("--host NAME", "arm only: bind the plan to this machine; NAME must equal ~/.claude/wurk.local.json machine.name") { |v| options[:host] = v }
       end
       args = Cli.parse!(parser, argv)
+
+      if options[:host] && subcommand != "arm"
+        warn "usage: #{USAGE}\n\n#{parser}"
+        exit 2
+      end
 
       options[:dirs] = [File.expand_path(CampaignState::DEFAULT_DIR)] if options[:dirs].empty?
       options[:locks_dir] ||= File.join(options[:dirs].first, CampaignState::LOCKS_SUBDIR)
@@ -481,11 +524,20 @@ module CampaignStateCli
       env.data[:before] = campaign[:status]
       env.data[:after] = campaign[:status]
       env.data[:changed] = false
+      env.data[:machine_before] = campaign[:machine]
+      env.data[:machine_after] = campaign[:machine]
 
       if campaign[:status] == CampaignState::WRAPPED
         env.block!(code: "campaign_wrapped", message: "#{id} is WRAPPED; a wrapped campaign is not re-armed by a script")
         return env.emit(io)
       end
+
+      # A plan bound to another machine, or one this machine cannot verify
+      # the binding of, is refused outright: the binding is the claim "this
+      # machine will conduct it", only the machine making the claim can arm
+      # (or disarm) it, and a typo'd foreign name here would silently
+      # strand the plan on a machine that never asked for it.
+      return env.emit(io) if refuse_foreign_machine(env, id, campaign, this_machine)
 
       # ABORTED is the one terminal word arm accepts: re-arming after the
       # operator cleared the fault is exactly what the status exists for.
@@ -502,28 +554,27 @@ module CampaignStateCli
         return env.emit(io)
       end
 
+      host_name, host_blocked = resolve_host(env, options)
+      return env.emit(io) if host_blocked
+
       if options[:after]
         if options[:after] == id
           env.block!(code: "queued_after_self", message: "#{id} cannot queue behind itself")
           return env.emit(io)
         end
-        if campaign[:status] == CampaignState::QUEUED && campaign[:queued_after] == options[:after]
-          env.warn(code: "already_queued", message: "#{id} is already QUEUED after #{options[:after]} (#{campaign[:status_stamp]})")
-          return env.emit(io)
-        end
-        rewrite(env, options, path, campaign, CampaignState::QUEUED, this_machine, tail: "after #{options[:after]}")
+        already_queued = campaign[:status] == CampaignState::QUEUED && campaign[:queued_after] == options[:after]
+        env.warn(code: "already_queued", message: "#{id} is already QUEUED after #{options[:after]} (#{campaign[:status_stamp]})") if already_queued
+        rewrite(env, options, path, campaign, already_queued ? nil : CampaignState::QUEUED, this_machine, tail: "after #{options[:after]}", host: host_name)
         return env.emit(io)
       end
 
       # Plain arm on a QUEUED plan is the manual promotion path: the file
       # flips to ARMED even when the queue already reports it virtually
       # armed, so the file stops depending on the predecessor's state.
-      if campaign[:armed] && campaign[:status] != CampaignState::QUEUED
-        env.warn(code: "already_armed", message: "#{id} is already ARMED (#{campaign[:status_stamp]})")
-        return env.emit(io)
-      end
+      already_armed = campaign[:armed] && campaign[:status] != CampaignState::QUEUED
+      env.warn(code: "already_armed", message: "#{id} is already ARMED (#{campaign[:status_stamp]})") if already_armed
 
-      rewrite(env, options, path, campaign, CampaignState::ARMED, this_machine)
+      rewrite(env, options, path, campaign, already_armed ? nil : CampaignState::ARMED, this_machine, host: host_name)
       env.emit(io)
     end
 
@@ -543,6 +594,15 @@ module CampaignStateCli
       env.data[:before] = campaign[:status]
       env.data[:after] = campaign[:status]
       env.data[:changed] = false
+      env.data[:machine_before] = campaign[:machine]
+      env.data[:machine_after] = campaign[:machine]
+
+      # The same refusal arm applies, for the same reason: this machine
+      # cannot see a foreign machine's mutex, so a disarm from here cannot
+      # know whether a conductor there already read ARMED (the same
+      # reasoning as campaign_running below). disarm never touches the
+      # Machine line either way.
+      return env.emit(io) if refuse_foreign_machine(env, id, campaign, this_machine)
 
       if campaign[:running]
         env.block!(code: "campaign_running", message: "#{id} is running (mutex #{campaign[:mutex][:dir]} is held); disarming the file would not stop it")
@@ -608,16 +668,106 @@ module CampaignStateCli
       campaign
     end
 
-    def rewrite(env, options, path, campaign, word, this_machine, tail: nil)
+    # Blocks arm/disarm on a plan bound to another machine, or one whose
+    # binding this machine cannot verify (unset machine.name, or a blank
+    # Machine: line) - true when it blocked (caller emits and returns),
+    # false when the plan is unbound or bound to this machine and the
+    # caller should proceed.
+    def refuse_foreign_machine(env, id, campaign, this_machine)
+      case campaign[:machine_match]
+      when "other_machine"
+        env.block!(
+          code: "bound_to_other_machine",
+          message: "#{id} is bound to #{campaign[:machine].inspect}, not this machine (#{this_machine.call.inspect}); " \
+                    "arming and disarming happen on the machine a plan is bound to - rebinding it is a hand edit of the Machine: line"
+        )
+        true
+      when "unverified"
+        if campaign[:machine] == ""
+          env.block!(
+            code: "machine_binding_blank",
+            message: "#{id}: Machine: line is present but names no machine; refusing to arm or disarm until the binding is resolved",
+            needs: "human"
+          )
+        else
+          env.block!(
+            code: "machine_name_unset",
+            message: "#{id}: bound to #{campaign[:machine].inspect}, but this machine has no ~/.claude/wurk.local.json machine.name set; " \
+                      "refusing to arm or disarm until the binding can be verified",
+            needs: "human"
+          )
+        end
+        true
+      else
+        false
+      end
+    end
+
+    # arm --host only: resolves NAME against this machine's own
+    # machine.name, blocking rather than falling back to the OS hostname.
+    # Returns [name_to_bind, blocked?] - name_to_bind is nil unless --host
+    # was given and it resolved cleanly.
+    def resolve_host(env, options)
+      return [nil, false] unless options[:host]
+
+      config = UserConfig.require!(env)
+      return [nil, true] unless config
+
+      machine_name = config.machine_name
+      if machine_name.nil?
+        env.block!(
+          code: "machine_name_unset",
+          message: "--host needs this machine's name; set machine.name in ~/.claude/wurk.local.json (the OS host name is never used)",
+          needs: "human"
+        )
+        return [nil, true]
+      end
+
+      if options[:host] != machine_name
+        env.block!(
+          code: "host_not_this_machine",
+          message: "--host #{options[:host].inspect} does not match this machine's name #{machine_name.inspect} " \
+                    "(~/.claude/wurk.local.json machine.name); arm never binds a plan to a name that is not its own",
+          needs: "human"
+        )
+        return [nil, true]
+      end
+
+      [machine_name, false]
+    end
+
+    # Writes the Status line, the Machine line, or both - each only when it
+    # actually changes the file, so an --host-only rebind of an
+    # already-armed plan touches nothing but the Machine line, and a plain
+    # already-armed/already-queued no-op (word and host both nil or
+    # unchanged) writes nothing at all. Both changes are composed into one
+    # write_atomically call.
+    def rewrite(env, options, path, campaign, word, this_machine, tail: nil, host: nil)
       now = CampaignState.clock.call
       content = CampaignState.read_utf8(path)
-      rewritten = CampaignState.rewrite_status(content, word, now: now, tail: tail)
-      env.commands << "rewrite Status line in #{path}: #{campaign[:status] || 'none'} -> #{word} #{CampaignState.stamp(now)}#{tail ? " #{tail}" : ''}"
-      env.data[:after] = word
+      changed = false
+
+      if word
+        content = CampaignState.rewrite_status(content, word, now: now, tail: tail)
+        env.commands << "rewrite Status line in #{path}: #{campaign[:status] || 'none'} -> #{word} #{CampaignState.stamp(now)}#{tail ? " #{tail}" : ''}"
+        env.data[:after] = word
+        changed = true
+      end
+
+      if host && host != campaign[:machine]
+        content = CampaignState.rewrite_machine(content, host)
+        before = campaign[:machine].to_s.empty? ? "none" : campaign[:machine]
+        env.commands << "write Machine line in #{path}: #{before} -> #{host}"
+        env.data[:machine_after] = host
+        changed = true
+      end
+
+      return unless changed
+
       env.data[:changed] = true
       return if options[:dry_run]
 
-      CampaignState.write_atomically(path, rewritten)
+      CampaignState.write_atomically(path, content)
       env.data[:campaign] = CampaignState.inspect_plan(path, locks_dir: options[:locks_dir], this_machine: this_machine)
     end
   end
