@@ -1064,3 +1064,230 @@ class CampaignStateMachineBindingTest < Minitest::Test
     end
   end
 end
+
+# arm --host: the one writer of the Machine line, and the refusals that
+# keep arm/disarm from touching a plan bound elsewhere.
+class CampaignStateArmHostTest < Minitest::Test
+  include CampaignFixtures
+  include UserConfigHelper
+
+  def setup
+    @dir = Dir.mktmpdir
+    @previous_clock = CampaignState.clock
+    CampaignState.clock = -> { FIXED_NOW }
+  end
+
+  def teardown
+    CampaignState.clock = @previous_clock
+    FileUtils.remove_entry(@dir)
+  end
+
+  def run_cli(argv)
+    io = StringIO.new
+    code = CampaignStateCli.run(argv, io: io)
+    [code, JSON.parse(io.string)]
+  end
+
+  # --- rewrite_machine (pure) ---------------------------------------------
+
+  def test_rewrite_machine_inserts_after_the_status_line
+    content = "# Campaign 042\n\nStatus: DRAFTED 2026-09-13\n\nBody.\n"
+    rewritten = CampaignState.rewrite_machine(content, "mbp")
+    assert_equal "# Campaign 042\n\nStatus: DRAFTED 2026-09-13\nMachine: mbp\n\nBody.\n", rewritten
+  end
+
+  def test_rewrite_machine_replaces_an_existing_line
+    content = "# Campaign 042\n\nStatus: ARMED 2026-09-14\nMachine: air\n\nBody.\n"
+    rewritten = CampaignState.rewrite_machine(content, "mbp")
+    assert_equal "# Campaign 042\n\nStatus: ARMED 2026-09-14\nMachine: mbp\n\nBody.\n", rewritten
+  end
+
+  def test_rewrite_machine_inserts_after_the_h1_with_no_status_line
+    content = "# Campaign 042\n\nBody.\n"
+    rewritten = CampaignState.rewrite_machine(content, "mbp")
+    assert_equal "# Campaign 042\n\nMachine: mbp\n\nBody.\n", rewritten
+  end
+
+  # --- arm --host writes the binding ----------------------------------------
+
+  def test_arm_host_writes_status_and_machine_lines
+    path = write_plan(@dir, "042", status: "DRAFTED 2026-09-13")
+    write_consent(@dir, "042")
+
+    with_user_config("machine" => { "name" => "mbp" }) do
+      code, env = run_cli(["arm", "042", "--dir", @dir, "--host", "mbp"])
+
+      assert_equal 0, code
+      assert env["ok"], env.inspect
+      assert_equal "mbp", env["data"]["machine_after"]
+      assert env["data"]["campaign"]["runnable"]
+      assert_equal "this_machine", env["data"]["campaign"]["machine_match"]
+      content = File.read(path)
+      assert_match(/\AStatus: ARMED 2026-09-14 20:00 -0600\nMachine: mbp\n/, content[content.index("Status:")..])
+    end
+  end
+
+  def test_arm_host_refuses_a_name_that_is_not_this_machine
+    path = write_plan(@dir, "042", status: "DRAFTED 2026-09-13")
+    write_consent(@dir, "042")
+    before = File.read(path)
+
+    with_user_config("machine" => { "name" => "mbp" }) do
+      code, env = run_cli(["arm", "042", "--dir", @dir, "--host", "air"])
+
+      assert_equal 1, code
+      assert_equal ["host_not_this_machine"], env["blocked"].map { |b| b["code"] }
+      assert_equal before, File.read(path)
+    end
+  end
+
+  def test_arm_host_refuses_when_the_machine_has_no_name
+    path = write_plan(@dir, "042", status: "DRAFTED 2026-09-13")
+    write_consent(@dir, "042")
+    before = File.read(path)
+
+    with_user_config(nil) do
+      code, env = run_cli(["arm", "042", "--dir", @dir, "--host", "mbp"])
+
+      assert_equal 1, code
+      assert_equal ["machine_name_unset"], env["blocked"].map { |b| b["code"] }
+      assert env["blocked"][0]["message"].include?("machine.name"), env["blocked"][0]["message"]
+      assert_equal before, File.read(path)
+    end
+  end
+
+  def test_arm_host_refuses_on_an_invalid_config
+    path = write_plan(@dir, "042", status: "DRAFTED 2026-09-13")
+    write_consent(@dir, "042")
+    before = File.read(path)
+
+    with_user_config("machine" => { "name" => "" }) do
+      code, env = run_cli(["arm", "042", "--dir", @dir, "--host", "mbp"])
+
+      assert_equal 1, code
+      assert_equal ["user_config_invalid"], env["blocked"].map { |b| b["code"] }
+      assert_equal before, File.read(path)
+    end
+  end
+
+  def test_arm_host_on_an_already_armed_unbound_plan_only_writes_the_machine_line
+    path = write_plan(@dir, "042", status: "ARMED 2026-09-14 18:41 -0600")
+    write_consent(@dir, "042")
+    status_line_before = File.read(path)[/^Status:.*$/]
+
+    with_user_config("machine" => { "name" => "mbp" }) do
+      code, env = run_cli(["arm", "042", "--dir", @dir, "--host", "mbp"])
+
+      assert_equal 0, code
+      assert env["data"]["changed"]
+      assert_equal ["already_armed"], env["warnings"].map { |w| w["code"] }
+      assert_equal status_line_before, File.read(path)[/^Status:.*$/]
+      assert_includes File.read(path), "Machine: mbp\n"
+    end
+  end
+
+  def test_arm_host_composes_with_after
+    write_plan(@dir, "041", status: "ARMED 2026-09-14 18:41 -0600")
+    write_consent(@dir, "041")
+    path = write_plan(@dir, "042", status: "DRAFTED 2026-09-13")
+    write_consent(@dir, "042")
+
+    with_user_config("machine" => { "name" => "mbp" }) do
+      code, env = run_cli(["arm", "042", "--dir", @dir, "--after", "041", "--host", "mbp"])
+
+      assert_equal 0, code
+      assert env["ok"], env.inspect
+      content = File.read(path)
+      assert_match(/Status: QUEUED 2026-09-14 20:00 -0600 after 041\nMachine: mbp\n/, content)
+    end
+  end
+
+  def test_arm_host_dry_run_touches_nothing
+    path = write_plan(@dir, "042", status: "DRAFTED 2026-09-13")
+    write_consent(@dir, "042")
+    before = File.read(path)
+
+    with_user_config("machine" => { "name" => "mbp" }) do
+      code, env = run_cli(["arm", "042", "--dir", @dir, "--host", "mbp", "--dry-run"])
+
+      assert_equal 0, code
+      assert_equal 2, env["commands"].length
+      assert_equal before, File.read(path)
+    end
+  end
+
+  # --- arm/disarm refuse a foreign or unverifiable binding -------------------
+
+  def test_arm_without_host_refuses_a_plan_bound_to_another_machine
+    path = write_plan_with_machine(@dir, "042", status: "ARMED 2026-09-14 18:41 -0600", machine: "mbp")
+    write_consent(@dir, "042")
+    before = File.read(path)
+
+    with_user_config("machine" => { "name" => "air" }) do
+      code, env = run_cli(["arm", "042", "--dir", @dir])
+
+      assert_equal 1, code
+      assert_equal ["bound_to_other_machine"], env["blocked"].map { |b| b["code"] }
+      assert_equal before, File.read(path)
+    end
+  end
+
+  def test_arm_without_host_refuses_a_plan_it_cannot_verify
+    path = write_plan_with_machine(@dir, "042", status: "ARMED 2026-09-14 18:41 -0600", machine: "mbp")
+    write_consent(@dir, "042")
+    before = File.read(path)
+
+    with_user_config(nil) do
+      code, env = run_cli(["arm", "042", "--dir", @dir])
+
+      assert_equal 1, code
+      assert_equal ["machine_name_unset"], env["blocked"].map { |b| b["code"] }
+      assert_equal before, File.read(path)
+    end
+  end
+
+  def test_disarm_refuses_a_plan_bound_to_another_machine
+    path = write_plan_with_machine(@dir, "042", status: "ARMED 2026-09-14 18:41 -0600", machine: "mbp")
+    write_consent(@dir, "042")
+    before = File.read(path)
+
+    with_user_config("machine" => { "name" => "air" }) do
+      code, env = run_cli(["disarm", "042", "--dir", @dir])
+
+      assert_equal 1, code
+      assert_equal ["bound_to_other_machine"], env["blocked"].map { |b| b["code"] }
+      assert_equal before, File.read(path)
+    end
+  end
+
+  def test_disarm_on_the_bound_machine_disarms_and_keeps_the_binding
+    path = write_plan_with_machine(@dir, "042", status: "ARMED 2026-09-14 18:41 -0600", machine: "mbp")
+    write_consent(@dir, "042")
+
+    with_user_config("machine" => { "name" => "mbp" }) do
+      code, env = run_cli(["disarm", "042", "--dir", @dir])
+
+      assert_equal 0, code
+      assert env["ok"], env.inspect
+      assert_equal "DRAFTED", env["data"]["campaign"]["status"]
+      assert_includes File.read(path), "Machine: mbp\n"
+    end
+  end
+
+  # --- usage -------------------------------------------------------------------
+
+  def test_host_on_list_is_a_usage_error
+    _code, status = capture_exit { run_cli(["list", "--dir", @dir, "--host", "mbp"]) }
+
+    assert_equal 2, status
+  end
+
+  private
+
+  def capture_exit
+    yield
+    [nil, 0]
+  rescue SystemExit => e
+    [nil, e.status]
+  end
+end

@@ -279,6 +279,10 @@ hostname that differs from the operator's chosen `machine.name` would
 match nothing and be hard to debug, so the only source of "this
 machine's name" is the config key itself.
 
+`arm --host NAME` (below) is the one writer of the `Machine:` line - a
+plan is never bound by hand-editing the file, and never bound to a name
+other than the arming machine's own.
+
 ### Subcommands
 
 Every subcommand takes `--dir DIR` (repeatable; default `.claude/campaigns`
@@ -304,11 +308,40 @@ under the current directory) and `--locks-dir DIR`.
   `arm` on a QUEUED plan is the manual promotion path and flips the file
   to `ARMED <now>` even when the queue already reports it virtually
   armed.
+
+  A plan bound to another machine, or one this machine cannot verify
+  ("The Machine line" above), is refused before the consent check:
+  `bound_to_other_machine`, or `machine_name_unset` /
+  `machine_binding_blank` (needs: human either way) - the binding is
+  the claim "this machine will conduct it", only the machine making
+  the claim can arm the plan, and a typo'd foreign name would silently
+  strand it. Rebinding an already-bound plan away from that claim is a
+  hand edit of the `Machine:` line, not something `arm` does.
+
+  `--host NAME` binds the plan to this machine as part of the same
+  arm (and composes with `--after`): NAME must equal this machine's
+  own `machine.name` (`~/.claude/wurk.local.json`, loaded the same way
+  `lock.rb acquire` loads it) or arm refuses `host_not_this_machine`
+  (NAME and the actual name, both named in the message) or
+  `machine_name_unset` (no `machine.name` set - the message names the
+  key) or `user_config_invalid`. The OS host name is never consulted.
+  The Status write and the Machine write are independent - each
+  happens only if it actually changes the file, so `arm --host <me>`
+  on an already-ARMED unbound plan writes only the `Machine:` line
+  (Status untouched, `already_armed` still warned, `changed: true`),
+  composed with the Status write into one atomic write when both
+  apply. `data.machine_before` / `data.machine_after` join
+  `data.before` / `data.after`.
 - **`disarm ID`** - rewrites the Status to `DRAFTED <now>` the same way.
   Refuses `campaign_running` while the mutex is live-held: the conductor
   holding it has already read ARMED and the file flip would only mislead
   the next reader. Not armed: ok, `changed: false`, warning `not_armed`.
-  `--dry-run` as for `arm`. The consent file is never touched.
+  `--dry-run` as for `arm`. The consent file is never touched, and neither
+  is the `Machine:` line - a disarmed plan keeps its binding. Refuses the
+  same `bound_to_other_machine` / `machine_name_unset` /
+  `machine_binding_blank` set as `arm`, before the `campaign_running`
+  check: this machine cannot see a foreign machine's mutex, so a disarm
+  from here cannot know whether a conductor there already read ARMED.
 
 Both mutations write via a sibling temp file and rename, so a concurrent
 `list` sees the old file or the new one.
