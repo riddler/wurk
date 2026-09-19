@@ -216,8 +216,68 @@ measured night a successor promoted on an abort ran straight into it.
 (`044 after 043 after 042`) advance one wrap at a time, because
 satisfaction requires the predecessor to be WRAPPED, not merely armed.
 The record carries `queued`, `queued_after`, and `queue{after,
-satisfied, predecessor_status, predecessor_exists}` so a scheduler's
-status display can say what it is waiting for.
+satisfied, predecessor_status, predecessor_exists, predecessor_machine,
+predecessor_machine_match}` so a scheduler's status display can say what
+it is waiting for.
+
+A predecessor bound to another machine (or one this machine cannot
+verify) holds the queue too, with a `queue_predecessor_remote` warning:
+WRAPPED-and-unheld on this filesystem is not proof the predecessor is
+actually done when its mutex lives on a machine this one cannot see. See
+"The Machine line" below for the binding itself.
+
+### The Machine line - binding a plan to one machine
+
+A plan file may carry one more line, anywhere, at column 1:
+
+    Machine: mbp
+
+This opts the plan into a per-machine gate on top of everything above.
+`campaign_state.rb` parses the first such line and, only for a plan (or,
+via queueing, a predecessor) that carries one, compares it against this
+machine's own name - the kit's `~/.claude/wurk.local.json` `machine.name`
+(`lib/user_config.rb`; see `docs/machine-config.md`). A harness that
+mirrors that key in its own config should read this script's answer
+rather than compare itself - the mirror is known to drift (ADR-0013).
+
+The comparison resolves to one of four `machine_match` values, carried
+on the record:
+
+- `unbound` - no `Machine:` line. Behaves exactly as before this
+  feature existed: today's behavior for every existing fleet and every
+  single-machine consumer is unchanged.
+- `this_machine` - the binding equals this machine's own name.
+- `other_machine` - the binding names a different machine. This is the
+  normal state of a shared, git-tracked campaigns dir with a
+  gitignored, per-machine locks dir: the plan is visible, its binding
+  is visible, and it is neither armed nor runnable here. No warning is
+  emitted for this state on its own - it is not an error, just not this
+  machine's plan to run.
+- `unverified` - the binding is present but cannot be resolved: either
+  the line names no machine (a blank `Machine:`, `machine_binding_blank`)
+  or this machine has no `machine.name` set, or its
+  `wurk.local.json` is invalid (`machine_name_unset` /
+  `user_config_invalid`). Fail-safe by design: the failure this feature
+  exists to prevent is two conductors on one campaign, and a machine
+  that cannot prove a bound plan is its own must decline rather than
+  guess. `machine_name_unset` and `machine_binding_blank` are only
+  raised for a plan whose status is ARMED or QUEUED - a DRAFTED plan
+  bound to an unnamed box is not news.
+
+`armed` is gated by this on top of the existing Status/queue rule:
+`(Status ARMED, or a satisfied queue) AND machine_match in {unbound,
+this_machine}`. A plan bound elsewhere counts toward neither the
+unattended invocation's zero-ARMED refusal nor its more-than-one refusal
+(see "The unattended invocation reads this record" below) - it is
+simply not `armed` here.
+
+Resolution is lazy and read exactly once per invocation: an unbound plan
+never touches `wurk.local.json` at all, so a machine with no config file,
+or an invalid one, sees no difference in behavior on any plan that does
+not opt in. There is no hostname fallback anywhere in this path - a
+hostname that differs from the operator's chosen `machine.name` would
+match nothing and be hard to debug, so the only source of "this
+machine's name" is the config key itself.
 
 ### Subcommands
 
@@ -262,6 +322,8 @@ Both mutations write via a sibling temp file and rename, so a concurrent
   "title": "# Campaign 260914-example",
   "status": "ARMED",
   "status_stamp": "2026-09-14 18:41 -0600",
+  "machine": null,
+  "machine_match": "unbound",
   "armed": true,
   "running": false,
   "runnable": true,
@@ -282,7 +344,11 @@ record after a real write so `data.campaign` reflects the file.
 Warnings a caller should surface: `consent_missing` (ARMED with no
 consent file), `stale_mutex` (held but provably stale - not counted as
 running; `lock.rb clear` is the tool for that, never this script),
-`unknown_status`.
+`unknown_status`, `machine_name_unset` (bound, but this machine has no
+`machine.name`), `machine_binding_blank` (a `Machine:` line naming no
+machine), `queue_predecessor_remote` (queued behind a predecessor bound
+elsewhere or unverifiable here), `user_config_invalid` (this machine's
+`wurk.local.json` failed validation - only surfaced for a bound plan).
 
 ### The unattended invocation reads this record
 
@@ -293,7 +359,10 @@ invocation") is the consumer of `list`: it counts the records with
 without a human to ask), then reads the one record's `consent.adopted`
 (false refuses `consent_not_adopted`) and `running` (true refuses
 `campaign_running`; a `stale_mutex` warning is handed to `lock.rb clear`
-first). The survivor is `data.runnable`'s single member. The session then
+first). A plan bound to another machine, or one this machine cannot
+verify, is never `armed`, so it counts toward neither the zero-ARMED
+refusal nor the more-than-one refusal above - it is simply absent from
+the count. The survivor is `data.runnable`'s single member. The session then
 takes the campaign mutex at `mutex.dir` for its whole life, which is what
 turns `running` true for the next `list`, and releases it after the
 morning report. A mutation this mode never performs: `arm`, `disarm`, or
@@ -312,6 +381,7 @@ script; it fails hours later, in a dispatch that had to guess.
 |---|---|---|
 | `# Campaign <id>` H1 | yes | `campaign_state.rb`; `<id>` equals the basename, and there is no colon after `Campaign` |
 | `Status:` line | yes | `campaign_state.rb`; column 1, in the grammar of "The Status line - the plan's front matter" above |
+| `Machine:` line | optional | `campaign_state.rb`; column 1, see "The Machine line - binding a plan to one machine" above |
 | header block - id, mode, repo, tracker, drafted, armed, conductor, consent, journal | yes | humans, and the claiming conductor: the `conductor:` row is where a session writes its claim at Phase 0 |
 | `## Goal`, carrying an explicit **Exit** condition | yes | Phase 6 and the morning report - the exit is how a reader decides the campaign is done |
 | `## Consent` | yes | the pointer to `<id>-consent.md`, whose ADOPTED status is what `arm` reads |
@@ -416,6 +486,7 @@ consumer's manifest, tracker or forge:
     # Campaign <id>
 
     Status: DRAFTED <date>
+    Machine: <machine.name>          # optional - binds this plan to one machine; omit for the unbound default
 
         id:          <id>
         mode:        <MR | LOCAL-ONLY>

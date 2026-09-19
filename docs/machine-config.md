@@ -224,7 +224,11 @@ readers below treat that as exactly that rather than inventing a value.
 - `machine.name` (opt) - a non-blank string naming the machine for a human
   or a journal. Not a hostname, and never defaulted to one: a caller that
   wants the hostname asks the OS. `UserConfig#machine_name` returns it, or
-  nil.
+  nil. `campaign_state.rb` is a reader: it is the authority for whether a
+  campaign plan's `Machine: <name>` binding names this machine (see
+  `skills/wurk:conductor/REFERENCE.md`, "The Machine line - binding a plan
+  to one machine"), reading this key lazily and only for a plan that
+  carries such a binding.
 - `machine.gate_slots` (opt) - a positive integer: the machine-wide cap on
   concurrent full gates and warms, which is the number of `slot-N`
   directories `lock.rb acquire` and `gate_run.rb start` may take from a
