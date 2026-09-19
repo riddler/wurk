@@ -148,12 +148,13 @@ class CampaignStateLibTest < Minitest::Test
 
   def test_unparsed_campaign_files_names_a_file_whose_h1_does_not_match_either_plan_form
     write_plan(@dir, "260914-alpha", status: "ARMED 2026-09-14 18:41 -0600")
-    File.write(File.join(@dir, "notes.md"), "# Some other document\n")
+    File.write(File.join(@dir, "notes.md"), "# Some other document\n\nStatus: ARMED\n")
 
     unparsed = CampaignState.unparsed_campaign_files(@dir)
 
     assert_equal [File.join(@dir, "notes.md")], unparsed.map { |f| f[:path] }
     assert_match(/does not match/, unparsed.first[:reason])
+    assert_equal "ARMED", unparsed.first[:status]
   end
 
   def test_unparsed_campaign_files_names_a_file_whose_h1_id_does_not_match_its_basename
@@ -169,6 +170,29 @@ class CampaignStateLibTest < Minitest::Test
     write_plan(@dir, "260914-alpha", status: "ARMED 2026-09-14 18:41 -0600")
     write_consent(@dir, "260914-alpha")
     write_report(@dir, "260914-alpha")
+
+    assert_empty CampaignState.unparsed_campaign_files(@dir)
+  end
+
+  def test_unparsed_campaign_files_includes_a_queued_file
+    File.write(File.join(@dir, "notes.md"), "# Some other document\n\nStatus: QUEUED 2026-09-14 after x\n")
+
+    unparsed = CampaignState.unparsed_campaign_files(@dir)
+
+    assert_equal [File.join(@dir, "notes.md")], unparsed.map { |f| f[:path] }
+    assert_equal "QUEUED", unparsed.first[:status]
+  end
+
+  def test_unparsed_campaign_files_stays_silent_for_wrapped_drafted_or_no_status
+    File.write(File.join(@dir, "wrapped.md"), "# Some other document\n\nStatus: WRAPPED 2026-09-14\n")
+    File.write(File.join(@dir, "drafted.md"), "# Some other document\n\nStatus: DRAFTED 2026-09-14\n")
+    File.write(File.join(@dir, "no-status.md"), "# Some other document\n\nJust prose.\n")
+
+    assert_empty CampaignState.unparsed_campaign_files(@dir)
+  end
+
+  def test_unparsed_campaign_files_stays_silent_for_a_bad_h1_legacy_wrapped_plan
+    File.write(File.join(@dir, "RF050-foo.md"), "# Campaign RF050 - description\n\nStatus: WRAPPED 2026-09-01\n")
 
     assert_empty CampaignState.unparsed_campaign_files(@dir)
   end
@@ -401,10 +425,10 @@ class CampaignStateCliTest < Minitest::Test
     assert_empty env["warnings"]
   end
 
-  def test_list_warns_about_a_stray_md_file_that_did_not_parse_into_a_plan
+  def test_list_warns_about_an_unrecognized_file_whose_status_is_armed
     write_plan(@dir, "260914-alpha", status: "ARMED 2026-09-14 18:41 -0600")
     write_consent(@dir, "260914-alpha")
-    File.write(File.join(@dir, "notes.md"), "# Some other document\n")
+    File.write(File.join(@dir, "notes.md"), "# Some other document\n\nStatus: ARMED 2026-09-14\n")
 
     _code, env = run_cli(["list", "--dir", @dir])
 
@@ -412,6 +436,59 @@ class CampaignStateCliTest < Minitest::Test
     warning = env["warnings"].find { |w| w["code"] == "unparsed_campaign_file" }
     refute_nil warning
     assert_includes warning["message"], File.join(@dir, "notes.md")
+    assert_includes warning["message"], "ARMED"
+  end
+
+  def test_list_warns_about_an_unrecognized_file_whose_status_is_queued
+    write_plan(@dir, "260914-alpha", status: "ARMED 2026-09-14 18:41 -0600")
+    write_consent(@dir, "260914-alpha")
+    File.write(File.join(@dir, "notes.md"), "# Some other document\n\nStatus: QUEUED 2026-09-14 after 260914-alpha\n")
+
+    _code, env = run_cli(["list", "--dir", @dir])
+
+    warning = env["warnings"].find { |w| w["code"] == "unparsed_campaign_file" }
+    refute_nil warning
+    assert_includes warning["message"], "QUEUED"
+  end
+
+  def test_list_stays_silent_on_an_unrecognized_wrapped_file
+    write_plan(@dir, "260914-alpha", status: "ARMED 2026-09-14 18:41 -0600")
+    write_consent(@dir, "260914-alpha")
+    File.write(File.join(@dir, "notes.md"), "# Some other document\n\nStatus: WRAPPED 2026-09-01\n")
+
+    _code, env = run_cli(["list", "--dir", @dir])
+
+    refute_includes env["warnings"].map { |w| w["code"] }, "unparsed_campaign_file"
+  end
+
+  def test_list_stays_silent_on_an_unrecognized_drafted_file
+    write_plan(@dir, "260914-alpha", status: "ARMED 2026-09-14 18:41 -0600")
+    write_consent(@dir, "260914-alpha")
+    File.write(File.join(@dir, "notes.md"), "# Some other document\n\nStatus: DRAFTED 2026-09-01\n")
+
+    _code, env = run_cli(["list", "--dir", @dir])
+
+    refute_includes env["warnings"].map { |w| w["code"] }, "unparsed_campaign_file"
+  end
+
+  def test_list_stays_silent_on_an_unrecognized_file_with_no_status_line
+    write_plan(@dir, "260914-alpha", status: "ARMED 2026-09-14 18:41 -0600")
+    write_consent(@dir, "260914-alpha")
+    File.write(File.join(@dir, "notes.md"), "# Some other document\n\nJust prose.\n")
+
+    _code, env = run_cli(["list", "--dir", @dir])
+
+    refute_includes env["warnings"].map { |w| w["code"] }, "unparsed_campaign_file"
+  end
+
+  def test_list_stays_silent_on_a_bad_h1_legacy_wrapped_plan
+    write_plan(@dir, "260914-alpha", status: "ARMED 2026-09-14 18:41 -0600")
+    write_consent(@dir, "260914-alpha")
+    File.write(File.join(@dir, "RF050-foo.md"), "# Campaign RF050 - description\n\nStatus: WRAPPED 2026-09-01\n")
+
+    _code, env = run_cli(["list", "--dir", @dir])
+
+    refute_includes env["warnings"].map { |w| w["code"] }, "unparsed_campaign_file"
   end
 
   def test_list_does_not_warn_about_a_recognized_plans_consent_and_report_files
@@ -434,6 +511,17 @@ class CampaignStateCliTest < Minitest::Test
     assert_equal "PAUSED", campaign["status"]
     refute campaign["armed"]
     assert_equal ["unknown_status"], env["warnings"].map { |w| w["code"] }
+  end
+
+  def test_list_warns_status_missing_for_a_parsed_plan_with_no_status_line_and_treats_it_as_not_armed
+    write_plan(@dir, "260914-alpha", body: "Some prose with no Status line at all.")
+
+    _code, env = run_cli(["list", "--dir", @dir])
+
+    campaign = env["data"]["campaigns"].fetch(0)
+    assert_nil campaign["status"]
+    refute campaign["armed"]
+    assert_equal ["status_missing"], env["warnings"].map { |w| w["code"] }
   end
 
   def test_list_scans_several_dirs_and_sorts_by_id

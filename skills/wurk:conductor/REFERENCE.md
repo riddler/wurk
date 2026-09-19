@@ -153,16 +153,26 @@ Reports (`<id>-report.md`), journals (`journal/`), and any other document
 under the directory are ignored because their H1 does not name their own
 basename as a campaign - there is no exclusion list to maintain.
 
-`list` never lets a plan-like file go silently missing: every top-level
-`*.md` under a campaigns dir that did not parse into a plan record, and
-that is not a recognized plan's own `<id>-consent.md` or `<id>-report.md`,
-is named in an `unparsed_campaign_file` warning (path plus a short reason
-- no H1, an H1 that matches neither plan form, or an H1 whose id does not
-equal the file's own basename). A stray document, a typo'd id, and a plan
-whose H1 the parser cannot read all surface this way instead of vanishing
-from the listing with no trace (wu-0m0). `show`, `arm`, and `disarm`
-resolve one named id directly and do not enumerate the directory, so they
-never emit this warning; `list` is where it belongs.
+`list` does not let an ARMED or QUEUED plan go silently missing, but it
+also does not warn on every unrecognized file forever: a real campaigns
+dir accumulates finished plans in a legacy H1 shape that nobody will
+migrate, and a warning that fired on every one of those on every `list`
+call would be noise burying the one case that matters. So the rule is
+narrow. Of every top-level `*.md` under a campaigns dir that did not
+parse into a plan record, and that is not a recognized plan's own
+`<id>-consent.md` or `<id>-report.md`, only the ones whose column-1
+`Status` line reads `ARMED` or `QUEUED` are named in an
+`unparsed_campaign_file` warning (path, a short reason - no H1, an H1
+that matches neither plan form, or an H1 whose id does not equal the
+file's own basename - and the Status word read). `arm`/`disarm`/`show`
+resolve one id through `locate`, which refuses a file whose H1 does not
+match; the only way an unrecognized file gets to ARMED or QUEUED is a
+hand edit, which is exactly the hazard wu-0m0 describes - an armed
+campaign the `--armed` refusal checks cannot count. A file that is
+`WRAPPED`, `DRAFTED`, carries an unrecognized word, or has no `Status`
+line at all stays silent. `show`, `arm`, and `disarm` resolve one named
+id directly and do not enumerate the directory, so they never emit this
+warning; `list` is where it belongs.
 
 ### The Status line - the plan's front matter
 
@@ -177,11 +187,15 @@ time and zone offset (`2026-09-14`, `2026-09-14 18:41 -0600`); everything
 after the stamp is prose (except that on a QUEUED line the stamp may
 be followed by `after <id>`, naming the plan this one queues behind -
 see "Queueing" below). A plan with no Status line reads as `status:
-null` and is treated as DRAFTED. A word outside the vocabulary is
-reported verbatim with an `unknown_status` warning and is never treated
-as armed. There is no YAML front matter and no second schema: the
-Status line the conductor has always flipped by hand is the schema, and
-the script edits exactly that line.
+null`, is never treated as armed, and gets its own `status_missing`
+warning (same shape as `unknown_status` below) - a plan can carry no
+column-1 Status line at all, for instance one whose status lives in an
+indented metadata block instead, and that is worth naming rather than
+silently reading as "not armed" with no signal. A word outside the
+vocabulary is reported verbatim with an `unknown_status` warning and is
+never treated as armed. There is no YAML front matter and no second
+schema: the Status line the conductor has always flipped by hand is the
+schema, and the script edits exactly that line.
 
 `RUNNING` is deliberately not a Status word. A campaign is running when
 its mutex directory is held by a live holder (`lock.rb`'s probe, not
@@ -417,14 +431,16 @@ file.
 Warnings a caller should surface: `consent_missing` (ARMED with no
 consent file), `stale_mutex` (held but provably stale - not counted as
 running; `lock.rb clear` is the tool for that, never this script),
-`unknown_status`, `machine_binding_malformed` (a column-1 `Machine:`
-line that is not a bare name - names the file and the offending line;
-treated as `unverified` and not armed until it is hand-edited),
-`machine_name_unset` (bound, but this machine has no `machine.name`),
-`machine_binding_blank` (a `Machine:` line naming no machine),
-`queue_predecessor_remote` (queued behind a predecessor bound elsewhere,
-unverifiable, or malformed here), `user_config_invalid` (this machine's
-`wurk.local.json` failed validation - only surfaced for a bound plan).
+`unknown_status`, `status_missing` (a parsed plan with no column-1
+Status line; treated as not armed), `machine_binding_malformed` (a
+column-1 `Machine:` line that is not a bare name - names the file and
+the offending line; treated as `unverified` and not armed until it is
+hand-edited), `machine_name_unset` (bound, but this machine has no
+`machine.name`), `machine_binding_blank` (a `Machine:` line naming no
+machine), `queue_predecessor_remote` (queued behind a predecessor bound
+elsewhere, unverifiable, or malformed here), `user_config_invalid` (this
+machine's `wurk.local.json` failed validation - only surfaced for a
+bound plan).
 
 ### The unattended invocation reads this record
 
