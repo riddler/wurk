@@ -118,11 +118,19 @@ module CampaignState
     # Every top-level *.md under dir that plan_paths did NOT recognize as a
     # plan, minus the expected companions of a plan it DID recognize
     # (`<id>-consent.md`, `<id>-report.md`). This is the other half of "no
-    # plan is ever silently absent" (wu-0m0): a file that looks like it
-    # might be a plan - wrong H1 form, an id that does not match its own
-    # basename, no H1 at all - is named in a warning instead of vanishing
-    # with no trace. Each entry is {path:, reason:}, a short human
-    # sentence naming what failed to match.
+    # plan is ever silently absent" (wu-0m0), narrowed by a second finding
+    # from the same bead: a real campaigns dir accumulates finished WRAPPED
+    # plans in a legacy H1 shape that nobody will migrate, and a warning
+    # that fires on every one of those forever is noise that buries the
+    # one case that matters. `locate` (arm/disarm/show) refuses a file
+    # whose H1 does not match, so a file with a bad H1 can only carry
+    # Status ARMED or QUEUED by hand edit - the exact hazard wu-0m0
+    # describes, an armed campaign the --armed refusal checks cannot
+    # count. So only THOSE are reported; WRAPPED, DRAFTED, an unknown
+    # word, or no Status line at all stays silent. Each entry is
+    # {path:, reason:, status:}: reason is the short human sentence
+    # naming what failed to match a plan, status is the column-1 Status
+    # word read from the file (nil when it has none).
     def unparsed_campaign_files(dir)
       return [] unless Dir.exist?(dir)
 
@@ -135,8 +143,8 @@ module CampaignState
       Dir.glob(File.join(dir, "*.md")).sort.reject do |path|
         plans.include?(path) || companions.include?(File.basename(path))
       end.map do |path|
-        { path: path, reason: unparsed_reason(path) }
-      end
+        { path: path, reason: unparsed_reason(path), status: parse_status(read_utf8(path))[:status] }
+      end.select { |file| %w[ARMED QUEUED].include?(file[:status]) }
     end
 
     # The short reason a file did not parse into a plan record, for
@@ -556,7 +564,7 @@ module CampaignStateCli
         CampaignState.unparsed_campaign_files(dir).each do |file|
           env.warn(
             code: "unparsed_campaign_file",
-            message: "#{file[:path]}: #{file[:reason]}; not counted as a campaign plan"
+            message: "#{file[:path]}: #{file[:reason]}; Status #{file[:status]} but not counted as a campaign plan"
           )
         end
       end
@@ -710,6 +718,9 @@ module CampaignStateCli
 
       if campaign[:status] && !CampaignState.known_status?(campaign[:status])
         env.warn(code: "unknown_status", message: "#{id}: Status #{campaign[:status].inspect} is outside #{CampaignState::PLAN_STATUSES.join('/')}; treated as not armed")
+      end
+      if campaign[:status].nil?
+        env.warn(code: "status_missing", message: "#{id}: no column-1 Status line found; treated as not armed")
       end
       if campaign[:queued] && !campaign[:queued_after]
         env.warn(code: "queued_without_after", message: "#{id}: Status QUEUED names no predecessor (expected \"Status: QUEUED <stamp> after <id>\"); treated as not armed")

@@ -738,9 +738,15 @@ argument. The file schema, the campaign record's keys, and every
 without an ADOPTED consent file and never writes one, because consent is
 a human artifact and this script only ever edits the plan's Status line.
 A plan's H1 may read `# Campaign <id>` or `# Campaign: <id>`; `list`
-warns (`unparsed_campaign_file`) about any other top-level `*.md` under
-the dir that did not parse into a plan, so a malformed or misnamed plan
-is never silently absent from the listing.
+warns (`unparsed_campaign_file`) about an unrecognized top-level `*.md`
+under the dir only when its column-1 Status line reads ARMED or QUEUED -
+the one shape an unrecognized file could be an armed campaign hiding
+from the `--armed` refusal checks (`locate` refuses a bad H1, so only a
+hand edit gets one there). A finished WRAPPED or DRAFTED plan in a
+legacy H1 shape, or a file with no Status line, stays silent instead of
+warning on every `list` call forever. Separately, a plan that DID parse
+but carries no column-1 Status line at all gets `status_missing` and is
+treated as not armed.
 It reads no manifest, but it does read machine config
 (`~/.claude/wurk.local.json` via `lib/user_config.rb`), lazily and only
 for a plan that carries a `Machine:` binding. `arm --host NAME` writes
