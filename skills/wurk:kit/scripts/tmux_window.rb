@@ -201,6 +201,12 @@ module TmuxWindow
               "claude_command: model must be a non-empty string, got #{model.inspect}"
       end
 
+      # wu-f11q: `{id}` in the seed is a placeholder for the bead id - see
+      # REFERENCE.md beside `tmux_window.rb open` for the definition. Block
+      # form (not format/sprintf) so a literal `%` in the seed, or a `\` or
+      # `\0` in the id, is never reinterpreted.
+      seed = seed.gsub("{id}") { id }
+
       body = no_finish ? seed : "#{seed}.#{format(FINISH_TEMPLATE, id: id, trailer: trailer_key)}"
       flag = permission_mode == "skip-permissions" ? "--dangerously-skip-permissions" : "--permission-mode #{permission_mode}"
       "#{caffeinate_prefix}claude #{flag} --model #{model} '#{body}'"

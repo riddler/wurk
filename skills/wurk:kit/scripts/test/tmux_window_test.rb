@@ -186,6 +186,69 @@ class TmuxWindowTest < Minitest::Test
     end
   end
 
+  # --- wu-f11q: the `{id}` seed placeholder -------------------------------
+
+  # sabotage: skip the seed.gsub("{id}") { id } substitution -> red, keys
+  # would carry the literal text "{id}" instead of the campaign id
+  def test_claude_command_replaces_the_id_placeholder_under_no_finish
+    expect_no_caffeinate
+    keys = TmuxWindow.send(:claude_command, "fakemodel", "/fleet-conductor campaign {id}", "zz-abc",
+                            "Refs", "auto", no_finish: true)
+
+    assert_equal "claude --permission-mode auto --model fakemodel '/fleet-conductor campaign zz-abc'", keys
+  end
+
+  # Under --no-finish the seed alone becomes the body, so this is the one
+  # path wu-f11q exists to fix: without the substitution the id never
+  # reaches the typed session at all.
+  def test_claude_command_replaces_the_id_placeholder_on_the_finishing_path
+    expect_no_caffeinate
+    keys = TmuxWindow.send(:claude_command, "fakemodel", "/wurk:work {id} --auto", "zz-abc",
+                            "Refs", "auto", no_finish: false)
+
+    expected = "claude --permission-mode auto --model fakemodel '/wurk:work zz-abc --auto." \
+               " When the work is complete, finish with /wurk:commit --auto - it writes the " \
+               "Refs trailer and refuses if the tree carries changes unrelated to zz-abc. " \
+               "Do not run git commit directly.'"
+    assert_equal expected, keys
+  end
+
+  # sabotage: seed.sub instead of seed.gsub (or gsub with a count limit) ->
+  # red, only the first occurrence would be replaced
+  def test_claude_command_replaces_every_occurrence_of_the_placeholder
+    expect_no_caffeinate
+    keys = TmuxWindow.send(:claude_command, "fakemodel", "/campaign {id} for {id}", "zz-abc",
+                            "Refs", "auto", no_finish: true)
+
+    assert_equal "claude --permission-mode auto --model fakemodel '/campaign zz-abc for zz-abc'", keys
+  end
+
+  # A seed with no `{id}` must produce exactly the body this method composed
+  # before the placeholder existed - byte equality against a literal built
+  # the old way (seed verbatim as the body), not merely "doesn't crash".
+  def test_claude_command_with_no_placeholder_is_byte_identical_under_no_finish
+    expect_no_caffeinate
+    keys = TmuxWindow.send(:claude_command, "fakemodel", "/wurk:work zz-abc --auto", "zz-abc",
+                            "Refs", "auto", no_finish: true)
+
+    assert_equal "claude --permission-mode auto --model fakemodel '/wurk:work zz-abc --auto'", keys
+  end
+
+  # Same guarantee on the default finishing path: no `{id}` in the seed, so
+  # the composed body is exactly seed + "." + the pre-wu-f11q finishing
+  # clause, unchanged.
+  def test_claude_command_with_no_placeholder_is_byte_identical_on_the_finishing_path
+    expect_no_caffeinate
+    keys = TmuxWindow.send(:claude_command, "fakemodel", "/wurk:work zz-abc --auto", "zz-abc",
+                            "Refs", "auto", no_finish: false)
+
+    expected = "claude --permission-mode auto --model fakemodel '/wurk:work zz-abc --auto." \
+               " When the work is complete, finish with /wurk:commit --auto - it writes the " \
+               "Refs trailer and refuses if the tree carries changes unrelated to zz-abc. " \
+               "Do not run git commit directly.'"
+    assert_equal expected, keys
+  end
+
   # sabotage: default a missing tmux section to some session name instead of
   # blocking -> red. A guessed name creates a second, parallel session
   # nothing else in the kit can find.
