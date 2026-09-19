@@ -232,13 +232,32 @@ A plan file may carry one more line, anywhere, at column 1:
 
     Machine: mbp
 
-This opts the plan into a per-machine gate on top of everything above.
-`campaign_state.rb` parses the first such line and, only for a plan (or,
-via queueing, a predecessor) that carries one, compares it against this
-machine's own name - the kit's `~/.claude/wurk.local.json` `machine.name`
-(`lib/user_config.rb`; see `docs/machine-config.md`). A harness that
-mirrors that key in its own config should read this script's answer
-rather than compare itself - the mirror is known to drift (ADR-0013).
+The only accepted shape is `Machine:` followed by a bare name in the
+same character class a queue's `after <id>` already uses
+(`[A-Za-z0-9._-]+`), optional trailing whitespace, then end of line - or
+nothing after the colon at all (a blank binding; see `unverified`
+below). This opts the plan into a per-machine gate on top of everything
+above. `campaign_state.rb` parses the first column-1 `Machine:` line and,
+only for a plan (or, via queueing, a predecessor) that carries one,
+compares it against this machine's own name - the kit's
+`~/.claude/wurk.local.json` `machine.name` (`lib/user_config.rb`; see
+`docs/machine-config.md`). A harness that mirrors that key in its own
+config should read this script's answer rather than compare itself - the
+mirror is known to drift (ADR-0013).
+
+A column-1 `Machine:` line that is NOT in that shape - operator prose,
+punctuation, more than one word - is malformed, never a bind. Measured
+on a real fleet: an operator wrote `Machine: **personal-air**, QUEUED
+after RF056 (the operator, 2026-09-19 12:5x MDT). RF063` at column 1,
+and an earlier version of this parser captured the whole remainder as
+the bound name, which read `other_machine` on the machine the plan was
+actually meant to run on and dropped it off runnable. A malformed line's
+`machine` field is always `null` - it is never assigned the raw line
+text, so a caller can never mistake the sentence for a name - and the
+offending line's text is carried separately as `machine_raw`, for the
+warning only. It always resolves to `unverified` (below) and raises
+`machine_binding_malformed`, naming the file and the line, regardless of
+the plan's status.
 
 The comparison resolves to one of four `machine_match` values, carried
 on the record:
@@ -254,15 +273,18 @@ on the record:
   emitted for this state on its own - it is not an error, just not this
   machine's plan to run.
 - `unverified` - the binding is present but cannot be resolved: either
-  the line names no machine (a blank `Machine:`, `machine_binding_blank`)
-  or this machine has no `machine.name` set, or its
-  `wurk.local.json` is invalid (`machine_name_unset` /
-  `user_config_invalid`). Fail-safe by design: the failure this feature
-  exists to prevent is two conductors on one campaign, and a machine
-  that cannot prove a bound plan is its own must decline rather than
-  guess. `machine_name_unset` and `machine_binding_blank` are only
-  raised for a plan whose status is ARMED or QUEUED - a DRAFTED plan
-  bound to an unnamed box is not news.
+  the line is malformed (`machine_binding_malformed`, above), it names
+  no machine (a blank `Machine:`, `machine_binding_blank`), or this
+  machine has no `machine.name` set, or its `wurk.local.json` is
+  invalid (`machine_name_unset` / `user_config_invalid`). Fail-safe by
+  design: the failure this feature exists to prevent is two conductors
+  on one campaign, and a machine that cannot prove a bound plan is its
+  own must decline rather than guess. `machine_name_unset` and
+  `machine_binding_blank` are only raised for a plan whose status is
+  ARMED or QUEUED - a DRAFTED plan bound to an unnamed box is not news.
+  `machine_binding_malformed` is raised regardless of status - a
+  malformed line is a hand-edit error the operator needs to see and fix
+  before `arm --host` can bind the plan at all.
 
 `armed` is gated by this on top of the existing Status/queue rule:
 `(Status ARMED, or a satisfied queue) AND machine_match in {unbound,
@@ -311,12 +333,14 @@ under the current directory) and `--locks-dir DIR`.
 
   A plan bound to another machine, or one this machine cannot verify
   ("The Machine line" above), is refused before the consent check:
-  `bound_to_other_machine`, or `machine_name_unset` /
-  `machine_binding_blank` (needs: human either way) - the binding is
-  the claim "this machine will conduct it", only the machine making
-  the claim can arm the plan, and a typo'd foreign name would silently
-  strand it. Rebinding an already-bound plan away from that claim is a
-  hand edit of the `Machine:` line, not something `arm` does.
+  `bound_to_other_machine`, or `machine_binding_malformed` /
+  `machine_name_unset` / `machine_binding_blank` (needs: human every
+  time) - the binding is the claim "this machine will conduct it", only
+  the machine making the claim can arm the plan, and a typo'd foreign
+  name (or a malformed line silently read as one) would silently strand
+  it. Rebinding an already-bound plan away from that claim, or fixing a
+  malformed line, is a hand edit of the `Machine:` line, not something
+  `arm` does.
 
   `--host NAME` binds the plan to this machine as part of the same
   arm (and composes with `--after`): NAME must equal this machine's
@@ -338,10 +362,11 @@ under the current directory) and `--locks-dir DIR`.
   the next reader. Not armed: ok, `changed: false`, warning `not_armed`.
   `--dry-run` as for `arm`. The consent file is never touched, and neither
   is the `Machine:` line - a disarmed plan keeps its binding. Refuses the
-  same `bound_to_other_machine` / `machine_name_unset` /
-  `machine_binding_blank` set as `arm`, before the `campaign_running`
-  check: this machine cannot see a foreign machine's mutex, so a disarm
-  from here cannot know whether a conductor there already read ARMED.
+  same `bound_to_other_machine` / `machine_binding_malformed` /
+  `machine_name_unset` / `machine_binding_blank` set as `arm`, before the
+  `campaign_running` check: this machine cannot see a foreign machine's
+  mutex, so a disarm from here cannot know whether a conductor there
+  already read ARMED.
 
 Both mutations write via a sibling temp file and rename, so a concurrent
 `list` sees the old file or the new one.
@@ -357,6 +382,7 @@ Both mutations write via a sibling temp file and rename, so a concurrent
   "status_stamp": "2026-09-14 18:41 -0600",
   "machine": null,
   "machine_match": "unbound",
+  "machine_raw": null,
   "armed": true,
   "running": false,
   "runnable": true,
@@ -369,18 +395,24 @@ Both mutations write via a sibling temp file and rename, so a concurrent
 
 `mode` and `scope` are the bodies of the plan's `## Mode` and `## Scope`
 sections (heading prefix match, blank lines trimmed at both ends,
-indentation kept), or `null` when absent. `mutex` is `lock.rb status`'s
-payload plus `dir`. `arm` and `disarm` add `data.before`, `data.after`
-(the Status words), `data.changed`, and `data.dry_run`, and re-read the
-record after a real write so `data.campaign` reflects the file.
+indentation kept), or `null` when absent. `machine_raw` is the offending
+line's text when the plan's `Machine:` line is malformed, `null`
+otherwise (including when the plan is unbound). `mutex` is `lock.rb
+status`'s payload plus `dir`. `arm` and `disarm` add `data.before`,
+`data.after` (the Status words), `data.changed`, and `data.dry_run`, and
+re-read the record after a real write so `data.campaign` reflects the
+file.
 
 Warnings a caller should surface: `consent_missing` (ARMED with no
 consent file), `stale_mutex` (held but provably stale - not counted as
 running; `lock.rb clear` is the tool for that, never this script),
-`unknown_status`, `machine_name_unset` (bound, but this machine has no
-`machine.name`), `machine_binding_blank` (a `Machine:` line naming no
-machine), `queue_predecessor_remote` (queued behind a predecessor bound
-elsewhere or unverifiable here), `user_config_invalid` (this machine's
+`unknown_status`, `machine_binding_malformed` (a column-1 `Machine:`
+line that is not a bare name - names the file and the offending line;
+treated as `unverified` and not armed until it is hand-edited),
+`machine_name_unset` (bound, but this machine has no `machine.name`),
+`machine_binding_blank` (a `Machine:` line naming no machine),
+`queue_predecessor_remote` (queued behind a predecessor bound elsewhere,
+unverifiable, or malformed here), `user_config_invalid` (this machine's
 `wurk.local.json` failed validation - only surfaced for a bound plan).
 
 ### The unattended invocation reads this record
