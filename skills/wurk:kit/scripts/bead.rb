@@ -449,10 +449,16 @@ module Bead
     # chained scan-and-push is exactly how that look gets skipped.
     #
     # Which hits refuse is the manifest's `beads.scan_refusal` (`all`, the
-    # default, or `titles`); the pattern set and control term stay in the
-    # machine config (ADR-0014) and are never inlined here. A refusing hit
-    # is a BLOCK (`outbound_scan_hit`, from OutboundScan.apply_to_envelope);
-    # a hit outside the refusal set is a warning attributed per issue id.
+    # default, `titles`, or `none`); the pattern set and control term stay
+    # in the machine config (ADR-0014) and are never inlined here. A
+    # refusing hit is a BLOCK (`outbound_scan_hit`, from
+    # OutboundScan.apply_to_envelope); a hit outside the refusal set is a
+    # warning attributed per issue id. Under `none` the set is empty, so
+    # the scan comes back clean enough to mark and the push proceeds - but
+    # both verbs then warn `outbound_scan_refusals_waived` and set
+    # `data.waived`, because a scan that matched and was waived must be
+    # readable as a different thing from a scan that found nothing (see
+    # warn_unrefused_hits).
     # Reading the tracker is a precondition for both verbs - a failed or
     # unparseable export is a BLOCK (`tracker_export_unavailable`),
     # deliberately asymmetric with the best-effort `dolt_push_failed`
@@ -544,14 +550,10 @@ module Bead
       OutboundScan.apply_to_envelope(gate, env, path_label: "tracker")
       env.data["refusing_hits"] = TrackerScan.attribute(refusing)
       env.data["informational_hits"] = TrackerScan.attribute(informational)
+      env.data["waived"] = TrackerScan.waiving?(refusal) && !informational.empty?
 
       unless informational.empty?
-        env.warn(
-          code: "outbound_scan_informational",
-          message: "#{informational.sum(&:count)} outbound scan hit(s) in #{env.data['informational_hits'].length} issue(s) " \
-                   "outside the #{refusal} refusal set; they do not refuse the push - " \
-                   "see data.informational_hits for the issue ids and field names"
-        )
+        warn_unrefused_hits(env, refusal, informational.sum(&:count), env.data["informational_hits"].length)
       end
 
       env.data["marker_path"] = marker_path
@@ -612,6 +614,19 @@ module Bead
       end
 
       env.data["informational_hits"] = marker["informational"]
+      # A push under `none` with hits behind it must not read as a push
+      # under a clean scan: `data.clean` on the scan and a silent push are
+      # what "nothing matched" looks like, so the waiver gets its own
+      # warning here too, re-emitted from the marker the way the disarmed
+      # warning already is. Under `all` and `titles` the push stays silent
+      # about informational hits, as it always has - there the refusal set
+      # did the ruling, and the hits outside it were read at scan time.
+      waived_hits = Array(marker["informational"])
+      env.data["waived"] = TrackerScan.waiving?(refusal) && !waived_hits.empty?
+      if env.data["waived"]
+        warn_unrefused_hits(env, refusal, waived_hits.sum { |entry| entry["count"].to_i }, waived_hits.length)
+      end
+
       if marker["armed"] == false
         env.warn(
           code: "outbound_scan_disarmed",
@@ -643,6 +658,45 @@ module Bead
       end
       env.warn(code: "dolt_push_failed", message: err_or(result, "bd dolt push failed")) unless result.success?
       env.emit(io)
+    end
+
+    # The one place a "found, but did not refuse" result is phrased, for
+    # both verbs. Two states that must never be confused for one another,
+    # nor for a third one the kit already reports:
+    #
+    #   outbound_scan_informational   - a hit fell OUTSIDE the refusal set
+    #                                   (`titles`), which still refuses on
+    #                                   what it covers.
+    #   outbound_scan_refusals_waived - the refusal set is EMPTY (`none`):
+    #                                   a scan ran, it matched, and the
+    #                                   repo has declared the matches
+    #                                   acceptable. Not a clean scan.
+    #   outbound_scan_disarmed        - no scan is configured on this
+    #                                   machine, so nothing was measured at
+    #                                   all (emitted elsewhere; a waiver is
+    #                                   not a disarm and never borrows its
+    #                                   code).
+    #
+    # Both forms carry COUNTS and nothing else; the issue ids and field
+    # names stay in data.informational_hits and no matched literal is ever
+    # quoted - the operator rules on a record, and the record is the unit
+    # they can scrub.
+    def warn_unrefused_hits(env, refusal, hits, issues)
+      if TrackerScan.waiving?(refusal)
+        env.warn(
+          code: "outbound_scan_refusals_waived",
+          message: "#{hits} outbound scan hit(s) in #{issues} issue(s) were WAIVED: beads.scan_refusal is " \
+                   "\"none\", so this repo declares its scan hits acceptable and none of them refuses the push. " \
+                   "This is not a clean scan - see data.informational_hits for the issue ids and field names"
+        )
+      else
+        env.warn(
+          code: "outbound_scan_informational",
+          message: "#{hits} outbound scan hit(s) in #{issues} issue(s) " \
+                   "outside the #{refusal} refusal set; they do not refuse the push - " \
+                   "see data.informational_hits for the issue ids and field names"
+        )
+      end
     end
 
     def marker_refusal_message(state)

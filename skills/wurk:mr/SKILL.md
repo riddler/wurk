@@ -428,7 +428,12 @@ change:
    report the issue ids and field names it names, never rephrase-and-retry;
    `data.informational_hits` (hits outside the manifest's
    `beads.scan_refusal` set) do not refuse but go into the final report as
-   the ids and fields they name. Then read the push result: `data.confirmed`
+   the ids and fields they name. An `outbound_scan_refusals_waived` warning
+   on either verb is the repo declaring, in its manifest, that its scan hits
+   are acceptable: the push proceeds, and the report says in those words
+   that the hits were waived rather than absent, with the counts the warning
+   names - reporting such a push as a clean one is the one thing that
+   defeats the value. Then read the push result: `data.confirmed`
    false means the remote said nothing and the push is unconfirmed, which
    the report says in those words.
 

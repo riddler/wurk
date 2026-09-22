@@ -1387,12 +1387,35 @@ class ManifestBeadsScanRefusalTest < Minitest::Test
     assert_equal "titles", m.beads_scan_refusal
   end
 
+  # sabotage: drop "none" from the enum -> red. A repo whose scan hits are
+  # its own subject matter says so here; without the value its operator's
+  # only remaining moves are renaming records, deleting a pattern that also
+  # guards the public repos, or pushing around the kit entirely.
+  def test_none_is_accepted_and_is_not_an_unknown_key
+    m = with_refusal("none")
+    assert m.valid?, m.errors.inspect
+    assert_empty m.warnings
+    assert_equal "none", m.beads_scan_refusal
+  end
+
   # sabotage: drop the enum entry -> red. A value the kit does not know
-  # must not reach the scan as "refuse on nothing".
+  # must not reach the scan as "refuse on nothing" - only the literal
+  # "none" may mean that, and the refusal names all three legal values so
+  # a typo'd ruling is a correctable one.
   def test_an_unrecognized_refusal_set_blocks
     m = with_refusal("descriptions")
     refute m.valid?
-    assert_match(/beads\.scan_refusal is "descriptions"; expected one of all, titles/, m.errors.join("\n"))
+    assert_match(/beads\.scan_refusal is "descriptions"; expected one of all, titles, none/, m.errors.join("\n"))
+  end
+
+  # sabotage: accept any falsy-looking spelling -> red. "off", "false" and
+  # an empty string are not the ruling; none of them may disarm the set.
+  def test_a_near_miss_spelling_of_none_blocks
+    ["off", "false", "None", ""].each do |value|
+      m = with_refusal(value)
+      refute m.valid?, "#{value.inspect} must not be accepted as a refusal set"
+      assert_match(/expected one of all, titles, none/, m.errors.join("\n"))
+    end
   end
 end
 

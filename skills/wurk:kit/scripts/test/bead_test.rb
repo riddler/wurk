@@ -764,6 +764,110 @@ class BeadCliTest < Minitest::Test
     end
   end
 
+  # --- the `none` refusal set (wu-iug0) ---
+  #
+  # A refusal set of zero fields: the scan still runs, still finds, still
+  # attributes - and refuses nothing, so the marker is written and the push
+  # proceeds. The property every test here defends is that this cannot be
+  # mistaken for a clean scan by anything reading the envelope.
+
+  def test_sync_scan_under_none_waives_every_hit_and_still_writes_a_marker
+    with_common_dir do
+      Dir.mktmpdir do |dir|
+        token = "zqiblorf-secret-fixture-1"
+        path = write_patterns(dir, "zqiblorf-control-1\n#{token}")
+        issues = [
+          { "id" => "zz-abc", "title" => "#{token} in the title", "description" => "and #{token} here" },
+          { "id" => "zz-zzz", "title" => "untouched" }
+        ]
+        expect_common_dir
+        expect_tracker_export(issues)
+
+        with_manifest(manifest_with("valid", "beads" => { "scan_refusal" => "none" })) do
+          with_user_config(armed_config(path, "zqiblorf-control-1")) do
+            code, env = run_bead(%w[sync scan])
+
+            assert_equal 0, code, env["blocked"].inspect
+            assert env["ok"]
+            assert_equal "none", env["data"]["refusal"]
+            assert_equal true, env["data"]["clean"]
+            assert_equal [], env["blocked"]
+            # A title hit - the one thing `titles` refuses on - is waived
+            # here, and lands in the informational list with the rest.
+            assert_equal [], env["data"]["refusing_hits"]
+            assert_equal(
+              [{ "id" => "zz-abc", "count" => 2, "fields" => %w[description title] }],
+              env["data"]["informational_hits"]
+            )
+            assert_equal true, env["data"]["marker_written"]
+            assert_equal "none", JSON.parse(File.read(marker_path))["refusal"]
+
+            # Redaction is unchanged by the mode: counts and field names
+            # travel, the matched literal never does.
+            serialized = env.to_json + File.read(marker_path)
+            refute_includes serialized, token
+            refute_includes serialized, "zqiblorf-control-1"
+          end
+        end
+      end
+    end
+  end
+
+  # sabotage: reuse `outbound_scan_informational` (or `outbound_scan_disarmed`)
+  # for the waiver -> red. Three different states: a hit outside a refusal set
+  # that still refuses elsewhere, a hit the repo has declared acceptable, and
+  # no scan at all. A reader that cannot tell them apart cannot tell a waived
+  # push from a clean one.
+  def test_sync_scan_under_none_warns_that_the_refusals_were_waived
+    with_common_dir do
+      Dir.mktmpdir do |dir|
+        token = "zqiblorf-secret-fixture-1"
+        path = write_patterns(dir, "zqiblorf-control-1\n#{token}")
+        issues = [
+          { "id" => "zz-abc", "title" => token, "notes" => "#{token} and #{token}" },
+          { "id" => "zz-aaa", "title" => "clean", "description" => token }
+        ]
+        expect_common_dir
+        expect_tracker_export(issues)
+
+        with_manifest(manifest_with("valid", "beads" => { "scan_refusal" => "none" })) do
+          with_user_config(armed_config(path, "zqiblorf-control-1")) do
+            _code, env = run_bead(%w[sync scan])
+
+            assert_equal ["outbound_scan_refusals_waived"], env["warnings"].map { |w| w["code"] }
+            message = env["warnings"].first["message"]
+            assert_includes message, "4 outbound scan hit(s) in 2 issue(s)"
+            assert_includes message, "not a clean scan"
+            assert_equal true, env["data"]["waived"]
+          end
+        end
+      end
+    end
+  end
+
+  # sabotage: set data.waived from the mode alone -> red. With nothing
+  # matched there is nothing to waive, and this envelope must be the SAME
+  # shape a clean scan produces under any other mode.
+  def test_sync_scan_under_none_with_no_hits_is_an_ordinary_clean_scan
+    with_common_dir do
+      Dir.mktmpdir do |dir|
+        path = write_patterns(dir, "zqiblorf-control-1\nzqiblorf-secret")
+
+        with_manifest(manifest_with("valid", "beads" => { "scan_refusal" => "none" })) do
+          with_user_config(armed_config(path, "zqiblorf-control-1")) do
+            env = scan_clean!
+
+            assert_equal true, env["data"]["clean"]
+            assert_equal false, env["data"]["waived"]
+            assert_equal [], env["data"]["informational_hits"]
+            assert_equal [], env["warnings"]
+            assert_equal true, env["data"]["marker_written"]
+          end
+        end
+      end
+    end
+  end
+
   def test_sync_scan_a_broken_probe_refuses_and_writes_no_marker
     with_common_dir do
       Dir.mktmpdir do |dir|
@@ -984,6 +1088,81 @@ class BeadCliTest < Minitest::Test
           refute_includes env.to_json, token
         end
       end
+    end
+  end
+
+  # sabotage: emit the waiver on the scan only -> red. The scan's report and
+  # the push's are read by different people at different times; a push that
+  # went out over waived hits has to say so in its OWN envelope, the way the
+  # disarmed warning already travels from the marker.
+  def test_sync_push_under_none_proceeds_and_repeats_the_waiver
+    with_common_dir do
+      Dir.mktmpdir do |dir|
+        token = "zqiblorf-secret-fixture-1"
+        path = write_patterns(dir, "zqiblorf-control-1\n#{token}")
+        issues = [{ "id" => "zz-abc", "title" => token, "description" => "#{token} twice #{token}" }]
+
+        with_manifest(manifest_with("valid", "beads" => { "scan_refusal" => "none" })) do
+          with_user_config(armed_config(path, "zqiblorf-control-1")) do
+            scan_clean!(issues)
+          end
+
+          expect_common_dir
+          expect_tracker_export(issues)
+          @fake.expect(%w[bd dolt push], out: "Push complete.\n")
+          code, env = run_bead(%w[sync push])
+
+          assert_equal 0, code, env["blocked"].inspect
+          assert_equal "fresh", env["data"]["marker_state"]
+          assert_equal true, env["data"]["pushed"]
+          assert_equal true, env["data"]["confirmed"]
+          assert_equal true, env["data"]["waived"]
+          assert_equal ["outbound_scan_refusals_waived"], env["warnings"].map { |w| w["code"] }
+          assert_includes env["warnings"].first["message"], "3 outbound scan hit(s) in 1 issue(s)"
+          assert_equal [{ "id" => "zz-abc", "count" => 3, "fields" => %w[description title] }],
+                       env["data"]["informational_hits"]
+          refute_includes env.to_json, token
+        end
+      end
+    end
+  end
+
+  # The other half of the waiver: `none` changes which hits refuse, not
+  # whether the marker means anything. A push under `none` with no marker
+  # refuses exactly as it does under any other set.
+  def test_sync_push_under_none_still_demands_a_marker
+    with_common_dir do
+      with_manifest(manifest_with("valid", "beads" => { "scan_refusal" => "none" })) do
+        expect_common_dir
+        expect_tracker_export
+
+        code, env = run_bead(%w[sync push])
+
+        assert_equal 1, code
+        assert_equal ["scan_marker_missing"], env["blocked"].map { |b| b["code"] }
+        refute dolt_push_called?
+      end
+    end
+  end
+
+  # sabotage: compare only the fingerprint in check_marker -> red. Flipping
+  # the manifest to `none` after a scan must not turn that scan's refusing
+  # verdict into a licence to push; the rescan under `none` is what waives.
+  def test_sync_push_refuses_a_marker_earned_under_a_different_refusal_set
+    with_common_dir do
+      scan_clean!
+      expect_common_dir
+      expect_tracker_export
+
+      with_manifest(manifest_with("valid", "beads" => { "scan_refusal" => "none" })) do
+        code, env = run_bead(%w[sync push])
+
+        assert_equal 1, code
+        assert_equal ["scan_marker_stale"], env["blocked"].map { |b| b["code"] }
+        assert_equal "stale", env["data"]["marker_state"]
+      end
+
+      refute dolt_push_called?
     end
   end
 

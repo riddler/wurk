@@ -22,10 +22,11 @@ defaults are listed under "Defaults" below.
   "beads": {
     "prefix": "st",                   // id shape becomes st-[a-z0-9]+(\.\d+)?
     "topology": "beads",              // (opt) or "beads-with-forge-projection" (fixative)
-    "scan_refusal": "all",            // (opt) "all" (default) or "titles": which
-                                      // tracker fields an outbound-scan hit
-                                      // refuses the tracker push on - see
-                                      // "beads.scan_refusal" below
+    "scan_refusal": "all",            // (opt) "all" (default), "titles" or
+                                      // "none": which tracker fields an
+                                      // outbound-scan hit refuses the tracker
+                                      // push on - see "beads.scan_refusal"
+                                      // below
     "areas": {                        // (opt) label vocabulary + batching policy
       "labels": ["area:interpreter", "area:parser", "..."],
       "lands_alone": ["area:build"],
@@ -902,7 +903,7 @@ every string field of every issue against the machine-configured pattern
 set (ADR-0014; the patterns and the control term live in
 `~/.claude/wurk.local.json`, never here), and writes a marker on a clean
 result that the push verb demands. This key decides what "clean" means.
-Two values:
+Three values:
 
 - **all** - a hit in any string field of any issue refuses the push. The
   default: with no ruling on record, every field is treated as
@@ -913,20 +914,84 @@ Two values:
   to a PRIVATE remote where the operator has ruled that only titles must
   be public-grade and the longer fields may carry context that would not
   survive a public scan.
+- **none** - nothing refuses. The scan still runs, every hit is still
+  found and still attributed, and the whole set is reported as
+  informational; the marker is written and the push proceeds. **Not a
+  disarm** - see "When `none` is the right answer" below, because the
+  wrong reading of this value is "turn it on to stop the nagging".
 
-Every field is scanned under both values; the key only decides which hits
-refuse. In both modes the scan attributes hits **per issue id, with field
-names** (`data.refusing_hits` and `data.informational_hits`, each
+Every field is scanned under all three values; the key only decides which
+hits refuse. In every mode the scan attributes hits **per issue id, with
+field names** (`data.refusing_hits` and `data.informational_hits`, each
 `{id, count, fields}`), never by the matched text - the operator rules on
 which record to scrub, and the record is the unit they can act on. The
 push verb re-emits the scan marker's informational list in its own result
 so the report survives into the push.
 
+### When `none` is the right answer
+
+`none` is for the tracker whose scan hits are its **subject matter**
+rather than a leak: a private beads database whose dolt remote is that
+same private repo, holding work about a named customer, employer, or
+system, where the guarded term is in the records because the work is
+about the thing. A real instance: 9 of 38 hit records refused on their
+titles, and three of those titles hit on a service account's own name,
+which cannot be renamed without renaming the account.
+
+Without this value that operator has three moves, and all three are
+worse. Renaming records falsifies the tracker (and cannot work at all for
+a name the machine actually uses). Deleting the pattern from
+`~/.claude/wurk.local.json` disarms it for **every** repo on the machine,
+including the public ones and any other guard reading the same file.
+Pushing with a raw `bd dolt push` goes around the kit entirely - and that
+is the outcome the value exists to prevent, because a gate that fires on
+normal work teaches its operator to bypass it, and then it is not there
+on the day it is right.
+
+So the test is not "is the scan annoying". It is: **would a reviewer,
+shown these records and this remote, rule that publishing them is
+correct?** If the answer is anything but a confident yes - if the remote
+is public, or shared wider than the records' subject, or you are unsure
+what the pattern matched - the answer is `titles`, or fixing the records,
+not `none`.
+
+A waived scan is never reported as a clean one. Under `none` with hits
+present, both `bead.rb sync scan` and `bead.rb sync push` set
+`data.waived: true` and emit an **`outbound_scan_refusals_waived`**
+warning naming how many hits in how many issues were waived, with the
+attributed list in `data.informational_hits`. This is deliberately a
+different code from `outbound_scan_disarmed`, which means no scan is
+configured on this machine at all: "a scan ran, it matched, and the repo
+declared the matches acceptable" and "nothing was measured" are different
+states, and a reader of a push envelope must be able to tell them apart -
+and to tell both from the silence of a scan that genuinely found nothing.
+Under `none` with no hits, the envelope is exactly that of any other
+clean scan: `data.waived` is `false` and no waiver warning is emitted.
+
+Switching a repo into or out of `none` invalidates any existing scan
+marker (`check_marker` compares the refusal set as well as the export
+fingerprint, and reports `stale`), so a verdict earned under one set can
+never license a push under another.
+
+**`none` carries no check on whether the remote is public** - deliberately
+(wu-iug0). Such a check would be a real safety property if it were
+reliable, and it is not: `beads.sync: dolthub` names a remote, not a
+visibility, and nothing the kit can read locally distinguishes a private
+DoltHub or git remote from a public one without an authenticated,
+provider-specific, network call that a stdlib-only script must not depend
+on. A check that is confidently wrong in either direction is worse than
+no check - a false "public" refuses correct work and teaches the bypass
+this value exists to remove, and a false "private" offers an assurance
+nobody earned. The honest mechanism is the one above: the value is an
+explicit written ruling, and the envelope says loudly, every time, that
+it was used.
+
 **Absent means `all`**, for the same reason `beads.sync` defaults to
 `local`: the two failure directions are not symmetrical. Guessing `titles`
 for a tracker whose remote is public publishes every description; guessing
 `all` for a tracker with a titles ruling costs one refused push and a
-report naming the issues that carried the hits.
+report naming the issues that carried the hits. `titles` and `none` are
+RULINGS, and a ruling is never inferred: both have to be written down.
 
 `manifest.rb check` reports `data.beads_scan_refusal`, so a caller reading
 a push result knows which hits could have refused it.
@@ -1038,7 +1103,7 @@ Required: `wurk`, `beads.prefix`, `forge.kind`, `gate.full`, `gate.loop`,
 Defaults applied when a key is absent: `repo.default_branch` = `main`,
 `beads.topology` = `beads`, `beads.sync` = `local` (and warns - see
 "`beads.sync`" above for why the default is the safe value rather than the
-common one), `beads.scan_refusal` = `all` (the wider refusal set, see
+common one), `beads.scan_refusal` = `all` (the widest refusal set, see
 "`beads.scan_refusal`" above),
 `commits.style` = `s-form`, `commits.subject_under` = 50,
 `commits.body_line_max` = 72, `commits.total_lines_max` = 40,

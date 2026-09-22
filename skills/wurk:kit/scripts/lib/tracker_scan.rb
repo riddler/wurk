@@ -43,8 +43,29 @@ module TrackerScan
   MARKER_RELATIVE_PATH = File.join("wurk", "tracker-scan.json").freeze
 
   # `beads.scan_refusal` values. `all` refuses on any string field; `titles`
-  # refuses on each issue's title only and reports the rest.
-  REFUSAL_MODES = %w[all titles].freeze
+  # refuses on each issue's title only and reports the rest; `none` refuses
+  # on nothing and reports everything.
+  #
+  # `none` is a REFUSAL SET, not a disarm (wu-iug0). The scan still runs,
+  # every hit is still found and still attributed per record, and the
+  # marker is still written - what changes is that no hit blocks the push.
+  # It exists for the repo whose hits are legitimate: a private tracker
+  # whose remote is the same private repo, where the guarded term is the
+  # subject matter rather than a leak, and where the alternatives were
+  # renaming records (impossible when the hit is a service account's own
+  # name), deleting the pattern (which disarms every OTHER repo on the
+  # machine, including the public ones), or going around the kit with a raw
+  # `bd dolt push`. A gate that fires on normal work teaches its operator
+  # to bypass it, and then it is not there on the day it is right; `none`
+  # is how a repo says so in the manifest instead.
+  #
+  # Because a waived scan must never read as a clean one, the callers pair
+  # this mode with its own warning code - see `bead.rb`'s
+  # `warn_unrefused_hits`.
+  REFUSAL_MODES = %w[all titles none].freeze
+
+  # The mode under which found hits are waived rather than refused.
+  WAIVING_MODE = "none"
 
   LOCATION_PREFIX = "tracker"
 
@@ -78,8 +99,14 @@ module TrackerScan
       [id.to_s, field]
     end
 
+    # Whether `mode` waives every hit instead of refusing any.
+    def waiving?(mode)
+      mode == WAIVING_MODE
+    end
+
     # Whether a hit at this location refuses the push under `mode`.
     def refusing?(location, mode)
+      return false if waiving?(mode)
       return true if mode == "all"
 
       _id, field = parse_location(location)

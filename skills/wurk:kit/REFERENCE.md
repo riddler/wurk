@@ -273,7 +273,13 @@ reads the full tracker export (`bd list --all --json`), scans every string
 field in process, attributes hits per issue id and field name, and on a
 clean result writes a marker under the git common dir
 (`.git/wurk/tracker-scan.json`) carrying the export's fingerprint and the
-manifest's `beads.scan_refusal` (`all` or `titles` - `docs/manifest.md`).
+manifest's `beads.scan_refusal` (`all`, `titles`, or `none` -
+`docs/manifest.md`). Under `none` the refusal set is empty: the scan still
+runs and still attributes every hit, so the marker is written and the push
+proceeds, and both verbs then set `data.waived` and warn
+`outbound_scan_refusals_waived` with the hit and issue counts - a waived
+scan never reads as a clean one, and never borrows the
+`outbound_scan_disarmed` code, which means no scan is configured at all.
 `bead.rb sync push` never scans: it refuses (`scan_marker_missing`,
 `scan_marker_expired` past ten minutes, `scan_marker_stale` when the export
 or the refusal set changed, `scan_marker_unreadable`) unless a fresh marker
