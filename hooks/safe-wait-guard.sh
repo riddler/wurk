@@ -35,14 +35,21 @@
 #     meant to; a worker's spin loop is exactly what it exists to catch.
 #   - Output is capped at 10,000 characters; the reasons stay short.
 #
+# Scope: the guard reads SHELL, and a Bash call carries data too - a
+# heredoc body, a long -m message. It must not read that data as shell.
+# The loop rules therefore match a header inside one line (plus the one
+# newline the long `while ... / do` form spans) and require the `done`
+# that ends a real loop, rather than looking for the two keywords anywhere
+# in the command. See extract_command and loop_scan_text below.
+#
 # Fail-open: this hook never exits non-zero. If the input cannot be read
 # or the command cannot be extracted, it prints nothing and exits 0, and
 # the tool call proceeds. The check is best-effort pattern matching over
 # the command text, not a shell parser; the reason text names the fix so
 # a false positive costs one rewrite, never a stuck session.
 #
-# Portability: POSIX sh, coreutils, grep and sed (grep -E / sed -E, which
-# BSD and GNU both accept). No other dependencies.
+# Portability: POSIX sh, coreutils, grep, sed and awk (grep -E / sed -E,
+# which BSD and GNU both accept). No other dependencies.
 #
 #   hooks/safe-wait-guard.sh --self-test   # hermetic PASS/FAIL cases
 
@@ -68,54 +75,117 @@ read_input() {
   fi
 }
 
-# Pulls tool_input.command out of the input JSON as one line of shell.
-# Best effort: newlines are dropped first (a JSON document has none inside
-# a string, so this only joins pretty-printed input), then the string
-# after `"command":` is taken up to its closing unescaped quote, then the
-# escapes that matter for matching are undone: \n and \t become spaces,
-# \" becomes ", \\ becomes \. Prints nothing when there is no command.
+# Pulls tool_input.command out of the input JSON as shell text.
+# Best effort: the JSON's own newlines are dropped first (a JSON document
+# has none inside a string, so this only joins pretty-printed input), then
+# the string after `"command":` is taken up to its closing unescaped
+# quote, then the escapes that matter for matching are undone: \n becomes
+# a real newline, \t a space, \" a ", \\ a \. Prints nothing when there is
+# no command.
+#
+# \n becoming a NEWLINE rather than a space is load-bearing. It used to
+# become a space, which folded a whole multi-line command onto one line
+# before any pattern ran - and a folded heredoc is prose, not shell. A
+# journal entry carrying "while" in one paragraph and "do" in a later one
+# then matched the R1 loop header and was refused as a spin loop with no
+# loop anywhere in it (wu-jarf). Keeping the line structure is what lets
+# the loop-keyword scan below stay inside a line.
 extract_command() {
   printf '%s' "$1" | tr -d '\n\r' \
     | sed -E -n 's/.*(^|[^\\])"command"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)".*/\2/p' \
-    | sed -E -e 's/\\n/ /g' -e 's/\\t/ /g' -e 's/\\"/"/g' -e 's/\\\\/\\/g'
+    | sed -E -e 's/\\n/\
+/g' -e 's/\\t/ /g' -e 's/\\"/"/g' -e 's/\\\\/\\/g'
 }
 
 has() { printf '%s' "$1" | grep -qE "$2" 2>/dev/null; }
 
+# The header a while/until loop is written with, matched WITHIN one line.
+LOOP_HEADER="${W}(while|until)[^;]*(;|[[:space:]])[[:space:]]*do${E}"
+
+# The text the loop-KEYWORD scan runs over.
+#
+# grep is line-oriented, so scanning the command as it stands already
+# keeps a match inside one line. The one thing that legitimately crosses a
+# line is a loop header written in the long form -
+#
+#     while true
+#     do
+#       ...
+#     done
+#
+# - so a line whose first word is `do` is joined onto the line above it,
+# and nothing else is. That is the single newline a real header spans, and
+# it is exactly what the old whole-command folding was there to catch.
+#
+# A blank line is never joined across: paragraphs are separated by one,
+# which is precisely the prose shape that used to trip R1.
+loop_scan_text() {
+  printf '%s\n' "$1" | awk '
+    {
+      line = $0
+      if (prev != "" && line ~ /^[ \t]*do([^A-Za-z0-9_]|$)/) {
+        sub(/^[ \t]*/, "", line)
+        prev = prev " " line
+      } else {
+        if (prev != "") print prev
+        prev = line
+      }
+    }
+    END { if (prev != "") print prev }
+  ' 2>/dev/null
+}
+
 # Every `while ... do` / `until ... do` header in the command, one per
 # line, minus the line-reader and getopts forms that never spin.
 spin_loop_headers() {
-  printf '%s' "$1" \
-    | grep -oE "${W}(while|until)[^;]*(;|[[:space:]])[[:space:]]*do${E}" 2>/dev/null \
+  loop_scan_text "$1" \
+    | grep -oE "$LOOP_HEADER" 2>/dev/null \
     | grep -vE "${W}while[[:space:]]+(IFS=[^[:space:]]*[[:space:]]+)?read${E}" \
     | grep -vE "${W}while[[:space:]]+getopts${E}"
 }
 
-has_loop() { has "$1" "${W}(while|until)[^;]*(;|[[:space:]])[[:space:]]*do${E}"; }
+has_loop() { has "$(loop_scan_text "$1")" "$LOOP_HEADER"; }
+
+# A loop the shell will actually run is terminated by `done`. Requiring it
+# costs a real loop nothing - the command has to be syntactically complete
+# to run at all - and it rules out the remaining prose shape the per-line
+# scan cannot: one sentence carrying both "while" and "do".
+has_done() { has "$1" "${W}done${E}"; }
 
 deny() {
   reason=$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$reason"
 }
 
+# Two views of the command are used below, and which one a check gets is
+# the whole of this fix:
+#
+#   $cmd   - line structure intact. Only the loop-KEYWORD scan reads it,
+#            through loop_scan_text, so a header must sit inside one line.
+#   $flat  - the same command on one line, for every check that asks
+#            whether something appears ANYWHERE in the command: the sleep
+#            that bounds a loop, the trap that ties a background job to
+#            the shell, the $$ that excludes a pgrep from itself, and R2's
+#            `done ... &`, whose two halves may sit on separate lines.
 check_command() {
   cmd="$1"
   [ -n "$cmd" ] || return 0
+  flat=$(printf '%s' "$cmd" | tr '\n' ' ')
 
   # R1: a while/until loop that is not a line reader, and no sleep anywhere.
-  if [ -n "$(spin_loop_headers "$cmd")" ] && ! has "$cmd" "${W}sleep${E}"; then
+  if has_done "$flat" && [ -n "$(spin_loop_headers "$cmd")" ] && ! has "$flat" "${W}sleep${E}"; then
     deny "$R1_REASON"
     return 0
   fi
 
   # R2: a loop's done is followed by & (not &&), and nothing traps.
-  if has "$cmd" "${W}done[[:space:]]*[)}]?[[:space:]]*&([^&]|$)" && ! has "$cmd" "${W}trap${E}"; then
+  if has "$flat" "${W}done[[:space:]]*[)}]?[[:space:]]*&([^&]|$)" && ! has "$flat" "${W}trap${E}"; then
     deny "$R2_REASON"
     return 0
   fi
 
   # R3: pgrep -f inside a loop with no $$ to exclude the loop's own shell.
-  if has_loop "$cmd" && has "$cmd" "${W}pgrep[[:space:]]+(-[[:alnum:]]+[[:space:]]+)*-[[:alnum:]]*f${E}" && ! has "$cmd" '\$\$'; then
+  if has_done "$flat" && has_loop "$cmd" && has "$flat" "${W}pgrep[[:space:]]+(-[[:alnum:]]+[[:space:]]+)*-[[:alnum:]]*f${E}" && ! has "$flat" '\$\$'; then
     deny "$R3_REASON"
     return 0
   fi
@@ -171,6 +241,12 @@ self_test() {
   expect allow "backgrounded loop with trap" "$(run "$(fixture "trap 'kill \$!' EXIT; (while true; do sleep 1; done) &")")"
   expect allow "pgrep loop excluding self" "$(run "$(fixture 'while pgrep -f gate.rb | grep -vx $$ >/dev/null; do sleep 5; done')")"
   expect allow "escaped newlines in command" "$(run "$(fixture 'until test -f x; do\n  sleep 2\ndone')")"
+  # wu-jarf: prose is not shell. A heredoc body carrying the two header
+  # words on different lines used to fold into one line and match R1.
+  expect allow "heredoc prose, while and do on different lines" "$(run "$(fixture 'cat <<EOF > journal.md\nWorkers hold their notes while they are being written.\n\nThe conductor should not assume the sweep is finished, nor\ndo anything about it yet.\nEOF')")"
+  expect allow "heredoc prose paragraphs apart" "$(run "$(fixture 'cat <<-EOF > f\n\twait a while for it\n\tand then do the rest\n\tEOF')")"
+  expect allow "one prose line with while and do but no done" "$(run "$(fixture "echo 'we waited a while' && echo 'and do it again'")")"
+  expect allow "commit message mentioning a while loop" "$(run "$(fixture "git commit -m 'Stops polling while the gate runs\n\nWe do not need a second reader.'")")"
   expect allow "non-Bash tool" "$(run '{"tool_name":"Read","tool_input":{"file_path":"while true; do :; done"}}')"
   expect allow "no tool_input" "$(run '{"tool_name":"Bash"}')"
   expect allow "garbage stdin" "$(run 'not json {{{')"
@@ -180,6 +256,11 @@ self_test() {
   expect deny "while true no sleep (R1)" "$(run "$(fixture 'while true; do date; done')")" "sleep"
   expect deny "while ! test no sleep (R1)" "$(run "$(fixture 'while ! test -f done.txt; do :; done')")" "sleep"
   expect deny "until no sleep (R1)" "$(run "$(fixture 'until grep -q GREEN log; do :; done')")" "sleep"
+  # The case the old whole-command folding existed to catch: a real loop
+  # whose header is split across the one newline shell allows there.
+  expect deny "multi-line while spin loop (R1)" "$(run "$(fixture 'while true\ndo\n  date\ndone')")" "sleep"
+  expect deny "multi-line until spin loop (R1)" "$(run "$(fixture 'until test -f x\ndo\n  :\ndone')")" "sleep"
+  expect deny "spin loop inside a heredoc body (R1)" "$(run "$(fixture 'bash <<EOF\nwhile true\ndo\n  date\ndone\nEOF')")" "sleep"
   expect deny "backgrounded loop no trap (R2)" "$(run "$(fixture '(while true; do sleep 1; done) &')")" "trap"
   expect deny "pgrep -f in loop no \$\$ (R3)" "$(run "$(fixture 'while pgrep -f gate.rb >/dev/null; do sleep 5; done')")" '$$'
 
