@@ -204,11 +204,16 @@ module SessionMetrics
 
       kept = timed.map { |pair| pair[0] }
 
+      by_path = subagent_transcript?(path)
+      by_shape = classify(kept) == "agent"
       summary = {
         "session" => session_id(path, kept),
-        "project" => File.basename(File.dirname(path)),
+        "project" => project_of(path),
         "path" => path,
-        "kind" => classify(kept),
+        "kind" => by_path || by_shape ? "agent" : "interactive",
+        "kind_source" => kind_source(by_path, by_shape),
+        "parent_session" => by_path ? parent_session_of(path) : nil,
+        "agent_id" => by_path ? agent_id_of(path, kept) : nil,
         "records" => kept.length,
         "malformed_lines" => malformed
       }
@@ -245,11 +250,61 @@ module SessionMetrics
 
     # --- rule 3: agent vs interactive ---------------------------------------
     #
-    # Interactive unless the transcript positively shows automation and shows
-    # no human. The asymmetry is deliberate and it is the safe direction: a
-    # session wrongly called "agent" manufactures stall signals out of a
-    # person's lunch break, while one wrongly called "interactive" only
-    # withholds a signal. When the evidence is thin, withhold.
+    # Two rules, OR'd. The shape rule (classify, below) reads the records.
+    # The path rule reads where the transcript sits: Claude Code writes a
+    # subagent's transcript under its parent session's directory as
+    # `<project>/<session>/subagents/agent-<id>.jsonl`, beside an
+    # `agent-<id>.meta.json`, and every record in it carries the PARENT's
+    # sessionId plus `isSidechain: true` and `agentId`. Those user records
+    # carry no promptSource, so the shape rule alone read every one of them
+    # as a human turn and called the file interactive - which put the bulk
+    # of a week's spend on the wrong side of the line. The path is the
+    # writer's own statement of what the file is; it wins outright.
+    # `kind_source` says which rule fired so a reader can tell the two apart.
+
+    SUBAGENTS_DIR = "subagents"
+    AGENT_FILE_PREFIX = "agent-"
+
+    def subagent_transcript?(path)
+      File.basename(File.dirname(path)) == SUBAGENTS_DIR
+    end
+
+    def kind_source(by_path, by_shape)
+      return "both" if by_path && by_shape
+      return "path" if by_path
+
+      "shape"
+    end
+
+    # The project dir is normally the transcript's parent; a subagent file
+    # sits two levels deeper (session dir, then subagents/), and reporting
+    # "subagents" as its project would file every agent's cost under one
+    # meaningless bucket.
+    def project_of(path)
+      dir = File.dirname(path)
+      dir = File.dirname(File.dirname(dir)) if File.basename(dir) == SUBAGENTS_DIR
+      File.basename(dir)
+    end
+
+    # The session directory the subagent file sits under. The records say
+    # the same thing in `sessionId`, but the path is what made the call.
+    def parent_session_of(path)
+      File.basename(File.dirname(File.dirname(path)))
+    end
+
+    def agent_id_of(path, records)
+      claimed = records.map { |r| r["agentId"] }.compact.first
+      return claimed if claimed.is_a?(String) && !claimed.strip.empty?
+
+      File.basename(path, ".jsonl").delete_prefix(AGENT_FILE_PREFIX)
+    end
+
+    # The shape rule. Interactive unless the transcript positively shows
+    # automation and shows no human. The asymmetry is deliberate and it is
+    # the safe direction: a session wrongly called "agent" manufactures
+    # stall signals out of a person's lunch break, while one wrongly called
+    # "interactive" only withholds a signal. When the evidence is thin,
+    # withhold.
 
     def classify(records)
       starts = records.select { |r| turn_start?(r) }
@@ -669,6 +724,7 @@ module SessionMetrics
         row["transcripts"] << {
           "transcript" => relative_transcript(s["path"], root),
           "kind" => s["kind"],
+          "kind_source" => s["kind_source"],
           "records" => s["records"],
           "tool_results" => s["tool_results"],
           "tool_errors" => s["tool_errors"],

@@ -48,10 +48,14 @@ module SessionFixtures
     end
   end
 
+  # `name` may carry directories (a subagent fixture sits at
+  # `<session>/subagents/agent-<id>`), so the destination's own parent is
+  # what gets created, not just the project dir.
   def copy_fixtures(dir, pairs)
     pairs.each do |project, name|
-      FileUtils.mkdir_p(File.join(dir, project))
-      FileUtils.cp(fixture(project, name), File.join(dir, project, "#{name}.jsonl"))
+      target = File.join(dir, project, "#{name}.jsonl")
+      FileUtils.mkdir_p(File.dirname(target))
+      FileUtils.cp(fixture(project, name), target)
     end
   end
 
@@ -157,6 +161,65 @@ class SessionMetricsClassificationTest < Minitest::Test
 
   def test_a_transcript_with_no_turns_at_all_is_interactive
     assert_equal "interactive", SessionMetrics.classify([])
+  end
+
+  SUBAGENT_FIXTURE = "0f0e0d0c-0b0a-4998-8776-655443322110/subagents/agent-a0b1c2d3e4f5a6b7c"
+
+  # sabotage: drop the path rule from summarize -> red. The fixture's user
+  # records carry no promptSource, so the shape rule reads them as human
+  # turns; only the path says what the file is.
+  def test_a_transcript_under_a_subagents_dir_is_an_agent_session_by_path
+    summary = session("path-project", SUBAGENT_FIXTURE)
+    assert_equal "agent", summary["kind"]
+    assert_equal "path", summary["kind_source"]
+    assert_equal "0f0e0d0c-0b0a-4998-8776-655443322110", summary["parent_session"]
+    assert_equal "a0b1c2d3e4f5a6b7c", summary["agent_id"]
+  end
+
+  # sabotage: keep File.basename(File.dirname(path)) as the project -> red.
+  # Every subagent on the machine would file its cost under "subagents".
+  def test_a_subagent_transcript_reports_the_real_project
+    assert_equal "path-project", session("path-project", SUBAGENT_FIXTURE)["project"]
+    assert_equal "agent-project", session("agent-project", "agent-stall")["project"]
+  end
+
+  # sabotage: make the path rule the only rule -> red. A transcript the
+  # shape rule already reads as an agent keeps saying so, and says which
+  # rule decided.
+  def test_kind_source_names_the_rule_that_fired
+    assert_equal "shape", session("agent-project", "agent-stall")["kind_source"]
+    assert_equal "shape", session("clean-project", "interactive-clean")["kind_source"]
+    assert_nil session("agent-project", "agent-stall")["parent_session"]
+    assert_nil session("clean-project", "interactive-clean")["agent_id"]
+  end
+
+  def test_an_agent_id_falls_back_to_the_filename
+    Dir.mktmpdir("wurk-sessions-") do |dir|
+      path = File.join(dir, "p", "s1", "subagents", "agent-fffff.jsonl")
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, "#{JSON.generate('type' => 'user', 'uuid' => 'u1', 'timestamp' => '2026-09-20T10:00:00Z',
+                                          'message' => { 'role' => 'user', 'content' => [] })}\n")
+      summary = SessionMetrics.read_session(path)
+      assert_equal "agent", summary["kind"]
+      assert_equal "fffff", summary["agent_id"]
+      assert_equal "s1", summary["parent_session"]
+      assert_equal "p", summary["project"]
+    end
+  end
+
+  # sabotage: count agent sessions off the shape rule only -> red.
+  def test_totals_count_a_path_classified_agent_session
+    with_root(["path-project", SUBAGENT_FIXTURE], ["clean-project", "interactive-clean"]) do |dir|
+      _, envelope = run_cli(["report", "--dir", dir, "--max-sessions", "0"])
+      totals = envelope["data"]["totals"]
+      assert_equal 2, totals["sessions"]
+      assert_equal 1, totals["agent_sessions"]
+      assert_equal 1, totals["interactive_sessions"]
+      row = envelope["data"]["sessions"].find { |s| s["kind"] == "agent" }
+      assert_equal "path", row["kind_source"]
+      by_id = envelope["data"]["sessions_by_id"].find { |r| r["session"] == "0f0e0d0c-0b0a-4998-8776-655443322110" }
+      assert_equal "path", by_id["transcripts"].first["kind_source"]
+    end
   end
 
   # sabotage: drop the isSidechain clause from gap_kind -> red. A subagent

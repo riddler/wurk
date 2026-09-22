@@ -903,6 +903,15 @@ wrong in a way that still looks plausible:
   counts as human, because misreading a person's lunch break as an agent
   stall manufactures signals, while the opposite error only withholds one.
   A subagent's records are agent records whatever session surrounds them.
+  The shape of the records is one rule; where the file sits is the other,
+  and either is enough. Claude Code writes a subagent's transcript under
+  its parent's session directory, `<project>/<session>/subagents/agent-<id>.jsonl`,
+  and those records carry no prompt source, so read by shape alone they
+  looked like a human's turns. A transcript on that path is an agent
+  session outright; the row says which rule fired in `kind_source`
+  (`shape`, `path` or `both`), carries the session directory it sits
+  under as `parent_session` and the writer's `agent_id`, and reports the
+  real project rather than `subagents` as its `project`.
 
 **The classification guard.** `promptSource` and `isSidechain` are written
 by the transcript writer, not by this kit, and the conservative default
