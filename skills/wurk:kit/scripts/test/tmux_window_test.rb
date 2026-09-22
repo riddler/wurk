@@ -475,6 +475,198 @@ class TmuxWindowTest < Minitest::Test
     assert_equal true, env["data"]["no_finish"]
   end
 
+  # wu-iak5: --env NAME=VALUE is forwarded to `tmux new-window` as
+  # `-e NAME=VALUE`. tmux scopes -e to the new window's own environment:
+  # measured against tmux 3.6b on 2026-09-21, a sibling window in the same
+  # session sees nothing and `show-environment -t <session>` reports
+  # "unknown variable". That scope is the point - the shared session under
+  # window-per-issue also carries the operator's own interactive shells.
+  # sabotage: drop env_flags from new_argv -> red here
+  def test_open_forwards_env_to_the_new_window_as_dash_e
+    @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    expect_no_caffeinate
+    @fake.expect(["tmux", "new-window"], out: "@42\n")
+    @fake.expect(["tmux", "send-keys", "-t", "@42"], out: "")
+
+    code, env = run_tmux([
+                            "open", "--env", "GIT_AUTHOR_NAME=Howie",
+                            "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing",
+                            "zz-abc", "/wurk:work zz-abc --auto"
+                          ])
+
+    assert_equal 0, code
+
+    new_window = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux new-window] }.argv
+
+    assert_equal(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=zz-session:",
+       "-n", "zz-abc-thing", "-c", "/repos/zz-worktrees/zz-abc-thing",
+       "-e", "GIT_AUTHOR_NAME=Howie"],
+      new_window
+    )
+    assert_equal ["GIT_AUTHOR_NAME"], env["data"]["env_names"]
+  end
+
+  # Repeatable, and the order given is the order forwarded.
+  def test_open_forwards_several_env_assignments_in_the_order_given
+    @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    expect_no_caffeinate
+    @fake.expect(["tmux", "new-window"], out: "@42\n")
+    @fake.expect(["tmux", "send-keys", "-t", "@42"], out: "")
+
+    code, env = run_tmux([
+                            "open",
+                            "--env", "GIT_AUTHOR_NAME=Howie",
+                            "--env", "GIT_AUTHOR_EMAIL=howie@example.invalid",
+                            "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing",
+                            "zz-abc", "/wurk:work zz-abc --auto"
+                          ])
+
+    assert_equal 0, code
+
+    new_window = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux new-window] }.argv
+
+    assert_equal(
+      ["-e", "GIT_AUTHOR_NAME=Howie", "-e", "GIT_AUTHOR_EMAIL=howie@example.invalid"],
+      new_window.last(4)
+    )
+    assert_equal %w[GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL], env["data"]["env_names"]
+  end
+
+  # A VALUE containing `=` is legal: the split is on the FIRST `=` only, and
+  # what reaches the argv is the raw argument, byte for byte.
+  # sabotage: split("=") instead of partition("=") -> red here
+  def test_open_env_value_containing_an_equals_sign_survives_intact
+    @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    expect_no_caffeinate
+    @fake.expect(["tmux", "new-window"], out: "@42\n")
+    @fake.expect(["tmux", "send-keys", "-t", "@42"], out: "")
+
+    code, env = run_tmux([
+                            "open", "--env", "OPTS=--flag=1 --other=2",
+                            "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing",
+                            "zz-abc", "/wurk:work zz-abc --auto"
+                          ])
+
+    assert_equal 0, code
+
+    new_window = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux new-window] }.argv
+
+    assert_equal ["-e", "OPTS=--flag=1 --other=2"], new_window.last(2)
+    assert_equal ["OPTS"], env["data"]["env_names"]
+  end
+
+  # A malformed assignment is a refusal through the envelope, not a silent
+  # skip: a caller that fat-fingered the identity it wanted the window to
+  # commit under must not get a window that quietly commits as somebody
+  # else. Nothing is opened - not even the read-only guard runs, because the
+  # check is on the caller's own argument list.
+  def test_open_refuses_an_env_argument_with_no_equals_sign
+    code, env = run_tmux([
+                            "open", "--env", "GIT_AUTHOR_NAME",
+                            "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing",
+                            "zz-abc", "/wurk:work zz-abc --auto"
+                          ])
+
+    assert_equal 1, code
+    assert_equal "env_malformed", env["blocked"].first["code"]
+    assert_includes env["blocked"].first["message"], "GIT_AUTHOR_NAME"
+    assert_empty @fake.calls
+  end
+
+  def test_open_refuses_an_env_argument_with_an_empty_name
+    code, env = run_tmux([
+                            "open", "--env", "=Howie",
+                            "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing",
+                            "zz-abc", "/wurk:work zz-abc --auto"
+                          ])
+
+    assert_equal 1, code
+    assert_equal "env_malformed", env["blocked"].first["code"]
+    assert_empty @fake.calls
+  end
+
+  # The refusal covers every assignment given, not just the first: a second
+  # malformed one behind a good one still blocks.
+  def test_open_refuses_when_a_later_env_argument_is_malformed
+    code, env = run_tmux([
+                            "open",
+                            "--env", "GIT_AUTHOR_NAME=Howie",
+                            "--env", "GIT_AUTHOR_EMAIL",
+                            "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing",
+                            "zz-abc", "/wurk:work zz-abc --auto"
+                          ])
+
+    assert_equal 1, code
+    assert_equal "env_malformed", env["blocked"].first["code"]
+    assert_includes env["blocked"].first["message"], "GIT_AUTHOR_EMAIL"
+    assert_empty @fake.calls
+  end
+
+  def test_open_dry_run_renders_the_env_flags_in_commands
+    @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    expect_no_caffeinate
+
+    code, env = run_tmux([
+                            "open", "--dry-run", "--env", "GIT_AUTHOR_NAME=Howie",
+                            "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing",
+                            "zz-abc", "/wurk:work zz-abc --auto"
+                          ])
+
+    assert_equal 0, code
+
+    new_window_line = env["commands"].find { |c| c.include?("new-window") }
+
+    assert_includes new_window_line, "-e GIT_AUTHOR_NAME=Howie"
+    assert_equal ["GIT_AUTHOR_NAME"], env["data"]["env_names"]
+  end
+
+  # Omitting --env leaves the new-window argv byte-for-byte what it was
+  # before this option existed, and reports an empty list rather than
+  # omitting the key.
+  def test_open_without_env_leaves_the_new_window_argv_unchanged
+    @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    expect_no_caffeinate
+    @fake.expect(["tmux", "new-window"], out: "@42\n")
+    @fake.expect(["tmux", "send-keys", "-t", "@42"], out: "")
+
+    code, env = run_tmux([
+                            "open", "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing",
+                            "zz-abc", "/wurk:work zz-abc --auto"
+                          ])
+
+    assert_equal 0, code
+
+    new_window = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux new-window] }.argv
+
+    assert_equal(
+      ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "=zz-session:",
+       "-n", "zz-abc-thing", "-c", "/repos/zz-worktrees/zz-abc-thing"],
+      new_window
+    )
+    assert_equal [], env["data"]["env_names"]
+  end
+
+  # data reports NAMES only. A -e value is already visible in `ps` for as
+  # long as the tmux client runs; putting it in a machine-readable field
+  # invites a caller to log the whole envelope somewhere far more durable
+  # than a process table.
+  def test_open_reports_env_names_and_never_the_values_in_data
+    @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "")
+    expect_no_caffeinate
+    @fake.expect(["tmux", "new-window"], out: "@42\n")
+    @fake.expect(["tmux", "send-keys", "-t", "@42"], out: "")
+
+    _code, env = run_tmux([
+                             "open", "--env", "SOME_NAME=some-value",
+                             "zz-abc-thing", "/repos/zz-worktrees/zz-abc-thing",
+                             "zz-abc", "/wurk:work zz-abc --auto"
+                           ])
+
+    refute_includes JSON.generate(env["data"]), "some-value"
+    assert_equal ["SOME_NAME"], env["data"]["env_names"]
+  end
+
   def test_open_skips_when_window_name_already_exists
     @fake.expect(["tmux", "list-windows", "-t", "=zz-session", "-F", '#{window_name}'], out: "zz-abc-thing\n")
     # No new-window or send-keys expectation - a name hit must not create a
@@ -1244,6 +1436,93 @@ class TmuxWindowSessionPerIssueTest < Minitest::Test
     assert_equal "@1", env["data"]["window_id"]
     assert_nil env["data"]["editor_window_id"]
     refute(@fake.calls.any? { |c| c.argv[0, 2] == %w[tmux new-window] })
+  end
+
+  # --- open: --env --------------------------------------------------------
+
+  # wu-iak5: session-per-issue forwards the same assignments, to both tmux
+  # commands that create something the seeded claude ends up in. The session
+  # here belongs to one workspace, so session scope and window scope are the
+  # same blast radius - but forwarding to both is what keeps a consumer that
+  # flips `tmux.layout` from silently losing the variables it passed.
+  #
+  # With an editor configured the flags go on the new-session before the
+  # `--` that introduces the editor argv - everything after `--` is the
+  # window's command, not an option.
+  # sabotage: move env_flags after the "--" -> red here
+  def test_open_forwards_env_to_the_new_session_before_the_editor_argv
+    @fake.expect(["tmux", "has-session", "-t", "=#{NAME}"], exitstatus: 1)
+    expect_no_caffeinate
+    @fake.expect(["tmux", "new-session"], out: "@1\n")
+    @fake.expect(["tmux", "new-window"], out: "@2\n")
+    @fake.expect(["tmux", "send-keys", "-t", "@2"], out: "")
+
+    code, env = run_tmux(open_argv(["--env", "GIT_AUTHOR_NAME=Howie"]))
+
+    assert_equal 0, code
+
+    new_session = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux new-session] }.argv
+
+    assert_equal(
+      ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", NAME, "-c", PATH,
+       "-n", "nvim", "-e", "GIT_AUTHOR_NAME=Howie", "--", "/bin/sh", "-c", "exec nvim"],
+      new_session
+    )
+
+    new_window = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux new-window] }.argv
+
+    assert_equal ["-e", "GIT_AUTHOR_NAME=Howie"], new_window.last(2)
+    assert_equal ["GIT_AUTHOR_NAME"], env["data"]["env_names"]
+  end
+
+  def test_open_with_no_editor_forwards_env_to_the_single_new_session
+    fixture = manifest_with(FIXTURE, "tmux" => { "editor" => nil })
+    @fake.expect(["tmux", "has-session", "-t", "=#{NAME}"], exitstatus: 1)
+    expect_no_caffeinate
+    @fake.expect(["tmux", "new-session"], out: "@1\n")
+    @fake.expect(["tmux", "send-keys", "-t", "@1"], out: "")
+
+    code, env = run_tmux(open_argv(["--env", "A=1", "--env", "B=2"]), fixture: fixture)
+
+    assert_equal 0, code
+
+    new_session = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux new-session] }.argv
+
+    assert_equal(
+      ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", NAME, "-c", PATH,
+       "-n", "claude", "-e", "A=1", "-e", "B=2"],
+      new_session
+    )
+    assert_equal %w[A B], env["data"]["env_names"]
+  end
+
+  def test_open_refuses_a_malformed_env_argument_under_session_per_issue
+    code, env = run_tmux(open_argv(["--env", "NOPE"]))
+
+    assert_equal 1, code
+    assert_equal "env_malformed", env["blocked"].first["code"]
+    assert_empty @fake.calls
+  end
+
+  def test_open_without_env_leaves_the_session_per_issue_argv_unchanged
+    @fake.expect(["tmux", "has-session", "-t", "=#{NAME}"], exitstatus: 1)
+    expect_no_caffeinate
+    @fake.expect(["tmux", "new-session"], out: "@1\n")
+    @fake.expect(["tmux", "new-window"], out: "@2\n")
+    @fake.expect(["tmux", "send-keys", "-t", "@2"], out: "")
+
+    code, env = run_tmux(open_argv)
+
+    assert_equal 0, code
+
+    new_session = @fake.calls.find { |c| c.argv[0, 2] == %w[tmux new-session] }.argv
+
+    assert_equal(
+      ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", NAME, "-c", PATH,
+       "-n", "nvim", "--", "/bin/sh", "-c", "exec nvim"],
+      new_session
+    )
+    assert_equal [], env["data"]["env_names"]
   end
 
   # --- editor argv never joined into send-keys ---------------------------

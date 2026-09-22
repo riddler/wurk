@@ -405,6 +405,41 @@ writes `{id}` into the seed and nothing more. A seed with no `{id}` is
 unchanged, byte for byte, from what it produced before the placeholder
 existed.
 
+## `tmux_window.rb open`: `--env NAME=VALUE`
+
+Repeatable. Each assignment is forwarded verbatim to tmux as
+`-e NAME=VALUE`, on the `new-window` that creates the seeded window under
+`window-per-issue`, and on both the `new-session` and the claude
+`new-window` under `session-per-issue`. `data.env_names` reports the names
+forwarded, in order; omitting the flag leaves the emitted argv byte-identical
+to what it was before the option existed and reports `[]`.
+
+Use it when a seeded session needs a variable the surrounding session must
+not have. tmux scopes `-e` to the environment of the window it creates and
+nothing else - measured against tmux 3.6b on 2026-09-21, a sibling window in
+the same session sees nothing and `show-environment -t <session>` reports
+`unknown variable`. That is why this is a per-window flag and not a
+`set-environment` call: under `window-per-issue` the shared, manifest-named
+session also carries the operator's own interactive shells, so a variable set
+on the session lands in every one of them. A bot git identity set that way
+would rewrite the operator's own commits' author.
+
+Two properties the caller has to know:
+
+- **A `-e` value is an argv element**, visible in `ps` for as long as the
+  tmux client runs. Pass an identity, a mode switch, a run id; do not pass a
+  token. Nothing in the kit reads a value out of a file or out of the
+  calling process's environment into this argv, deliberately: a caller that
+  keeps secrets out of its argument list must not have them put back by a
+  convenience. `data` therefore reports names only, never values - the value
+  is already in the process table, and a machine-readable copy invites a
+  caller to log the envelope somewhere more durable. (`commands` renders the
+  full argv the way it does for every other flag.)
+- **The split is on the first `=` only**, so a VALUE containing `=` is legal
+  and survives byte for byte. A malformed assignment - no `=`, or an empty
+  NAME - blocks with `env_malformed` and opens nothing, rather than being
+  skipped silently.
+
 ## `gate.rb`: the quality-gate wrapper
 
 Runs the consumer's own gate commands - `gate.full`, `gate.loop`,
