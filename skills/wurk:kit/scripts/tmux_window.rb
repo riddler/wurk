@@ -405,12 +405,17 @@ module TmuxWindow
     # --- open --------------------------------------------------------------
 
     def open_window(argv, io)
-      options = { no_finish: false }
+      options = { no_finish: false, env: [] }
       parser, options = Cli.build("tmux_window.rb open [options] <name> <path> <id> <seed>", options) do |opts|
         opts.on("--no-finish", "seed the session with no appended /wurk:commit finishing clause " \
                                 "(a seed that makes its own commit, or a workspace whose name " \
                                 "carries no bead id)") do
           options[:no_finish] = true
+        end
+
+        opts.on("--env NAME=VALUE", "set NAME in the new window's own environment " \
+                                     "(tmux -e); repeatable") do |v|
+          options[:env] << v
         end
       end
       args = Cli.parse!(parser, argv)
@@ -422,6 +427,12 @@ module TmuxWindow
       env = Envelope.new(script: "tmux_window_open")
       dry_run = options[:dry_run]
 
+      env_assignments = parse_env_assignments(options[:env], env)
+      return env.emit(io) unless env_assignments
+
+      env.data["env_names"] = env_assignments.map(&:first)
+      env_flags = env_assignments.flat_map { |(_name, raw)| ["-e", raw] }
+
       manifest = tmux_manifest(env)
       return env.emit(io) unless manifest
 
@@ -429,7 +440,8 @@ module TmuxWindow
       return env.emit(io) unless user_config
 
       if manifest.tmux_layout == "session-per-issue"
-        return open_window_session_per_issue(manifest, user_config, name, path, id, seed, options, env, io)
+        return open_window_session_per_issue(manifest, user_config, name, path, id, seed, options, env,
+                                              env_flags, io)
       end
 
       session = manifest.tmux_session
@@ -451,7 +463,7 @@ module TmuxWindow
 
       keys = claude_command(model, seed, id, manifest.trailer_key, user_config.tmux_permission_mode,
                              no_finish: options[:no_finish])
-      new_argv = ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "#{session_target(session)}:", "-n", name, "-c", path]
+      new_argv = ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t", "#{session_target(session)}:", "-n", name, "-c", path] + env_flags
 
       if dry_run
         env.commands << Sh.render(new_argv)
@@ -523,7 +535,7 @@ module TmuxWindow
     # is read-only and runs for real even under --dry-run, the same way
     # window-per-issue's list-windows guard already does; only the mutating
     # commands below it are deferred and rendered instead.
-    def open_window_session_per_issue(manifest, user_config, name, path, id, seed, options, env, io)
+    def open_window_session_per_issue(manifest, user_config, name, path, id, seed, options, env, env_flags, io)
       dry_run = options[:dry_run]
       model = manifest.tmux_model
       editor_argv = manifest.tmux_editor_argv
@@ -549,13 +561,13 @@ module TmuxWindow
       session_new_argv =
         if editor_argv
           ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", name, "-c", path,
-           "-n", editor_name, "--"] + editor_exec_argv(editor_argv)
+           "-n", editor_name] + env_flags + ["--"] + editor_exec_argv(editor_argv)
         else
           ["tmux", "new-session", "-d", "-P", "-F", '#{window_id}', "-s", name, "-c", path,
-           "-n", CLAUDE_WINDOW_NAME]
+           "-n", CLAUDE_WINDOW_NAME] + env_flags
         end
       claude_window_argv = ["tmux", "new-window", "-d", "-P", "-F", '#{window_id}', "-t",
-                             "#{session_target(name)}:", "-n", CLAUDE_WINDOW_NAME, "-c", path]
+                             "#{session_target(name)}:", "-n", CLAUDE_WINDOW_NAME, "-c", path] + env_flags
 
       if dry_run
         env.commands << Sh.render(session_new_argv)
@@ -930,6 +942,54 @@ module TmuxWindow
     # feeding a real execution.
     def editor_exec_argv(editor_argv)
       ["/bin/sh", "-c", "exec #{Shellwords.join(editor_argv)}"]
+    end
+
+    # wu-iak5: the `--env NAME=VALUE` arguments `open` forwards to tmux as
+    # `-e NAME=VALUE`. tmux scopes `-e` to the environment of the window (or
+    # the session) it creates and nothing else: measured against tmux 3.6b
+    # on 2026-09-21, a sibling window in the same session sees nothing and
+    # `show-environment -t <session>` reports "unknown variable". That scope
+    # is the whole reason this exists rather than a `set-environment` call -
+    # under `window-per-issue` the shared, manifest-named session also
+    # carries the operator's own interactive shells, and a variable set on
+    # the session would reach into every one of them. A seeded session that
+    # must commit under a bot identity would be setting the operator's git
+    # author too.
+    #
+    # The shape is checked here, and a malformed argument blocks through the
+    # envelope rather than being dropped: a caller that fat-fingered the
+    # identity it wanted the window to commit under must not get a window
+    # that quietly commits as somebody else. The split is on the FIRST `=`
+    # only, so a VALUE containing `=` is legal; what reaches the argv is the
+    # raw argument, byte for byte, and the split only validates it and names
+    # it.
+    #
+    # Nothing here reads a value out of a file or out of this process's own
+    # environment, and nothing should be added that does. A `-e` value is an
+    # argv element, visible in `ps` for as long as the tmux client runs, so
+    # a caller that deliberately keeps secrets out of the argument list must
+    # not have them put back by a convenience it never asked for. For the
+    # same reason `data.env_names` reports names and never values: the value
+    # is already in the process table, and a machine-readable copy of it
+    # invites a caller to log the envelope somewhere far more durable.
+    # (`commands` still renders the full argv, as it does for every other
+    # flag - that is the audit trail's existing contract, not a new leak.)
+    #
+    # Returns an array of [name, raw] pairs, or nil once it has blocked.
+    def parse_env_assignments(raw_values, env)
+      raw_values.map do |raw|
+        name, separator, = raw.partition("=")
+        if separator.empty? || name.empty?
+          env.block!(
+            code: "env_malformed",
+            message: "--env expects NAME=VALUE, got #{raw.inspect}; " \
+                      "refusing to open a window with an assignment tmux would not accept"
+          )
+          return nil
+        end
+
+        [name, raw]
+      end
     end
 
     def blank?(value)
