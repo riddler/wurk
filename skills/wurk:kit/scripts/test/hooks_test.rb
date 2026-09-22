@@ -152,7 +152,23 @@ class HooksTest < Minitest::Test
     "trap 'kill $!' EXIT; (while true; do sleep 1; done) &",
     "while pgrep -f gate.rb | grep -vx $$ >/dev/null; do sleep 5; done",
     "i=0; until test -f x; do\n  sleep 2\n  i=$((i+1))\n  test $i -lt 20 || break\ndone",
-    "cd /repo && ruby run.rb 2>&1 | tail -5"
+    "cd /repo && ruby run.rb 2>&1 | tail -5",
+    "until test -f x\ndo\n  sleep 2\ndone"
+  ].freeze
+
+  # wu-jarf. A Bash call carries data as well as shell - a heredoc body, a
+  # -m message - and the guard must not read that data as shell. R1 used to
+  # fold the command's newlines away before matching, so any "while" and any
+  # later "do" in a document matched the loop header. A conductor writing a
+  # campaign journal was refused for prose and worked around the guard a
+  # dozen times that night rather than reporting it.
+  PROSE = [
+    "cat >> journal.md <<'EOF'\nWorkers hold their notes while they are being written.\n\n" \
+    "The conductor should not assume the sweep is finished, nor\ndo anything about it yet.\nEOF",
+    "cat <<-EOF > f\n\twait a while for it\n\tand then do the rest\n\tEOF",
+    "echo 'we waited a while' && echo 'and do it again'",
+    "cat <<EOF > f\nWe waited a while for the gate.\n\nNothing to do now.\n\nThe work is done.\nEOF",
+    "git commit -m 'Stops polling while the gate runs\n\nWe do not need a second reader.'"
   ].freeze
 
   DENIED = {
@@ -160,7 +176,16 @@ class HooksTest < Minitest::Test
     "while ! test -f done.txt; do :; done" => "sleep",
     "until grep -q GREEN log; do :; done" => "sleep",
     "(while true; do sleep 1; done) &" => "trap",
-    "while pgrep -f gate.rb >/dev/null; do sleep 5; done" => "$$"
+    "while pgrep -f gate.rb >/dev/null; do sleep 5; done" => "$$",
+    # The long form, whose header spans the one newline shell allows there.
+    # This is what the folding wu-jarf removed was there to catch, so it is
+    # the half of that fix that can silently rot; keep it beside the prose
+    # cases rather than trusting the shell self-test alone.
+    "while true\ndo\n  date\ndone" => "sleep",
+    "until test -f x\ndo\n  :\ndone" => "sleep",
+    "bash <<'EOF'\nwhile true\ndo\n  date\ndone\nEOF" => "sleep",
+    "(\n  while true; do sleep 1; done\n) &" => "trap",
+    "while pgrep -f gate.rb >/dev/null\ndo\n  sleep 5\ndone" => "$$"
   }.freeze
 
   def test_guard_allows_bounded_and_non_waiting_commands
@@ -168,6 +193,20 @@ class HooksTest < Minitest::Test
       out, status = run_hook(GUARD, stdin: bash_input(command))
       assert status.success?, "guard must exit 0 for #{command.inspect}"
       assert_equal "", out, "guard must stay silent for #{command.inspect}"
+    end
+  end
+
+  # sabotage: fold the command's newlines in extract_command the way it used
+  # to (\n -> space) -> every one of these goes red, because a folded
+  # document is one line in which "while" and a later "do" match the loop
+  # header. Drop only the has_done requirement -> the one-line prose case
+  # goes red. wu-jarf.
+  def test_guard_allows_prose_that_merely_contains_the_loop_keywords
+    PROSE.each do |command|
+      out, status = run_hook(GUARD, stdin: bash_input(command))
+      assert status.success?, "guard must exit 0 for #{command.inspect}"
+      assert_equal "", out,
+                   "prose is not shell: guard must stay silent for #{command.inspect}"
     end
   end
 
