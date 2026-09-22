@@ -411,8 +411,10 @@ Repeatable. Each assignment is forwarded verbatim to tmux as
 `-e NAME=VALUE`, on the `new-window` that creates the seeded window under
 `window-per-issue`, and on both the `new-session` and the claude
 `new-window` under `session-per-issue`. `data.env_names` reports the names
-forwarded, in order; omitting the flag leaves the emitted argv byte-identical
-to what it was before the option existed and reports `[]`.
+the call carried, in order; omitting the flag leaves the emitted argv
+byte-identical to what it was before the option existed and reports `[]`.
+Read it beside `data.skipped` - a call that skipped because the window
+already existed opened nothing, so its names were never forwarded anywhere.
 
 Use it when a seeded session needs a variable the surrounding session must
 not have. tmux scopes `-e` to the environment of the window it creates and
