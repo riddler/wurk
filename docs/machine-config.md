@@ -334,6 +334,18 @@ cost.
 Read it with `UserConfig#metrics_prices` (a hash, `{}` when absent) and
 `#metrics_prices?`.
 
+**Bare family names.** A transcript sometimes records `message.model` as a
+bare family name (`opus`, `sonnet`, `haiku`, `fable`) beside the full ids.
+Those rows keep reporting their tokens under the bare name, but for the
+price lookup alone `session_metrics.rb` looks through `MODEL_ALIASES` to
+the current model of that family when the table has no entry for the bare
+name itself, and warns `model_alias_priced` once per alias it used. A full
+id is never remapped; price it or it nulls the total as before. The
+per-model token table also carries `cache_creation_5m` and
+`cache_creation_1h`, the cache-write bucket split by the TTL it was written
+with; `cache_write` prices the whole `cache_creation` bucket and the two
+halves are never priced separately.
+
 ### `metrics.error_events`
 
 A non-blank path to this machine's telemetry sink: a JSONL file that an
