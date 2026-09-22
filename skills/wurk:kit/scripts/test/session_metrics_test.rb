@@ -498,7 +498,7 @@ class SessionMetricsCliTest < Minitest::Test
     assert_equal 0.20, SessionMetrics::FAILURE_RATE_THRESHOLD
     summary = { "tool_results" => 2, "tool_errors" => 2, "tool_failure_rate" => 1.0,
                 "stalls" => [], "session" => "s", "project" => "p" }
-    assert_equal [], SessionMetrics.signals([summary], "count" => 0)
+    assert_equal [], SessionMetrics.signals([summary], { "count" => 0 })
   end
 
   def test_sink_events_become_a_signal
@@ -845,7 +845,7 @@ class SessionMetricsTranscriptIdentityTest < Minitest::Test
   def test_a_summary_with_no_path_still_signals
     summary = { "tool_results" => 10, "tool_errors" => 5, "tool_failure_rate" => 0.5,
                 "stalls" => [], "session" => "s", "project" => "p" }
-    item = SessionMetrics.signals([summary], "count" => 0).first
+    item = SessionMetrics.signals([summary], { "count" => 0 }).first
     assert_equal "tool_failure_rate", item["kind"]
     assert_nil item["transcript"]
   end
