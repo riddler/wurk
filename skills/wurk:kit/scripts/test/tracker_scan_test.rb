@@ -64,6 +64,30 @@ class TrackerScanTest < Minitest::Test
     refute TrackerScan.refusing?("tracker:zz-abc:comments[0]:title", "titles")
   end
 
+  # sabotage: let `none` fall through to the "all" arm of refusing? -> red.
+  # `none` is a refusal set of zero fields, which is what lets a repo whose
+  # hits are its own subject matter push through the kit at all.
+  def test_under_none_nothing_refuses
+    refute TrackerScan.refusing?("tracker:zz-abc:title", "none")
+    refute TrackerScan.refusing?("tracker:zz-abc:description", "none")
+    refute TrackerScan.refusing?("tracker:zz-abc:labels[0]", "none")
+    refute TrackerScan.refusing?("tracker:zz-abc:comments[0]:title", "none")
+  end
+
+  # sabotage: make waiving? true for "titles" as well -> red. The waiver is
+  # the empty refusal set, not the narrow one.
+  def test_only_none_waives
+    assert TrackerScan.waiving?("none")
+    refute TrackerScan.waiving?("titles")
+    refute TrackerScan.waiving?("all")
+  end
+
+  # sabotage: drop "none" from REFUSAL_MODES -> red here and in the manifest
+  # enum test, which is the pair that has to stay in step.
+  def test_the_three_refusal_modes_are_the_whole_vocabulary
+    assert_equal %w[all titles none], TrackerScan::REFUSAL_MODES
+  end
+
   def test_partition_hits_keeps_both_halves
     hits = [hit("tracker:zz-abc:title"), hit("tracker:zz-abc:notes", 2), hit("tracker:zz-xyz:description")]
     refusing, informational = TrackerScan.partition_hits(hits, "titles")
@@ -71,6 +95,16 @@ class TrackerScanTest < Minitest::Test
     assert_equal ["tracker:zz-abc:title"], refusing.map(&:location)
     assert_equal ["tracker:zz-abc:notes", "tracker:zz-xyz:description"], informational.map(&:location)
     assert_equal [[], []], TrackerScan.partition_hits([], "all")
+  end
+
+  # Under `none` the whole payload lands on the informational side: the hits
+  # are still found and still attributed, they simply refuse nothing.
+  def test_partition_hits_under_none_refuses_none_of_them
+    hits = [hit("tracker:zz-abc:title"), hit("tracker:zz-abc:notes", 2)]
+    refusing, informational = TrackerScan.partition_hits(hits, "none")
+
+    assert_equal [], refusing
+    assert_equal ["tracker:zz-abc:title", "tracker:zz-abc:notes"], informational.map(&:location)
   end
 
   # --- attribution ------------------------------------------------------------
@@ -188,6 +222,17 @@ class TrackerScanTest < Minitest::Test
 
   def test_a_changed_refusal_set_is_stale
     assert_equal "stale", check(marker_at(NOW - 5, refusal: "titles"))[:state]
+  end
+
+  # sabotage: compare only the fingerprint -> red. Switching a repo INTO or
+  # OUT OF `none` has to invalidate a marker written under the other mode,
+  # or a marker earned under a refusing set would license a waived push (and
+  # a waived marker would license a push the refusing set never cleared).
+  def test_switching_into_or_out_of_none_is_stale
+    assert_equal "stale", check(marker_at(NOW - 5, refusal: "none"))[:state]
+    assert_equal "stale", check(marker_at(NOW - 5, refusal: "all"), refusal: "none")[:state]
+    assert_equal "stale", check(marker_at(NOW - 5, refusal: "titles"), refusal: "none")[:state]
+    assert_equal "fresh", check(marker_at(NOW - 5, refusal: "none"), refusal: "none")[:state]
   end
 
   def test_expiry_wins_over_staleness_in_the_report

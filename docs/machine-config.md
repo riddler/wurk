@@ -201,7 +201,17 @@ invisibly), every one of those commits' messages, and the ref names
 themselves. `bead.rb sync scan` scans every string field of the full
 tracker export before `bead.rb sync push` shells the tracker's own push;
 which fields an outbound-scan hit refuses on is the manifest's
-`beads.scan_refusal` (`all` or `titles`).
+`beads.scan_refusal` (`all`, `titles`, or `none`).
+
+That last value is a per-repo ruling made in the CONSUMER's manifest, and
+it is the reason to reach for before deleting a pattern from this file. A
+pattern deleted here is gone for every repo on the machine and every guard
+that reads the file; `beads.scan_refusal: "none"` waives the refusal for
+the one tracker whose hits are its own subject matter, still scans it,
+still reports every hit, and says so in the push envelope with an
+`outbound_scan_refusals_waived` warning. See "`beads.scan_refusal`" in
+`docs/manifest.md` for when that ruling is correct - it is narrower than
+"the scan is being annoying".
 
 Not covered: anything that leaves the machine by a route the kit never
 touches - a push run from another tool or another checkout that has no hook

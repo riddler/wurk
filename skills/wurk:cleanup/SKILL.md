@@ -200,7 +200,11 @@ Omitted, sweep every worktree.
      result is read before anything is published. A `blocked`
      `outbound_scan_hit` is a stop - report the issue ids and field names,
      never rephrase-and-retry. `data.informational_hits` do not refuse
-     but go into the report by id and field.
+     but go into the report by id and field. An
+     `outbound_scan_refusals_waived` warning means this repo's manifest
+     declares its scan hits acceptable and none of them refused: the push
+     went out over hits, so the report says they were waived and names the
+     counts, never that the scan was clean.
 
      Non-fatal if offline (`dolt_push_failed` is a warning); report that
      the closes are local and will publish on the next push, and report

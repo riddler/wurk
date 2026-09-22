@@ -56,7 +56,7 @@ class Manifest
   ENUMS = {
     "beads.topology" => %w[beads beads-with-forge-projection],
     "beads.sync" => %w[local git dolthub],
-    "beads.scan_refusal" => %w[all titles],
+    "beads.scan_refusal" => %w[all titles none],
     "forge.kind" => %w[github gitlab],
     "parallelism.model" => %w[worktree-per-issue branch-in-place],
     "commits.style" => %w[s-form conventional],
@@ -130,8 +130,9 @@ class Manifest
     # Deliberately NOT the most common value. See validate_beads_sync and
     # docs/manifest.md: an absent key must never be able to cause a push.
     "beads.sync" => "local",
-    # The wider refusal set: with no ruling on record every field a scan hit
-    # lands in refuses the tracker push. See beads_scan_refusal.
+    # The widest refusal set: with no ruling on record every field a scan hit
+    # lands in refuses the tracker push. The narrower sets (`titles`, `none`)
+    # are rulings, and a ruling is never inferred. See beads_scan_refusal.
     "beads.scan_refusal" => "all",
     "commits.style" => "s-form",
     "commits.subject_under" => 50,
@@ -317,10 +318,18 @@ class Manifest
   #            attributed to its issue id, and does not refuse. The shape
   #            an operator rules when the remote is private and only the
   #            titles must be public-grade.
+  #   none   - nothing refuses. Every hit is still found, still attributed
+  #            and still reported, under a warning code of its own so a
+  #            waived scan cannot read as a clean one. The shape an
+  #            operator rules when the guarded terms are this tracker's
+  #            subject matter and its remote is the same private repo -
+  #            the alternative being a raw push around the kit, or
+  #            deleting a pattern that also guards the public repos.
   #
-  # Every field is still scanned in both modes; the mode only decides
+  # Every field is still scanned in every mode; the mode only decides
   # which hits refuse. Written as an accessor over the enum so a value the
-  # kit does not know cannot reach the scan as "refuse on nothing".
+  # kit does not know cannot reach the scan as "refuse on nothing" - that
+  # is what `none` says deliberately, and it is never inferred.
   def beads_scan_refusal
     fetch("beads.scan_refusal")
   end
