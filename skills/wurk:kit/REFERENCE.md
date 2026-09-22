@@ -724,18 +724,23 @@ acquire may take - has two possible sources, and one fixed precedence
 `gate_run.rb start` so the two entry points to one pool can never disagree
 about its size):
 
-1. **`machine.gate_slots` in `~/.claude/wurk.local.json`** wins when set.
-   The machine config describes the box the acquire is actually happening
-   on (ADR-0013). A fleet manifest is checked in and shared by every machine
-   that runs the fleet, so a slot count kept there can only be right for
-   one of them; a machine that has said how many gates it can run at once
-   is believed over anything relayed from a shared file.
-2. **`--slots N`** is the fallback for a machine that has not said. Today
-   this is how a conductor relays a fleet manifest's number.
+1. **`machine.gate_slots` in `~/.claude/wurk.local.json`** caps the pool
+   when set. The machine config describes the box the acquire is actually
+   happening on (ADR-0013). A fleet manifest is checked in and shared by
+   every machine that runs the fleet, so a slot count kept there can only be
+   right for one of them; nothing relayed from a shared file may raise the
+   load above what the machine has said.
+2. **`--slots N`** is the fallback for a machine that has not said, and may
+   LOWER the machine's cap on one that has: the machine number is how many
+   gates the box runs at once across every caller, the flag is how many
+   this caller may run, and a caller that asked for fewer gets fewer. Today
+   this is how a conductor relays a fleet manifest's number, or states a
+   campaign's own cap.
 
-When both are given and disagree, the machine value is used and the
-envelope carries a `slots_overridden` warning naming both numbers, so a
-conductor that relayed the fleet's figure can see it was not the one used.
+When both are given, the smaller is used. A flag above the cap is lowered
+to it and the envelope carries a `slots_overridden` warning naming both
+numbers, so a conductor that relayed the fleet's figure can see it was not
+the one used; a flag at or below the cap is used as given, with no warning.
 `--slots-dir` with no count from either source is a usage error (exit 2)
 whose hint names both sources; there is deliberately no default of 1, since
 a silent default would let a slot acquire succeed on a machine nobody sized.

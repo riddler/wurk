@@ -260,6 +260,16 @@ class LockLibTest < Minitest::Test
     assert_equal({ count: 2, source: "machine_config", overridden: false }, Lock.resolve_slot_count(machine: 2, flag: nil))
   end
 
+  # sabotage: let the machine value win when the flag is SMALLER -> red. The
+  # machine number caps the box; a caller that asked for fewer than the cap
+  # asked for fewer, and raising it silently is how a campaign that stated a
+  # cap of 2 ran three gates at once. Not an override either - the caller got
+  # exactly what it asked for, so no warning.
+  def test_resolve_slot_count_lets_a_smaller_flag_lower_the_machine_cap
+    assert_equal({ count: 2, source: "flag", overridden: false }, Lock.resolve_slot_count(machine: 3, flag: 2))
+    assert_equal({ count: 1, source: "flag", overridden: false }, Lock.resolve_slot_count(machine: 3, flag: 1))
+  end
+
   # sabotage: return nil when only the flag is given -> red
   def test_resolve_slot_count_falls_back_to_the_flag
     assert_equal({ count: 3, source: "flag", overridden: false }, Lock.resolve_slot_count(machine: nil, flag: 3))

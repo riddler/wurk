@@ -123,7 +123,8 @@ module GateRun
       return env.emit(io) unless config
 
       # The slot count follows the same precedence as lock.rb acquire:
-      # machine.gate_slots over --slots N (Lock.resolve_slot_count).
+      # machine.gate_slots caps --slots N; the flag may only lower it
+      # (Lock.resolve_slot_count).
       slots = Lock.resolve_slot_count(machine: config.machine_gate_slots, flag: options[:slots])
       lock_specs = start_lock_specs(options, slots[:count])
       usage_error!(START_USAGE, parser, hint: options[:slots_dir] || options[:slots] ? SLOTS_HINT : nil) if lock_specs.nil?
@@ -135,8 +136,8 @@ module GateRun
         env.data[:slots_source] = slots[:source]
         if slots[:overridden]
           env.warn(code: "slots_overridden",
-                   message: "--slots #{options[:slots]} ignored: machine.gate_slots is #{slots[:count]} " \
-                            "in the machine config, which takes precedence")
+                   message: "--slots #{options[:slots]} lowered to #{slots[:count]}: machine.gate_slots " \
+                            "caps this box at #{slots[:count]} and a flag may not raise it")
         end
       end
 

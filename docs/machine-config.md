@@ -247,14 +247,18 @@ readers below treat that as exactly that rather than inventing a value.
   count of directories an acquire may create, and anything else is a pool
   that can never grant.
 
-### `machine.gate_slots` wins over the fleet's number
+### `machine.gate_slots` caps the fleet's number
 
 The slot count used to reach `lock.rb` and `gate_run.rb` only as `--slots
 N`, relayed by a conductor from a fleet manifest. It still can, and that is
-the fallback. But when this file sets `machine.gate_slots`, that value is
-used and the flag is not, because the machine config describes the box the
-acquire is actually happening on while a fleet manifest is shared by every
-machine that runs the fleet and can only be right for one of them. The
+the fallback. But when this file sets `machine.gate_slots`, that value is a
+cap the flag can lower and never raise, because the machine config describes
+the box the acquire is actually happening on while a fleet manifest is
+shared by every machine that runs the fleet and can only be right for one of
+them. A caller that asks for fewer than the cap gets what it asked for - the
+two numbers mean different things ("how many this box runs at once" versus
+"how many this campaign may run at once"), and a stated campaign cap that
+the machine silently raised is not enforceable as written. The
 rule lives in one place, `Lock.resolve_slot_count`, and both entry points
 to the slot pool call it, so they can never disagree about its size. The
 full statement, with the `slots_overridden` warning and the `data.slots` /

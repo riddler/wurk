@@ -791,10 +791,11 @@ worktree isolation when parallel workers share directories.
   - the **machine-wide cap** - how many gates run at once across ALL
     campaigns, yours and anyone else's - enforced by the shared
     **machine gate slots** (`--slots-dir` + `--slots N`). The machine
-    slot count comes from the machine config's `machine.gate_slots`
-    when set; `--slots N` relayed from a fleet manifest is only the
-    fallback, and a `slots_overridden` warning in the acquire envelope
-    means the relayed number was not the one used.
+    slot count is capped by the machine config's `machine.gate_slots`
+    when set; `--slots N` (a fleet manifest's number, or the campaign's
+    own stated cap) may lower that cap but never raise it, and a
+    `slots_overridden` warning in the acquire envelope means the relayed
+    number was above the cap and was not the one used.
   Distinct from both is the **repo lock**: the project's shared
   resource-keyed gate lock, keyed to a repo, which serializes heavy
   runs against the same checkout no matter whose campaign they belong

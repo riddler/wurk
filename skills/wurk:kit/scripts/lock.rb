@@ -16,8 +16,8 @@ require_relative "lib/user_config"
 # lock directory is a plain CLI argument (see the plan's "What We're NOT
 # Doing": the fleet manifest that would otherwise name these paths is out
 # of scope here). The one thing read from outside the argv is the machine
-# config's `machine.gate_slots`, which caps the slot pool for this box and
-# takes precedence over `--slots N` (Lock.resolve_slot_count).
+# config's `machine.gate_slots`, which caps the slot pool for this box: a
+# `--slots N` may lower that cap, never raise it (Lock.resolve_slot_count).
 module LockCli
   SUBCOMMANDS = %w[acquire release status clear].freeze
   DEFAULT_STALE_AFTER_SECONDS = 1800
@@ -154,9 +154,10 @@ end
     end
 
     # Records where the slot count came from, and warns when the machine
-    # config silently replaced the --slots value the caller passed - the
-    # caller (usually a conductor relaying a fleet manifest) should see that
-    # its number was not the one used.
+    # config LOWERED the --slots value the caller passed - the caller
+    # (usually a conductor relaying a fleet manifest) should see that its
+    # number was not the one used. A flag below the cap is used as given and
+    # draws no warning.
     def report_slot_source(env, slots, options)
       return if slots[:count].nil? || blank?(options[:slots_dir])
 
@@ -165,8 +166,8 @@ end
       return unless slots[:overridden]
 
       env.warn(code: "slots_overridden",
-               message: "--slots #{options[:slots]} ignored: machine.gate_slots is #{slots[:count]} " \
-                        "in the machine config, which takes precedence")
+               message: "--slots #{options[:slots]} lowered to #{slots[:count]}: machine.gate_slots " \
+                        "caps this box at #{slots[:count]} and a flag may not raise it")
     end
 
     def build_owner(options)

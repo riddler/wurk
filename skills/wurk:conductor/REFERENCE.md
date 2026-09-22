@@ -79,10 +79,11 @@ wait on the same lock:
 - `locks/machine-gate-slots/slot-1/`, `slot-2/`, ... - at most
   `multiCampaign.machineGateSlots` concurrent full gates/warms
   machine-wide - the preferred source for that count is the machine
-  config's `machine.gate_slots` (`~/.claude/wurk.local.json`), which
-  `lock.rb acquire` takes over a relayed `--slots N` and flags with a
-  `slots_overridden` warning when the two differ; the manifest number
-  is the fallback for a box that sets none. (Warms at 4x on one machine
+  config's `machine.gate_slots` (`~/.claude/wurk.local.json`), a cap
+  that a relayed `--slots N` may lower but not raise - `lock.rb acquire`
+  uses the smaller, and flags a `slots_overridden` warning only when the
+  flag had to be lowered; the manifest number is the fallback for a box
+  that sets none. (Warms at 4x on one machine
   produced DB-sandbox failures.) A heavy run acquires the repo gate
   lock FIRST, then any free slot; release in reverse order. Fixed
   acquisition order prevents deadlock. A campaign that caps its own

@@ -217,8 +217,9 @@ binding on every campaign in the project.
 - `machineGateSlots` (opt, positive integer) - a **fallback** for the
   machine-wide gate-slot cap. The preferred source is the machine config's
   `machine.gate_slots` (`docs/machine-config.md`, "`machine.gate_slots`
-  wins over the fleet's number"): `lock.rb acquire` takes that over a
-  relayed `--slots N` and warns `slots_overridden` when the two differ. A
+  caps the fleet's number"): `lock.rb acquire` uses the smaller of that
+  and a relayed `--slots N`, and warns `slots_overridden` when the flag had
+  to be lowered. A
   shared file can be right for at most one of the machines that run the
   fleet, so a fleet that carries this number should move it into each
   machine's config and drop the key.

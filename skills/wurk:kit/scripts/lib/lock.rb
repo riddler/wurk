@@ -46,16 +46,24 @@ module Lock
     # `--slots N` value the caller passed (nil when absent), which today is
     # the fleet manifest's number relayed by the conductor.
     #
-    # The machine wins. A fleet manifest is checked in and shared by every
-    # machine that runs the fleet, so its number can only ever be right for
-    # one of them; the machine config describes the box the acquire is
-    # actually happening on (ADR-0013). The flag is the fallback for a
-    # machine that has not said. Returns {count:, source:} with source one
+    # The machine CAPS; the flag may only lower. A fleet manifest is checked
+    # in and shared by every machine that runs the fleet, so its number can
+    # only ever be right for one of them; the machine config describes the
+    # box the acquire is actually happening on (ADR-0013), and nothing relayed
+    # from a shared file may raise the load above what that box has said. But
+    # the two numbers mean different things: the machine's is "how many gates
+    # this box runs at once, across every campaign", the flag's is "how many
+    # THIS caller may run at once" - a campaign that asked for 2 on a box that
+    # permits 3 asked for 2, and must get 2. So the count is the smaller of
+    # the two when both are given. Returns {count:, source:} with source one
     # of "machine_config", "flag", or nil (neither given, count nil), plus
-    # `overridden: true` when both were given and disagree, so the CLI can
-    # warn that the flag it was handed was not the number it used.
+    # `overridden: true` only when the flag was LOWERED to the machine cap, so
+    # the CLI can warn that the number it was handed was not the one used. A
+    # flag below the cap is not an override: the caller got what it asked for.
     def resolve_slot_count(machine:, flag:)
-      if machine
+      if machine && flag && flag < machine
+        { count: flag, source: "flag", overridden: false }
+      elsif machine
         { count: machine, source: "machine_config", overridden: !flag.nil? && flag != machine }
       elsif flag
         { count: flag, source: "flag", overridden: false }
