@@ -108,7 +108,31 @@ module SessionMetrics
     "cache_read_input_tokens" => "cache_read"
   }.freeze
 
-  TOKEN_BUCKETS = TOKEN_FIELDS.values.freeze
+  # usage.cache_creation sub-field -> the bucket it feeds. The API splits a
+  # cache write by the TTL it was written with; both halves are already in
+  # cache_creation_input_tokens, so these two are a breakdown of the
+  # cache_creation bucket, never added to it, and PRICE_COMPONENTS does not
+  # price them (cache_write already does).
+  CACHE_TTL_FIELDS = {
+    "ephemeral_5m_input_tokens" => "cache_creation_5m",
+    "ephemeral_1h_input_tokens" => "cache_creation_1h"
+  }.freeze
+
+  TOKEN_BUCKETS = (TOKEN_FIELDS.values + CACHE_TTL_FIELDS.values).freeze
+
+  # A bare family name a transcript sometimes carries in message.model
+  # ("opus" beside "claude-opus-5") -> the current model of that family, for
+  # the PRICE LOOKUP ONLY. Tokens keep reporting under the name the record
+  # carried, so two windows agree on what they counted; only the dollar
+  # figure looks through the alias, and it says so in a warning. A full id
+  # is never remapped: the table is consulted only when the price table has
+  # no entry for the name as written.
+  MODEL_ALIASES = {
+    "opus" => "claude-opus-5",
+    "sonnet" => "claude-sonnet-5",
+    "haiku" => "claude-haiku-4-5-20251001",
+    "fable" => "claude-fable-5-1"
+  }.freeze
 
   # price component -> the token bucket it prices. Prices are quoted per
   # million tokens (see docs/machine-config.md).
@@ -339,6 +363,13 @@ module SessionMetrics
           value = usage[field]
           bucket[name] += value if value.is_a?(Integer)
         end
+        ttl = usage["cache_creation"]
+        next unless ttl.is_a?(Hash)
+
+        CACHE_TTL_FIELDS.each do |field, name|
+          value = ttl[field]
+          bucket[name] += value if value.is_a?(Integer)
+        end
       end
       by_model
     end
@@ -444,10 +475,15 @@ module SessionMetrics
     def cost(tokens_by_model, prices)
       by_model = {}
       unpriced = []
+      aliased = {}
       total = 0.0
 
       tokens_by_model.each do |model, buckets|
         price = prices[model]
+        if !price.is_a?(Hash) && (alias_id = MODEL_ALIASES[model]) && prices[alias_id].is_a?(Hash)
+          price = prices[alias_id]
+          aliased[model] = alias_id
+        end
         amount = price.is_a?(Hash) ? price_for(buckets, price) : nil
         if amount.nil?
           unpriced << model
@@ -462,6 +498,7 @@ module SessionMetrics
         "currency" => "USD",
         "priced" => prices.any?,
         "by_model" => by_model,
+        "aliased_models" => aliased.sort.to_h,
         "unpriced_models" => unpriced.sort,
         "total" => (prices.any? && unpriced.empty? && !tokens_by_model.empty?) ? round_cents(total) : nil
       }
@@ -727,6 +764,7 @@ module SessionMetricsCli
       env.data[:error_events] = events
 
       warn_about_prices(env, env.data[:cost])
+      warn_about_aliases(env, env.data[:cost])
       warn_about_malformed(env, totals)
       warn_about_classification(env, evidence)
 
@@ -820,6 +858,15 @@ module SessionMetricsCli
           "no metrics.prices in the machine config; cost is null (see docs/machine-config.md)"
         end
       env.warn(code: "cost_unavailable", message: message)
+    end
+
+    # One warning per alias the window actually priced through, so a reader
+    # of the dollar figure knows which rows were priced as a stand-in model.
+    def warn_about_aliases(env, cost)
+      cost["aliased_models"].each do |model, alias_id|
+        env.warn(code: "model_alias_priced",
+                 message: "#{model} priced as #{alias_id} (MODEL_ALIASES); tokens still report under #{model}")
+      end
     end
 
     def warn_about_malformed(env, totals)

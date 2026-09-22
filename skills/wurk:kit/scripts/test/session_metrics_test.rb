@@ -287,6 +287,7 @@ end
 # Counting: tools, failures, skills, tokens.
 class SessionMetricsCountingTest < Minitest::Test
   include SessionFixtures
+  include UserConfigHelper
 
   def test_tool_calls_are_counted_by_name
     summary = session("failure-project", "failures")
@@ -313,8 +314,35 @@ class SessionMetricsCountingTest < Minitest::Test
 
   def test_tokens_are_bucketed_per_model
     tokens = session("clean-project", "interactive-clean")["tokens"]
-    assert_equal({ "input" => 2200, "output" => 600, "cache_creation" => 400, "cache_read" => 8000 },
+    assert_equal({ "input" => 2200, "output" => 600, "cache_creation" => 400, "cache_read" => 8000,
+                   "cache_creation_5m" => 0, "cache_creation_1h" => 0 },
                  tokens["test-model-a"])
+  end
+
+  # sabotage: add the TTL halves into cache_creation -> red. The API already
+  # counts both halves in cache_creation_input_tokens; the sub-buckets are a
+  # breakdown of that number, not more tokens.
+  def test_cache_writes_are_split_by_ttl_beside_the_cache_creation_bucket
+    tokens = session("alias-project", "aliases")["tokens"]["opus"]
+    assert_equal 700, tokens["cache_creation"]
+    assert_equal 500, tokens["cache_creation_5m"]
+    assert_equal 200, tokens["cache_creation_1h"]
+  end
+
+  def test_a_usage_without_the_cache_creation_breakdown_leaves_the_ttl_buckets_at_zero
+    tokens = session("alias-project", "aliases")["tokens"]["test-model-a"]
+    assert_equal 0, tokens["cache_creation_5m"]
+    assert_equal 0, tokens["cache_creation_1h"]
+  end
+
+  def test_the_ttl_buckets_roll_up_into_totals
+    with_user_config(nil) do
+      with_root(["alias-project", "aliases"]) do |dir|
+        _code, envelope = run_cli(["report", "--dir", dir])
+        assert_equal 500, envelope["data"]["totals"]["tokens"]["opus"]["cache_creation_5m"]
+        assert_equal 200, envelope["data"]["totals"]["tokens"]["opus"]["cache_creation_1h"]
+      end
+    end
   end
 
   def test_counts_sort_descending_so_two_runs_agree_byte_for_byte
@@ -364,6 +392,7 @@ end
 # Cost: derived from the machine config's price table, or not at all.
 class SessionMetricsCostTest < Minitest::Test
   include SessionFixtures
+  include UserConfigHelper
 
   PRICES = {
     "test-model-a" => { "input" => 3.0, "output" => 15.0, "cache_write" => 3.75, "cache_read" => 0.3 }
@@ -416,6 +445,57 @@ class SessionMetricsCostTest < Minitest::Test
   def test_an_empty_bucket_needs_no_price_component
     tokens = { "m" => { "input" => 1_000_000, "output" => 0, "cache_creation" => 0, "cache_read" => 0 } }
     assert_equal 3.0, SessionMetrics.cost(tokens, "m" => { "input" => 3.0 })["total"]
+  end
+
+  # sabotage: look the alias up before the name as written -> red when the
+  # table prices "opus" itself. The table wins; the alias is a fallback.
+  def test_a_bare_family_name_is_priced_as_the_current_model_of_that_family
+    tokens = { "opus" => { "input" => 1_000_000, "output" => 0, "cache_creation" => 0, "cache_read" => 0 } }
+    prices = { SessionMetrics::MODEL_ALIASES["opus"] => { "input" => 5.0 } }
+    cost = SessionMetrics.cost(tokens, prices)
+    assert_equal 5.0, cost["total"]
+    assert_equal 5.0, cost["by_model"]["opus"]
+    assert_equal({ "opus" => SessionMetrics::MODEL_ALIASES["opus"] }, cost["aliased_models"])
+    assert_empty cost["unpriced_models"]
+  end
+
+  def test_a_price_for_the_name_as_written_beats_the_alias
+    tokens = { "opus" => { "input" => 1_000_000, "output" => 0, "cache_creation" => 0, "cache_read" => 0 } }
+    prices = { "opus" => { "input" => 1.0 }, SessionMetrics::MODEL_ALIASES["opus"] => { "input" => 5.0 } }
+    cost = SessionMetrics.cost(tokens, prices)
+    assert_equal 1.0, cost["total"]
+    assert_empty cost["aliased_models"]
+  end
+
+  # sabotage: map a full id through the alias table -> red. A full id the
+  # table does not cover stays unpriced and nulls the total, as before.
+  def test_a_full_id_is_never_remapped
+    tokens = { "claude-opus-4-1" => { "input" => 1_000_000, "output" => 0, "cache_creation" => 0, "cache_read" => 0 } }
+    cost = SessionMetrics.cost(tokens, PRICES.merge("claude-opus-5" => { "input" => 5.0 }))
+    assert_nil cost["total"]
+    assert_equal ["claude-opus-4-1"], cost["unpriced_models"]
+    assert_empty cost["aliased_models"]
+  end
+
+  def test_an_alias_with_no_priced_target_is_still_unpriced
+    tokens = { "sonnet" => { "input" => 1_000_000, "output" => 0, "cache_creation" => 0, "cache_read" => 0 } }
+    cost = SessionMetrics.cost(tokens, PRICES)
+    assert_nil cost["total"]
+    assert_equal ["sonnet"], cost["unpriced_models"]
+  end
+
+  def test_the_report_warns_once_per_alias_it_priced_through
+    prices = PRICES.merge(SessionMetrics::MODEL_ALIASES["opus"] => { "input" => 5.0, "output" => 25.0,
+                                                                     "cache_write" => 6.25, "cache_read" => 0.5 })
+    with_user_config("metrics" => { "prices" => prices }) do
+      with_root(["alias-project", "aliases"]) do |dir|
+        _code, envelope = run_cli(["report", "--dir", dir])
+        codes = envelope["warnings"].map { |w| w["code"] }
+        assert_equal 1, codes.count("model_alias_priced")
+        refute_includes codes, "cost_unavailable"
+        refute_nil envelope["data"]["cost"]["total"]
+      end
+    end
   end
 end
 
