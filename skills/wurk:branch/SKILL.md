@@ -68,7 +68,8 @@ parent's unmerged commits. A ref that does not resolve blocks with
 `base_ref_not_found` before anything is created. Without the flag, behavior
 is unchanged: the branch is cut from the default branch on the remote.
 Stacked branches pair with `/wurk:mr`'s stacked mode (request based on the
-parent, DRAFT while upstream is unmerged).
+parent, DRAFT only while the request's base is that parent rather than the
+default branch).
 
 **Branch name** is also the worktree directory name under
 `worktree-per-issue`: `<bead-id>-<slug>`, e.g. `zz-00p.3-regression-ratchet`.
