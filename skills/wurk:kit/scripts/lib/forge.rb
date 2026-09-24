@@ -158,4 +158,24 @@ module Forge
     anchor = end_line ? "L#{line}-#{shape[:range_prefix]}#{end_line}" : "L#{line}"
     "https://#{resolved_host}/#{path}/#{shape[:infix]}blob/#{commit}/#{file}##{anchor}"
   end
+
+  # Whether a request opens as a draft: yes exactly when its base is a
+  # branch other than the default branch. Draft follows the BASE, not the
+  # branch's history - a stacked branch whose request is based on its
+  # unmerged parent cannot merge until the parent lands, so draft says so;
+  # the same branch with its base overridden to the default branch is
+  # mergeable, and a draft there only hides it (wu-o921: six of six
+  # campaign workers opened a base-overridden request as draft because the
+  # old rule keyed off "stacked" rather than off the base).
+  #
+  # No script opens a request - that is a banned code path under
+  # test/contract_test.rb - so this is a pure predicate /wurk:mr's stacked
+  # section cites as the rule's one definition. A blank or nil base means
+  # the request is based on the default branch.
+  def request_draft?(base:, default_branch:)
+    effective_base = base.to_s.strip
+    return false if effective_base.empty?
+
+    effective_base != default_branch.to_s.strip
+  end
 end

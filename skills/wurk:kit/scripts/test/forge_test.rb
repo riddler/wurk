@@ -52,6 +52,28 @@ class ForgeTest < Minitest::Test
     assert_nil Forge.resolve_host("bitbucket")
   end
 
+  # Draft follows the base, not the branch (wu-o921). A request based on an
+  # unmerged parent is a draft because it cannot merge yet; the same stacked
+  # branch with its base overridden to the default branch is mergeable and
+  # opens ready for review.
+  #
+  # sabotage: key the predicate off "base was given" instead of "base differs
+  # from the default branch" -> the second assertion goes red.
+  def test_request_draft_only_when_the_base_is_not_the_default_branch
+    assert Forge.request_draft?(base: "wu-1-parent", default_branch: "main")
+    refute Forge.request_draft?(base: "main", default_branch: "main")
+  end
+
+  # No base named means the request is based on the default branch, and a
+  # stray-whitespace spelling of the default branch is still the default
+  # branch, not a parent.
+  def test_request_draft_treats_no_base_as_the_default_branch
+    refute Forge.request_draft?(base: nil, default_branch: "main")
+    refute Forge.request_draft?(base: "  ", default_branch: "main")
+    refute Forge.request_draft?(base: " main ", default_branch: "main")
+    assert Forge.request_draft?(base: "trunk", default_branch: "main")
+  end
+
   # The producer and the consumer both reference the same constant rather
   # than each spelling their own literal, so a casing edit to one moves the
   # other with it instead of the two drifting apart silently.

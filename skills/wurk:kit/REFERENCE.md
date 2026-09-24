@@ -310,6 +310,16 @@ a diagnostic message ("gh pr list failed: ...") are both fine and expected -
 only the kit's own vocabulary has to stay neutral, not every mention of the
 tool that produced a value.
 
+**Draft follows the request's base, not the branch.** No script opens a
+request (the contract bans that code path), but the one rule for when a
+request opens as a draft lives in `lib/forge.rb` as `Forge.request_draft?(base:,
+default_branch:)` so a test pins both paths: true only when the base is a
+branch other than the default branch (a stacked request on its unmerged
+parent), false when the base is the default branch or no base is named. A
+stacked branch whose dispatch overrides the base to the default branch is
+mergeable and opens ready for review; `/wurk:mr`'s stacked-branches section
+cites this predicate rather than restating it.
+
 **Shelling out goes through one runner.** `Sh.run` (`lib/sh.rb`) always uses
 `Open3.capture3`/`popen3` with an argv array - never a shell string - so a
 developer's `-i` alias on `cp`/`rm`/`mv` cannot apply and no argument's shell

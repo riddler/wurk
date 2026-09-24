@@ -54,10 +54,20 @@ change:
   (it was rebased or gained commits), rebase onto the **parent**, not the
   default branch, and re-run the gate as usual.
 - **Step 8 bases the request on the parent branch** (`--base
-  <parent-branch>` on the create command) and opens it as **DRAFT** while
-  any upstream request in the stack is unmerged. The body names the stack
-  order explicitly ("stack: #12 <- this <- #14") and says "blocked by
-  <parent request>".
+  <parent-branch>` on the create command), and **draft follows the base,
+  not the branch**: the request opens as DRAFT only when its base is a
+  branch other than the default branch. Draft exists because a request
+  based on an unmerged parent cannot merge until that parent lands; a
+  request based on the default branch is mergeable, and marking it draft
+  only hides it. So when a dispatch overrides the base to the default
+  branch (a conductor in MR mode cuts each step from its predecessor with
+  `--base` and opens the request against the default branch anyway), the
+  request opens ready for review with no second flag - the base override
+  is the whole instruction. `Forge.request_draft?` in
+  `skills/wurk:kit/scripts/lib/forge.rb` is the rule's one definition,
+  kept so a test pins both paths; read it rather than restating it. A
+  draft request's body names the stack order explicitly ("stack: #12 <-
+  this <- #14") and says "blocked by <parent request>".
 - **After the parent merges**, expect the forge to auto-retarget the child
   onto the default branch. That is the moment to rebase onto the default
   branch, mark the request ready, and drop the blocked-by line - the
