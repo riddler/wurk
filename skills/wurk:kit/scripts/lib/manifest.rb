@@ -457,7 +457,14 @@ class Manifest
   # checkout being gated. nil when the project declares no gate.cwd, so the
   # caller's own default applies unchanged - gate.rb passes no chdir at all,
   # and the worktree scripts keep passing the worktree path.
-  def gate_chdir(root: checkout_root)
+  #
+  # `root:` is REQUIRED, not defaulted to checkout_root. It defaulted until
+  # wu-1zu, and every one of the five production callers that took the default
+  # was thereby anchored on the checkout the MANIFEST was found in rather than
+  # the tree being gated - which under worktrees is a consumer's whole gate
+  # running somewhere nobody asked about. A required keyword makes that class
+  # of mistake an ArgumentError instead of a silent wrong answer.
+  def gate_chdir(root:)
     gate_cwd && File.join(root, gate_cwd)
   end
 

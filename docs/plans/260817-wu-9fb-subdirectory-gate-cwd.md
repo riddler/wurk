@@ -356,6 +356,16 @@ verify_res = Sh.run(manifest.gate_attest, chdir: manifest.gate_chdir, envelope: 
 invoking gate.rb from inside the subdirectory does not double-apply the
 prefix.
 
+**Later (2026-09-15):** `gate_chdir`'s `root:` keyword no longer has a
+default. Defaulting it to `manifest.checkout_root` was correct for the
+subdirectory case this plan addressed and wrong across git worktrees, where
+the manifest may have been found in a different checkout entirely - so a
+consumer with `gate.cwd` ran its whole gate in the wrong tree (wu-1zu).
+`root:` is now required, and `gate.rb` / `gate_run.rb` pass the working-tree
+root from `git rev-parse --show-toplevel` (`lib/work_tree.rb`). The
+subdirectory guarantee this paragraph is about is unchanged: that anchor is
+invariant across subdirectories too.
+
 Also set, beside the other `env.data` gate fields (near `gate.rb:462-469`):
 
 ```ruby
@@ -523,6 +533,16 @@ Tests to add:
       therefore `checkout_root` are the same from any invocation directory -
       but it is the one property whose breakage no test in either phase would
       catch, so check it by hand here rather than assuming it
+
+      **Later (2026-09-15):** the structural guarantee stated here - "`path`
+      and therefore `checkout_root` are the same from any invocation
+      directory" - holds only for invocation directories inside ONE checkout.
+      Across git worktrees it is false whenever the worktree carries no
+      `.claude/wurk.json` of its own, and `gate.rb` was silently gating the
+      wrong checkout as a result (wu-1zu). The subdirectory property this
+      item checks is unchanged and still wanted; `gate.rb` now gets it from
+      `git rev-parse --show-toplevel` (`lib/work_tree.rb`), which is
+      invariant across subdirectories and also per-worktree correct.
 - [ ] `worktree_create.rb --dry-run` in that scratch repo renders the
       `gate.loop` preview as `(cd <worktree>/sub && ...)`, and a real run
       executes there

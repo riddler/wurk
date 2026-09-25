@@ -1099,14 +1099,14 @@ class ManifestAccessorTest < Minitest::Test
   # audit trail byte-identical for every consumer that does not use the
   # field.
   def test_gate_chdir_is_nil_when_gate_cwd_is_absent
-    assert_nil @m.gate_chdir
+    assert_nil @m.gate_chdir(root: @m.checkout_root)
     assert_nil @m.gate_chdir(root: "/some/worktree")
   end
 
-  # sabotage: join against Dir.pwd instead of the default root argument -> red
-  def test_gate_chdir_joins_gate_cwd_onto_the_default_checkout_root
-    m = ManifestFixtures.load("gate_subdir")
-    assert_equal File.join(m.checkout_root, "backend"), m.gate_chdir
+  # sabotage: give `root:` a default of checkout_root again -> red
+  # (ArgumentError is no longer raised, and the assertion that it is fails)
+  def test_gate_chdir_requires_an_explicit_root
+    assert_raises(ArgumentError) { @m.gate_chdir }
   end
 
   # sabotage: ignore the explicit root: keyword and always use checkout_root

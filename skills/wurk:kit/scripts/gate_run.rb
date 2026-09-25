@@ -11,6 +11,7 @@ require_relative "lib/cli"
 require_relative "lib/manifest"
 require_relative "lib/lock"
 require_relative "lib/user_config"
+require_relative "lib/work_tree"
 
 # GateRun is the sanctioned long-gate runner: `start` launches the manifest's
 # gate detached (optionally under one or more locks), `supervise` is the
@@ -44,7 +45,9 @@ require_relative "lib/user_config"
 #
 # Like gate.rb, this script names no gate tool and no gate flag: every argv
 # comes from the manifest (gate.report/gate.report_loop, falling back to
-# gate.full/gate.loop), and gate.cwd via manifest.gate_chdir.
+# gate.full/gate.loop), and gate.cwd via `Manifest#gate_chdir` - anchored,
+# like gate.rb, on the work tree `git rev-parse --show-toplevel` reports
+# (lib/work_tree.rb), never on manifest.checkout_root (wu-1zu).
 module GateRun
   SUBCOMMANDS = %w[start supervise poll status].freeze
 
@@ -144,11 +147,34 @@ module GateRun
       manifest = Manifest.require!(env)
       return env.emit(io) unless manifest
 
+      # The tree this gate runs in, resolved once - same shape as gate.rb (see
+      # lib/work_tree.rb and wu-1zu). Not manifest.checkout_root: that is the
+      # root of the checkout the MANIFEST was found in, which is a different
+      # checkout whenever the working tree carries no .claude/wurk.json of its
+      # own, and a consumer that declares gate.cwd would then run its whole
+      # gate in that other checkout instead of the tree it was asked to gate.
+      work_tree = WorkTree.root(env)
+      if work_tree.nil?
+        env.warn(
+          code: "work_tree_unresolved",
+          message: "git rev-parse --show-toplevel did not answer, so the paths this gate resolves " \
+                   "on the filesystem fall back to the manifest's checkout root " \
+                   "(#{manifest.checkout_root}), which is the right tree only if the manifest was " \
+                   "found in the tree being gated"
+        )
+      end
+      root = work_tree || manifest.checkout_root
+      env.data[:work_tree_root] = root
+
       loop_mode = options[:profile] == "loop"
       reporting = loop_mode ? manifest.gate_report_loop : manifest.gate_report
       gate_argv = reporting || (loop_mode ? manifest.gate_loop : manifest.gate_full)
-      chdir = manifest.gate_chdir
+      chdir = manifest.gate_chdir(root: root)
 
+      # run_dir stays anchored on manifest.checkout_root, deliberately, not on
+      # `root`: the detached gate RUNS in the work tree (chdir, above) but
+      # RECORDS beside the manifest, so a /wurk:cleanup that removes the
+      # worktree cannot orphan a run still writing its sentinel there.
       run_id = "#{Time.now.utc.strftime('%Y%m%dT%H%M%SZ')}-#{Process.pid}"
       run_dir = options[:run_dir] || File.join(manifest.checkout_root, ".claude", "wurk-runs", "gate", run_id)
       log_path = File.join(run_dir, LOG_FILE)
