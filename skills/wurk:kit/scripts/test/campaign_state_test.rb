@@ -944,6 +944,104 @@ class CampaignStateQueueTest < Minitest::Test
     refute env["ok"]
     assert env["blocked"].any? { |b| b["code"] == "queued_after_self" }, env.inspect
   end
+
+  # --- disarm on a queued plan (wu-vmia) ------------------------------------
+
+  # sabotage: keep run_disarm's guard at `campaign[:armed]` alone -> red
+  # here (not_armed, changed false). sabotage: pass drop_after: false for
+  # QUEUED -> red on the Status line assertion (the after tail survives).
+  def test_disarm_takes_a_queued_plan_back_to_drafted_and_drops_the_after_tail
+    write_plan(@dir, "042", status: "ARMED 2026-09-14 18:41 -0600")
+    write_consent(@dir, "042")
+    path = write_plan(@dir, "043", status: "QUEUED 2026-09-14 19:00 -0600 after 042 (queued by the operator)")
+    write_consent(@dir, "043")
+
+    code, env = run_cli(["disarm", "043", "--dir", @dir])
+
+    assert_equal 0, code
+    assert env["ok"], env.inspect
+    assert env["data"]["changed"]
+    assert_equal "QUEUED", env["data"]["before"]
+    assert_equal "DRAFTED", env["data"]["after"]
+    assert_empty env["warnings"].map { |w| w["code"] } & ["not_armed"]
+    assert_includes File.read(path), "Status: DRAFTED 2026-09-14 20:00 -0600 (queued by the operator)\n"
+    refute env["data"]["campaign"]["queued"]
+    assert_nil env["data"]["campaign"]["queued_after"]
+  end
+
+  # A satisfied queue reports armed (virtual promotion) while the file
+  # still says QUEUED; disarm must drop the after tail on that path too.
+  def test_disarm_of_a_virtually_promoted_queued_plan_drops_the_after_tail
+    write_plan(@dir, "042", status: "WRAPPED 2026-09-14 19:30 -0600")
+    path = write_plan(@dir, "043", status: "QUEUED 2026-09-14 19:00 -0600 after 042")
+    write_consent(@dir, "043")
+
+    code, env = run_cli(["disarm", "043", "--dir", @dir])
+
+    assert_equal 0, code
+    assert_equal "QUEUED", env["data"]["before"]
+    assert_includes File.read(path), "Status: DRAFTED 2026-09-14 20:00 -0600\n"
+  end
+
+  # QUEUED is disarmable now, so the running refusal is all that keeps a
+  # live queued campaign's file intact. sabotage: drop run_disarm's
+  # campaign_running block -> red.
+  def test_disarm_refuses_a_queued_plan_while_it_is_running
+    path = write_plan(@dir, "043", status: "QUEUED 2026-09-14 19:00 -0600 after 042")
+    write_consent(@dir, "043")
+    hold_mutex(@dir, "043")
+    before = File.read(path)
+
+    code, env = run_cli(["disarm", "043", "--dir", @dir])
+
+    assert_equal 1, code
+    assert_equal ["campaign_running"], env["blocked"].map { |b| b["code"] }
+    refute env["data"]["changed"]
+    assert_equal before, File.read(path)
+  end
+
+  def test_disarm_dry_run_on_a_queued_plan_writes_nothing
+    path = write_plan(@dir, "043", status: "QUEUED 2026-09-14 19:00 -0600 after 042")
+    before = File.read(path)
+
+    code, env = run_cli(["disarm", "043", "--dir", @dir, "--dry-run"])
+
+    assert_equal 0, code
+    assert env["data"]["changed"]
+    assert_equal "QUEUED", env["data"]["before"]
+    assert_equal "DRAFTED", env["data"]["after"]
+    assert_equal 1, env["commands"].length
+    assert_match(/QUEUED -> DRAFTED 2026-09-14 20:00 -0600 \(drops after 042\)\z/, env["commands"].first)
+    assert_equal before, File.read(path)
+  end
+
+  # The ARMED path is untouched: drop_after applies only to QUEUED, so a
+  # promoted plan's leftover `after <id>` (plain arm keeps it) stays put.
+  # sabotage: pass drop_after: true unconditionally -> red.
+  def test_disarm_of_an_armed_plan_keeps_the_rest_of_the_line_verbatim
+    path = write_plan(@dir, "043", status: "ARMED 2026-09-14 19:00 -0600 after 042")
+    write_consent(@dir, "043")
+
+    code, env = run_cli(["disarm", "043", "--dir", @dir])
+
+    assert_equal 0, code
+    assert_equal "ARMED", env["data"]["before"]
+    assert_includes File.read(path), "Status: DRAFTED 2026-09-14 20:00 -0600 after 042\n"
+  end
+
+  def test_disarm_of_a_terminal_plan_still_warns_not_armed
+    path = write_plan(@dir, "043", status: "WRAPPED 2026-09-14 19:00 -0600")
+    before = File.read(path)
+
+    code, env = run_cli(["disarm", "043", "--dir", @dir])
+
+    assert_equal 0, code
+    refute env["data"]["changed"]
+    warning = env["warnings"].find { |w| w["code"] == "not_armed" }
+    assert warning, env["warnings"].inspect
+    assert_match(/neither ARMED nor QUEUED/, warning["message"])
+    assert_equal before, File.read(path)
+  end
 end
 
 # wu-9vp: under launchd there is no LANG/LC_ALL/LC_CTYPE, so Ruby's default
@@ -1575,6 +1673,37 @@ class CampaignStateArmHostTest < Minitest::Test
       assert env["ok"], env.inspect
       assert_equal "DRAFTED", env["data"]["campaign"]["status"]
       assert_includes File.read(path), "Machine: mbp\n"
+    end
+  end
+
+  # wu-vmia: disarm now rewrites QUEUED, and the foreign-machine refusal
+  # must still stop it. sabotage: drop run_disarm's refuse_foreign_machine
+  # line -> red (the plan is QUEUED, so the guard no longer catches it).
+  def test_disarm_refuses_a_queued_plan_bound_to_another_machine
+    path = write_plan_with_machine(@dir, "043", status: "QUEUED 2026-09-14 19:00 -0600 after 042", machine: "mbp")
+    write_consent(@dir, "043")
+    before = File.read(path)
+
+    with_user_config("machine" => { "name" => "air" }) do
+      code, env = run_cli(["disarm", "043", "--dir", @dir])
+
+      assert_equal 1, code
+      assert_equal ["bound_to_other_machine"], env["blocked"].map { |b| b["code"] }
+      refute env["data"]["changed"]
+      assert_equal before, File.read(path)
+    end
+  end
+
+  def test_disarm_of_a_queued_plan_on_the_bound_machine_keeps_the_binding
+    path = write_plan_with_machine(@dir, "043", status: "QUEUED 2026-09-14 19:00 -0600 after 042", machine: "mbp")
+    write_consent(@dir, "043")
+
+    with_user_config("machine" => { "name" => "mbp" }) do
+      code, env = run_cli(["disarm", "043", "--dir", @dir])
+
+      assert_equal 0, code
+      assert_equal "QUEUED", env["data"]["before"]
+      assert_includes File.read(path), "Status: DRAFTED 2026-09-14 20:00 -0600\nMachine: mbp\n"
     end
   end
 

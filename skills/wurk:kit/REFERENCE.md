@@ -795,6 +795,9 @@ argument. The file schema, the campaign record's keys, and every
 `campaign_state.rb`". The one rule worth restating here: `arm` refuses
 without an ADOPTED consent file and never writes one, because consent is
 a human artifact and this script only ever edits the plan's Status line.
+`disarm` takes an ARMED or a QUEUED plan back to DRAFTED (dropping a
+QUEUED line's `after <id>` tail, `data.before` naming the word cleared)
+and warns `not_armed` on anything else.
 A plan's H1 may read `# Campaign <id>` or `# Campaign: <id>`; `list`
 warns (`unparsed_campaign_file`) about an unrecognized top-level `*.md`
 under the dir only when its column-1 Status line reads ARMED or QUEUED -

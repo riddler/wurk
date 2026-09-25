@@ -252,10 +252,13 @@ module CampaignState
     end
 
     # Rewrites the Status line's word and stamp to `<word> <now>`, keeping
-    # everything after the stamp on that line. With no Status line, inserts
-    # one as its own paragraph after the first H1 (or at the top when there
-    # is no H1). Returns the new content; never touches the filesystem.
-    def rewrite_status(content, word, now: clock.call, tail: nil)
+    # everything after the stamp on that line. `drop_after` also removes an
+    # `after <id>` tail directly after the old stamp (disarm on a QUEUED
+    # plan: the predecessor means nothing once the plan is DRAFTED); prose
+    # past that tail is still kept. With no Status line, inserts one as its
+    # own paragraph after the first H1 (or at the top when there is no H1).
+    # Returns the new content; never touches the filesystem.
+    def rewrite_status(content, word, now: clock.call, tail: nil, drop_after: false)
       new_head = "Status: #{word} #{stamp(now)}"
       new_head += " #{tail}" if tail
       lines = content.lines
@@ -263,7 +266,9 @@ module CampaignState
 
       if parsed[:line]
         index = parsed[:line] - 1
-        lines[index] = lines[index].sub(STATUS_LINE, new_head)
+        rest = lines[index][lines[index][STATUS_LINE].length..]
+        rest = rest.sub(AFTER_TAIL, "") if drop_after
+        lines[index] = new_head + rest
         return lines.join
       end
 
@@ -463,7 +468,8 @@ module CampaignState
 end
 
 # The CLI: list / show read, arm / disarm rewrite one plan file's Status
-# line and nothing else. Every subcommand takes the same location flags.
+# line and nothing else (disarm takes ARMED or QUEUED back to DRAFTED).
+# Every subcommand takes the same location flags.
 module CampaignStateCli
   SUBCOMMANDS = %w[list show arm disarm].freeze
   USAGE = "campaign_state.rb <list|show ID|arm ID [--after ID] [--host NAME]|disarm ID> [--dir DIR ...] [--locks-dir DIR] [--dry-run]"
@@ -658,9 +664,13 @@ module CampaignStateCli
 
     # --- disarm ---------------------------------------------------------------
     #
-    # Flips ARMED back to DRAFTED. Refuses while the campaign's mutex is
-    # live-held: the conductor holding it has already read ARMED, and the
-    # file flip would not stop it - only mislead the next reader.
+    # Flips ARMED back to DRAFTED, and QUEUED too (dropping its `after <id>`
+    # tail), so a queued plan can be taken back out of the queue without a
+    # hand edit - from the far machine the peer channel's disarm is the only
+    # route. Refuses while the campaign's mutex is live-held: the conductor
+    # holding it has already read ARMED (or a satisfied queue), and the file
+    # flip would not stop it - only mislead the next reader. DRAFTED and the
+    # terminal words warn not_armed and change nothing.
 
     def run_disarm(env, options, id, io, this_machine)
       path = locate(env, options, id)
@@ -687,12 +697,15 @@ module CampaignStateCli
         return env.emit(io)
       end
 
-      unless campaign[:armed]
-        env.warn(code: "not_armed", message: "#{id} is not ARMED (Status #{campaign[:status].inspect}); nothing to disarm")
+      # The code stays not_armed although QUEUED now disarms too: consumers
+      # (a peer handler relaying disarm) match on it.
+      queued = campaign[:status] == CampaignState::QUEUED
+      unless campaign[:armed] || queued
+        env.warn(code: "not_armed", message: "#{id} is neither ARMED nor QUEUED (Status #{campaign[:status].inspect}); nothing to disarm")
         return env.emit(io)
       end
 
-      rewrite(env, options, path, campaign, CampaignState::DRAFTED, this_machine)
+      rewrite(env, options, path, campaign, CampaignState::DRAFTED, this_machine, drop_after: queued)
       env.emit(io)
     end
 
@@ -844,14 +857,15 @@ module CampaignStateCli
     # already-armed/already-queued no-op (word and host both nil or
     # unchanged) writes nothing at all. Both changes are composed into one
     # write_atomically call.
-    def rewrite(env, options, path, campaign, word, this_machine, tail: nil, host: nil)
+    def rewrite(env, options, path, campaign, word, this_machine, tail: nil, host: nil, drop_after: false)
       now = CampaignState.clock.call
       content = CampaignState.read_utf8(path)
       changed = false
 
       if word
-        content = CampaignState.rewrite_status(content, word, now: now, tail: tail)
-        env.commands << "rewrite Status line in #{path}: #{campaign[:status] || 'none'} -> #{word} #{CampaignState.stamp(now)}#{tail ? " #{tail}" : ''}"
+        content = CampaignState.rewrite_status(content, word, now: now, tail: tail, drop_after: drop_after)
+        dropped = drop_after && campaign[:queued_after] ? " (drops after #{campaign[:queued_after]})" : ""
+        env.commands << "rewrite Status line in #{path}: #{campaign[:status] || 'none'} -> #{word} #{CampaignState.stamp(now)}#{tail ? " #{tail}" : ''}#{dropped}"
         env.data[:after] = word
         changed = true
       end

@@ -382,17 +382,24 @@ under the current directory) and `--locks-dir DIR`.
   composed with the Status write into one atomic write when both
   apply. `data.machine_before` / `data.machine_after` join
   `data.before` / `data.after`.
-- **`disarm ID`** - rewrites the Status to `DRAFTED <now>` the same way.
-  Refuses `campaign_running` while the mutex is live-held: the conductor
-  holding it has already read ARMED and the file flip would only mislead
-  the next reader. Not armed: ok, `changed: false`, warning `not_armed`.
+- **`disarm ID`** - rewrites an ARMED or a QUEUED Status to `DRAFTED
+  <now>` the same way; on a QUEUED line it also drops the `after <id>`
+  tail (prose past it is kept), which takes the plan back out of the
+  queue without a hand edit. `data.before` names the word it cleared
+  (`ARMED` or `QUEUED`). Refuses `campaign_running` while the mutex is
+  live-held: the conductor holding it has already read ARMED (or a
+  satisfied queue) and the file flip would only mislead the next reader.
+  Any other Status (DRAFTED, WRAPPED, ABORTED, missing, unknown): ok,
+  `changed: false`, warning `not_armed` - the code predates QUEUED
+  disarm and is kept because consumers match on it; its message says
+  the plan is neither ARMED nor QUEUED.
   `--dry-run` as for `arm`. The consent file is never touched, and neither
   is the `Machine:` line - a disarmed plan keeps its binding. Refuses the
   same `bound_to_other_machine` / `machine_binding_malformed` /
   `machine_name_unset` / `machine_binding_blank` set as `arm`, before the
-  `campaign_running` check: this machine cannot see a foreign machine's
-  mutex, so a disarm from here cannot know whether a conductor there
-  already read ARMED.
+  `campaign_running` check, for QUEUED exactly as for ARMED: this
+  machine cannot see a foreign machine's mutex, so a disarm from here
+  cannot know whether a conductor there already read ARMED.
 
 Both mutations write via a sibling temp file and rename, so a concurrent
 `list` sees the old file or the new one.
