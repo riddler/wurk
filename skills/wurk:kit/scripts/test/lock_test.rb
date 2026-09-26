@@ -7,8 +7,10 @@ require "tmpdir"
 require "fileutils"
 require_relative "../lib/lock"
 require_relative "../lock"
+require_relative "../lib/sh"
 require_relative "support/user_config_helper"
 require_relative "support/dead_pid"
+require_relative "support/fake_sh"
 
 # A no-op sleeper that just counts calls, so a bounded-wait test never
 # sleeps for real. Paired with FakeClock below, this is the seam the plan's
@@ -566,10 +568,13 @@ class LockCliTest < Minitest::Test
 
   def setup
     @dir = Dir.mktmpdir
+    @fake = FakeSh.new
+    Sh.runner = @fake
   end
 
   def teardown
     FileUtils.remove_entry(@dir)
+    Sh.runner = nil
   end
 
   def run_cli(argv)
@@ -793,6 +798,105 @@ class LockCliTest < Minitest::Test
     assert Dir.exist?(lock_dir)
   end
 
+  # --- acquire --hold-seconds: the keeper, via FakeSh ------------------------
+
+  def test_acquire_with_hold_seconds_spawns_one_keeper_and_records_its_pid
+    code, env = run_cli(%W[acquire --gate-lock #{lock_dir} --campaign c1 --bead zz-1 --hold-seconds 60])
+
+    assert_equal 0, code
+    assert_equal 1, @fake.detached_calls.length
+
+    call = @fake.detached_calls.first
+    assert_equal [RbConfig.ruby, LockCli::SELF_PATH, "keep"], call.argv[0, 3]
+    assert_includes call.argv, "--dir"
+    assert_includes call.argv, lock_dir
+    idx = call.argv.index("--acquirer-pid")
+    assert_equal Process.pid.to_s, call.argv[idx + 1]
+    assert_equal File::NULL, call.out_path
+
+    keeper_pid = env["data"]["keeper_pid"]
+    refute_nil keeper_pid
+    hold_until_idx = call.argv.index("--hold-until")
+    owner = Lock.read_owner(lock_dir)
+    assert_equal keeper_pid.to_s, owner["pid"]
+    assert_equal call.argv[hold_until_idx + 1], owner["hold_until"]
+  end
+
+  def test_acquire_with_hold_seconds_hands_the_keeper_every_lock_including_the_slot_taken
+    Lock.try_acquire(File.join(slots_dir, "slot-1"), { "campaign" => "other", "bead" => "zz-9" })
+
+    code, env = run_cli(%W[acquire --gate-lock #{lock_dir} --slots-dir #{slots_dir} --slots 2
+                           --campaign c1 --bead zz-1 --hold-seconds 60])
+
+    assert_equal 0, code
+    call = @fake.detached_calls.first
+    assert_includes call.argv, lock_dir
+    assert_includes call.argv, File.join(slots_dir, "slot-2")
+    refute_includes call.argv, slots_dir
+
+    keeper_pid = env["data"]["keeper_pid"]
+    assert_equal keeper_pid.to_s, Lock.read_owner(lock_dir)["pid"]
+    assert_equal keeper_pid.to_s, Lock.read_owner(File.join(slots_dir, "slot-2"))["pid"]
+  end
+
+  def test_acquire_with_hold_seconds_and_pid_is_a_usage_error
+    io = StringIO.new
+    _, status = capture_exit do
+      LockCli.run(%W[acquire --gate-lock #{lock_dir} --campaign c1 --bead zz-1 --hold-seconds 60 --pid 123], io: io)
+    end
+
+    assert_equal 2, status
+    refute Dir.exist?(lock_dir)
+    assert_empty @fake.detached_calls
+  end
+
+  def test_acquire_hold_seconds_dry_run_spawns_nothing
+    code, env = run_cli(%W[acquire --gate-lock #{lock_dir} --campaign c1 --bead zz-1 --hold-seconds 60 --dry-run])
+
+    assert_equal 0, code
+    refute Dir.exist?(lock_dir)
+    assert_empty @fake.detached_calls
+    assert(env["commands"].any? { |c| c.include?("keep") })
+  end
+
+  def test_acquire_without_hold_seconds_spawns_no_keeper
+    code, env = run_cli(%W[acquire --gate-lock #{lock_dir} --campaign c1 --bead zz-1])
+
+    assert_equal 0, code
+    assert_empty @fake.detached_calls
+    refute Lock.read_owner(lock_dir).key?("hold_until")
+  end
+
+  def test_acquire_with_hold_seconds_seeds_the_acquirer_pid_before_spawning
+    seen_pid = nil
+    @fake.define_singleton_method(:spawn_detached) do |argv, chdir: nil, out_path:|
+      @detached_calls << FakeSh::DetachedCall.new(argv, chdir, out_path)
+      seen_pid = Lock.read_owner(argv[argv.index("--dir") + 1])["pid"]
+      @next_detached_pid += 1
+    end
+
+    code, env = run_cli(%W[acquire --gate-lock #{lock_dir} --campaign c1 --bead zz-1 --hold-seconds 60])
+
+    assert_equal 0, code
+    assert_equal Process.pid.to_s, seen_pid
+    assert_equal env["data"]["keeper_pid"].to_s, Lock.read_owner(lock_dir)["pid"]
+  end
+
+  def test_acquire_keeper_spawn_failure_releases_every_lock_and_blocks
+    Lock.try_acquire(File.join(slots_dir, "slot-1"), { "campaign" => "other", "bead" => "zz-9" })
+    @fake.fail_detached!(Errno::ENOENT)
+
+    code, env = run_cli(%W[acquire --gate-lock #{lock_dir} --slots-dir #{slots_dir} --slots 2
+                           --campaign c1 --bead zz-1 --hold-seconds 60])
+
+    assert_equal 1, code
+    refute env["ok"]
+    assert_equal "keeper_spawn_failed", env["blocked"].first["code"]
+    refute Dir.exist?(lock_dir)
+    refute Dir.exist?(File.join(slots_dir, "slot-2"))
+    assert Dir.exist?(File.join(slots_dir, "slot-1")), "the never-ours slot must survive untouched"
+  end
+
   private
 
   # OptionParser's --help / usage_error paths call Kernel#exit; capture that
@@ -811,5 +915,153 @@ class LockCliTest < Minitest::Test
     $stderr.string
   ensure
     $stderr = original
+  end
+end
+
+# Real-process tests for the bead's two acceptance criteria. Sh.runner is
+# the real runner here (no FakeSh) - a keeper spawned in-process by FakeSh
+# proves nothing about a keeper's lifetime, so each test spawns the acquire
+# as its own OS process, standing in for the tool call a conductor session
+# makes, and waits for it to exit before asserting anything: the "conductor"
+# side of the bug is provably gone before the assertions even start.
+class LockKeeperProcessTest < Minitest::Test
+  LOCK_RB = File.expand_path(File.join(__dir__, "..", "lock.rb"))
+  BOUNDED_WAIT_SECONDS = 10
+  BOUNDED_WAIT_POLL_SECONDS = 0.1
+
+  def setup
+    Sh.runner = nil
+    @dir = Dir.mktmpdir
+    @keeper_pids = []
+  end
+
+  def teardown
+    @keeper_pids.each { |pid| kill_quietly(pid) }
+    FileUtils.remove_entry(@dir)
+  end
+
+  def gate_dir
+    File.join(@dir, "gate-x")
+  end
+
+  # Runs `lock.rb <argv>` as its own process, waits for it, and returns the
+  # parsed envelope. Standing in for one conductor tool call.
+  def run_lock_process(argv)
+    env_path = File.join(@dir, "env-#{rand(1_000_000)}.json")
+    pid = Process.spawn(RbConfig.ruby, LOCK_RB, *argv, out: env_path)
+    Process.wait(pid)
+    JSON.parse(File.read(env_path))
+  end
+
+  def acquire_with_hold(hold_seconds, extra = [])
+    run_lock_process(%W[acquire --gate-lock #{gate_dir} --campaign c1 --bead zz-1 --hold-seconds #{hold_seconds}] + extra)
+  end
+
+  def wait_until(timeout: BOUNDED_WAIT_SECONDS)
+    deadline = Time.now + timeout
+    loop do
+      return true if yield
+
+      return false if Time.now >= deadline
+
+      sleep BOUNDED_WAIT_POLL_SECONDS
+    end
+  end
+
+  def pid_alive?(pid)
+    Process.kill(0, pid)
+    true
+  rescue Errno::ESRCH
+    false
+  end
+
+  def kill_quietly(pid)
+    Process.kill("KILL", pid)
+  rescue Errno::ESRCH, TypeError
+    nil
+  end
+
+  # --- acceptance 1: a worker-held lock outlives the acquiring process -----
+
+  def test_worker_lock_outlives_the_acquiring_process
+    env = acquire_with_hold(60)
+    keeper_pid = env["data"]["keeper_pid"]
+    @keeper_pids << keeper_pid
+
+    refute_nil keeper_pid
+    assert wait_until { pid_alive?(keeper_pid) }, "the keeper never started"
+
+    probe = Lock.probe(gate_dir, stale_after_seconds: 1800)
+    assert_equal true, probe[:holder_alive]
+    refute probe[:stale]
+
+    clear_env = run_lock_process(%W[clear --dir #{gate_dir}])
+    assert_equal "lock_not_provably_stale", clear_env["blocked"].first["code"]
+
+    release_env = run_lock_process(%W[release --dir #{gate_dir} --campaign c1 --bead zz-1])
+    assert release_env["data"]["released"]
+
+    assert wait_until { !pid_alive?(keeper_pid) }, "the keeper did not exit after release"
+  end
+
+  # --- acceptance 2: a killed keeper leaves a provably stale lock ----------
+
+  def test_killed_keeper_leaves_a_provably_stale_lock
+    env = acquire_with_hold(60)
+    keeper_pid = env["data"]["keeper_pid"]
+    @keeper_pids << keeper_pid
+
+    Process.kill("KILL", keeper_pid)
+    assert wait_until { !pid_alive?(keeper_pid) }, "the keeper did not die"
+
+    probe = Lock.probe(gate_dir, stale_after_seconds: 1800)
+    assert_equal "dead_holder_pid", probe[:staleness_reason]
+
+    clear_env = run_lock_process(%W[clear --dir #{gate_dir}])
+    assert clear_env["data"]["cleared"]
+    refute Dir.exist?(gate_dir)
+  end
+
+  # --- acceptance 2 (crashed worker): an expired hold is provably stale ----
+
+  def test_expired_hold_leaves_a_provably_stale_lock
+    env = acquire_with_hold(1)
+    keeper_pid = env["data"]["keeper_pid"]
+    @keeper_pids << keeper_pid
+
+    assert wait_until { !pid_alive?(keeper_pid) }, "the keeper did not exit at its lease"
+    assert Dir.exist?(gate_dir), "an expired hold must leave the lock in place"
+
+    probe = Lock.probe(gate_dir, stale_after_seconds: 1800)
+    assert_equal "dead_holder_pid", probe[:staleness_reason]
+
+    clear_env = run_lock_process(%W[clear --dir #{gate_dir}])
+    assert clear_env["data"]["cleared"]
+  end
+
+  # --- the contrast: the original bug, pinned ------------------------------
+  #
+  # A lock taken with --pid <conductor session pid> reads stale the instant
+  # that session dies, even though nothing about the work it guards has
+  # changed - this is exactly why a worker's hold must go through the
+  # keeper (--hold-seconds) instead of naming a session pid it does not
+  # control the lifetime of.
+
+  def test_session_pid_lock_reads_stale_when_the_session_dies
+    conductor_pid = Process.spawn(RbConfig.ruby, "-e", "sleep", out: File::NULL, err: File::NULL)
+
+    begin
+      env = run_lock_process(%W[acquire --gate-lock #{gate_dir} --campaign c1 --bead zz-1 --pid #{conductor_pid}])
+      assert env["ok"]
+
+      Process.kill("KILL", conductor_pid)
+      Process.wait(conductor_pid)
+      assert wait_until { !pid_alive?(conductor_pid) }, "the conductor stand-in did not die"
+
+      probe = Lock.probe(gate_dir, stale_after_seconds: 1800)
+      assert_equal "dead_holder_pid", probe[:staleness_reason]
+    ensure
+      kill_quietly(conductor_pid)
+    end
   end
 end

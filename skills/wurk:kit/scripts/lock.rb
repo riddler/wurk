@@ -4,32 +4,44 @@
 require "json"
 require "socket"
 require "fileutils"
+require "rbconfig"
 require_relative "lib/envelope"
 require_relative "lib/cli"
 require_relative "lib/lock"
+require_relative "lib/sh"
 require_relative "lib/user_config"
 
 # LockCli is the thin wiring between Lock's pure filesystem logic and the
 # kit's envelope contract: acquire (bounded wait, fixed order, all-or-
 # nothing), release (refuses a foreign owner), status (read-only probe),
-# and clear (refuses anything not provably stale). No manifest, no Sh - a
-# lock directory is a plain CLI argument (see the plan's "What We're NOT
-# Doing": the fleet manifest that would otherwise name these paths is out
-# of scope here). The one thing read from outside the argv is the machine
-# config's `machine.gate_slots`, which caps the slot pool for this box: a
-# `--slots N` may lower that cap, never raise it (Lock.resolve_slot_count).
+# clear (refuses anything not provably stale), and keep (the detached
+# keeper `acquire --hold-seconds` spawns). No manifest; its one shell-out
+# is the keeper spawn, through `Sh.spawn_detached` (see the plan's "What
+# We're NOT Doing": the fleet manifest that would otherwise name these
+# paths is out of scope here). The one thing read from outside the argv is
+# the machine config's `machine.gate_slots`, which caps the slot pool for
+# this box: a `--slots N` may lower that cap, never raise it
+# (Lock.resolve_slot_count).
 module LockCli
-  SUBCOMMANDS = %w[acquire release status clear].freeze
+  SUBCOMMANDS = %w[acquire release status clear keep].freeze
   DEFAULT_STALE_AFTER_SECONDS = 1800
+  KEEPER_POLL_SECONDS = 2
+
+  # The absolute path to this file, used to spawn the detached keeper
+  # (`ruby <this file> keep ...`), the same move gate_run.rb makes to spawn
+  # its own detached supervisor (gate_run.rb:67).
+  SELF_PATH = File.expand_path(__FILE__)
 
   ACQUIRE_USAGE = "lock.rb acquire [--campaign-mutex DIR] [--gate-lock DIR] [--tracker-lock DIR] " \
                   "[--registry-lock DIR] [--slots-dir DIR [--slots N]] --campaign ID --bead ID " \
-                  "[--pid N] [--purpose S] [--wait-seconds N] [--poll-seconds N]"
+                  "[--pid N] [--hold-seconds N] [--purpose S] [--wait-seconds N] [--poll-seconds N]"
   SLOTS_HINT = "--slots-dir needs a slot count: --slots N, or machine.gate_slots in the machine config " \
                "(~/.claude/wurk.local.json), which takes precedence when both are set"
+  HOLD_PID_HINT = "a keeper-held lock's pid is the keeper's; pass one or the other"
   RELEASE_USAGE = "lock.rb release --dir DIR --campaign ID --bead ID [--pid N]"
   STATUS_USAGE = "lock.rb status --dir DIR [--stale-after-seconds N]"
   CLEAR_USAGE = "lock.rb clear --dir DIR"
+  KEEP_USAGE = "lock.rb keep --dir DIR [--dir DIR ...] --acquirer-pid N --hold-until ISO [--poll-seconds N]"
 
   class << self
     def run(argv, io: $stdout)
@@ -44,13 +56,14 @@ module LockCli
       when "release" then run_release(argv, io)
       when "status" then run_status(argv, io)
       when "clear" then run_clear(argv, io)
+      when "keep" then run_keep(argv, io)
       end
     end
 
     private
 
     def usage
-      "usage: lock.rb <acquire|release|status|clear> [options]"
+      "usage: lock.rb <acquire|release|status|clear|keep> [options]"
     end
 
     # --- acquire ----------------------------------------------------------
@@ -61,6 +74,8 @@ module LockCli
       Cli.parse!(parser, argv)
 
       usage_error!(ACQUIRE_USAGE, parser) if blank?(options[:campaign]) || blank?(options[:bead])
+      usage_error!(ACQUIRE_USAGE, parser) if options[:hold_seconds] && options[:hold_seconds] <= 0
+      usage_error!(ACQUIRE_USAGE, parser, hint: HOLD_PID_HINT) if options[:hold_seconds] && options[:pid]
 
       env = Envelope.new(script: "lock_acquire")
       config = UserConfig.require!(env)
@@ -96,6 +111,8 @@ end
       if result[:acquired]
         env.data[:acquired] = result[:locks]
         result[:locks].each { |l| env.commands << "mkdir #{l[:dir]} (owner campaign=#{owner['campaign']} bead=#{owner['bead']})" }
+        return spawn_keeper_and_emit(env, io, result[:locks], owner) if options[:hold_seconds]
+
         return env.emit(io)
       end
 
@@ -120,9 +137,45 @@ end
       opts.on("--campaign ID", "campaign id, recorded in the owner file") { |v| options[:campaign] = v }
       opts.on("--bead ID", "bead id, recorded in the owner file") { |v| options[:bead] = v }
       opts.on("--pid N", Integer, "holder pid, recorded in the owner file") { |v| options[:pid] = v }
+      opts.on("--hold-seconds N", Integer, "spawn a detached keeper that holds this lock for N seconds") { |v| options[:hold_seconds] = v }
       opts.on("--purpose S", "free-text purpose, recorded in the owner file") { |v| options[:purpose] = v }
       opts.on("--wait-seconds N", Integer, "bounded wait before lock_contended (default 600)") { |v| options[:wait_seconds] = v }
       opts.on("--poll-seconds N", Integer, "poll interval while waiting (default 10)") { |v| options[:poll_seconds] = v }
+    end
+
+    # Spawns the detached keeper for every lock this acquire call just took,
+    # rewrites each owner file's pid to the keeper's, and reports
+    # data.keeper_pid/data.hold_until. A SystemCallError from the spawn
+    # (missing ruby, unusable argv) releases every lock just taken - a hold
+    # with no keeper would record this CLI's own pid, which is dead the
+    # moment it exits - and blocks keeper_spawn_failed.
+    def spawn_keeper_and_emit(env, io, locks, owner)
+      keeper_argv = build_keeper_argv(locks, owner)
+
+      begin
+        keeper_pid = Sh.spawn_detached(keeper_argv, out_path: File::NULL)
+      rescue SystemCallError => e
+        locks.reverse_each { |l| Lock.release(l[:dir], owner, force: true) }
+        env.data[:acquired] = []
+        env.block!(code: "keeper_spawn_failed",
+                   message: "could not spawn the lock keeper: #{e.message}")
+        return env.emit(io)
+      end
+
+      locks.each { |l| Lock.rewrite_owner_pid(l[:dir], keeper_pid) }
+      env.data[:acquired] = locks.map { |l| l.merge(owner: l[:owner].merge("pid" => keeper_pid.to_s)) }
+      env.data[:keeper_pid] = keeper_pid
+      env.data[:hold_until] = owner["hold_until"]
+      env.commands << Sh.render(keeper_argv)
+      env.emit(io)
+    end
+
+    def build_keeper_argv(locks, owner)
+      [RbConfig.ruby, SELF_PATH, "keep",
+       *locks.flat_map { |l| ["--dir", l[:dir]] },
+       "--acquirer-pid", Process.pid.to_s,
+       "--hold-until", owner["hold_until"],
+       "--poll-seconds", KEEPER_POLL_SECONDS.to_s]
     end
 
     # Builds the ordered lock specs from whichever lock flags were given.
@@ -173,6 +226,16 @@ end
     def build_owner(options)
       owner = { "campaign" => options[:campaign], "bead" => options[:bead], "acquired_at" => Time.now.utc.iso8601 }
       owner["pid"] = options[:pid].to_s if options[:pid]
+      if options[:hold_seconds]
+        # Seeded with THIS process's pid, not the keeper's - the keeper does
+        # not exist yet. Without this seed the owner file would carry no pid
+        # at all during the window between acquire and the owner rewrite,
+        # and the keeper's first poll would read its own lock as not ours
+        # (Lock.keep treats a pid-less owner as not ours). gate_run.rb start
+        # seeds its own supervisor's lock owner the same way.
+        owner["pid"] = Process.pid.to_s
+        owner["hold_until"] = (Time.now + options[:hold_seconds]).utc.iso8601
+      end
       owner["purpose"] = options[:purpose] if options[:purpose]
       begin
         owner["host"] = Socket.gethostname
@@ -183,14 +246,27 @@ end
     end
 
     def emit_acquire_dry_run(env, io, specs, order, owner)
+      targets = []
       order.each do |kind|
         spec = specs.find { |s| s[:kind] == kind }
         target = spec[:kind] == "slot" ? "#{spec[:slots_dir]}/slot-1..#{spec[:count]}" : spec[:dir]
+        targets << target
         env.commands << "mkdir #{target} (owner campaign=#{owner['campaign']} bead=#{owner['bead']})"
       end
       env.data[:acquired] = []
       env.data[:order] = order
       env.data[:waited_seconds] = 0
+
+      if owner["hold_until"]
+        keeper_argv = [RbConfig.ruby, SELF_PATH, "keep",
+                       *targets.map { |t| ["--dir", t] }.flatten,
+                       "--acquirer-pid", Process.pid.to_s,
+                       "--hold-until", owner["hold_until"],
+                       "--poll-seconds", KEEPER_POLL_SECONDS.to_s]
+        env.commands << Sh.render(keeper_argv)
+        env.data[:hold_until] = owner["hold_until"]
+      end
+
       env.emit(io)
     end
 
@@ -295,6 +371,46 @@ end
       env.commands << "rm -rf #{options[:dir]} (dead holder pid #{probe[:owner] && probe[:owner]['pid']})"
       FileUtils.rm_rf(options[:dir]) unless options[:dry_run]
       env.data[:cleared] = true
+      env.emit(io)
+    end
+
+    # --- keep -----------------------------------------------------------------
+    #
+    # The detached keeper `acquire --hold-seconds` spawns. Internal - not
+    # meant to be run by hand, the same way gate_run.rb's `supervise` is not.
+    # Its stdout/stderr are redirected to /dev/null by the spawn, so the
+    # envelope it emits is never read by anyone in practice; it still emits
+    # one, because the contract holds regardless of who is watching.
+
+    def run_keep(argv, io)
+      options = { dry_run: false, poll_seconds: KEEPER_POLL_SECONDS, dirs: [] }
+      parser, options = Cli.build(KEEP_USAGE, options) do |opts|
+        opts.on("--dir DIR", "lock directory to watch (repeatable)") { |v| options[:dirs] << v }
+        opts.on("--acquirer-pid N", Integer, "the acquiring CLI's pid, counted as ours until rewritten") { |v| options[:acquirer_pid] = v }
+        opts.on("--hold-until ISO", "the lease deadline (ISO-8601)") { |v| options[:hold_until] = v }
+        opts.on("--poll-seconds N", Integer, "poll interval while watching (default #{KEEPER_POLL_SECONDS})") { |v| options[:poll_seconds] = v }
+      end
+      Cli.parse!(parser, argv)
+      usage_error!(KEEP_USAGE, parser) if options[:dirs].empty? || options[:acquirer_pid].nil? || blank?(options[:hold_until])
+
+      hold_until = begin
+        Time.iso8601(options[:hold_until])
+      rescue ArgumentError
+        usage_error!(KEEP_USAGE, parser, hint: "--hold-until must be ISO-8601 (got #{options[:hold_until].inspect})")
+      end
+
+      env = Envelope.new(script: "lock_keep")
+      env.data[:dirs] = options[:dirs]
+
+      if options[:dry_run]
+        env.data[:watching] = options[:dirs]
+        return env.emit(io)
+      end
+
+      result = Lock.keep(options[:dirs], own_pid: Process.pid, acquirer_pid: options[:acquirer_pid],
+                                          hold_until: hold_until, poll_seconds: options[:poll_seconds])
+      env.data[:reason] = result[:reason]
+      env.data[:watching] = result[:watching]
       env.emit(io)
     end
 

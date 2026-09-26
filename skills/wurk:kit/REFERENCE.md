@@ -677,19 +677,32 @@ A lock is a directory. Acquiring one is an atomic `Dir.mkdir` - two
 processes racing to create the same directory, exactly one succeeds. Backs
 `gate_run.rb start`'s optional `--gate-lock`/`--slots-dir` flags and is also
 usable standalone by any caller (a campaign mutex, a tracker lock, a
-registry lock) that needs the same mutual exclusion. No manifest and no
-`Sh` - a lock directory is a plain CLI argument.
+registry lock) that needs the same mutual exclusion. No manifest, and one
+shell-out: the keeper spawn (`acquire --hold-seconds`), through
+`Sh.spawn_detached` - a lock directory is otherwise a plain CLI argument.
 
 ### The owner file
 
 Each held lock directory contains one `owner` file: `key=value` lines, one
 per key, written in a fixed order (`campaign`, `bead`, `pid`, `host`,
-`purpose`, `acquired_at`). Not every key is present on every lock - a
-human-held lock may carry no `pid` - and an absent key is simply omitted,
+`purpose`, `acquired_at`, `hold_until`). Not every key is present on every
+lock - a human-held lock may carry no `pid`, and `hold_until` is present
+only on a lock held through a keeper - and an absent key is simply omitted,
 never written empty. A directory that exists with no readable owner file
 (briefly, between `mkdir` and the owner file's write, or because a human
 made the directory by hand) is reported as held with `owner: null`, never as
 an error.
+
+The recorded `pid` must be a process whose lifetime IS the hold, because
+`status`/`clear` trust it and nothing else to tell a live hold from a dead
+one. There are exactly three legitimate sources: the session itself, for a
+lock the session holds on its own behalf (the conductor's campaign mutex,
+`--pid <session pid>`); the supervisor `gate_run.rb start` spawns, for a
+lock it acquires before running a gate; and the keeper `acquire
+--hold-seconds` spawns, for a lock taken on behalf of a worker. A
+subagent's `$PPID` is none of these three - it is the conductor session's
+process, which outlives no worker and is outlived by none either - so a
+worker's lock always goes through `--hold-seconds`, never `--pid`.
 
 ### Subcommands
 
@@ -701,7 +714,25 @@ an error.
   one that blocked. Requires `--campaign ID --bead ID`, recorded in the
   owner file. Loads the machine config first (`UserConfig.require!`), so an
   invalid `~/.claude/wurk.local.json` blocks the acquire before any
-  directory is made.
+  directory is made. `--hold-seconds N` gives the hold its own process: once
+  every named lock is taken, `acquire` spawns a detached keeper
+  (`lock.rb keep`, via `Sh.spawn_detached`) that watches every lock this
+  call took, records `hold_until` (now + N, ISO-8601 UTC) in each owner
+  file, and rewrites each owner file's `pid` to the keeper's. The keeper
+  exits `released` once every watched lock is gone, `superseded` once a
+  remaining one is owned by neither itself nor the acquiring CLI, or
+  `expired` at `hold_until` - leaving the lock exactly as it is, so an
+  expired lease is a dead pid `clear` can remove, not a lock the keeper
+  frees on its own. `--hold-seconds` and `--pid` are mutually exclusive
+  (usage error, exit 2): a hold has exactly one liveness source. A spawn
+  failure releases every lock this call just took and blocks
+  `keeper_spawn_failed`, rather than leaving a hold whose recorded pid is
+  this CLI's own and dies the moment it exits.
+- **`keep`** - internal; the detached keeper `acquire --hold-seconds`
+  spawns, not meant to be run by hand (like `gate_run.rb supervise`).
+  `--dir DIR` (repeatable, at least one), `--acquirer-pid N` (the acquiring
+  CLI's pid, counted as the lock's own until the CLI rewrites the owner
+  file), `--hold-until ISO`, `--poll-seconds N` (default 2).
 - **`release`** - releases one lock directory, refusing (`lock_not_owned`)
   unless the supplied `--campaign`/`--bead`/`--pid` match the recorded owner
   field by field. There is deliberately no `--force`: a foreign or
@@ -761,10 +792,14 @@ report what was used, whenever a slot pool was named.
 
 - `acquire`: `data.acquired` (the locks taken, each `{kind, dir, owner}`),
   `data.order` (the kinds, in the fixed order), `data.waited_seconds`, and,
-  when a slot pool was named, `data.slots` and `data.slots_source`. On
+  when a slot pool was named, `data.slots` and `data.slots_source`. With
+  `--hold-seconds`, also `data.keeper_pid` and `data.hold_until`. On
   contention, `data.acquired` is `[]` and `data.contended` carries
   `{kind, dir, probe}` for the lock that blocked, with `probe` the same
   shape `status` returns.
+- `keep`: `data.dirs` (what it was told to watch), `data.reason`
+  (`"released"`, `"superseded"`, or `"expired"`), `data.watching` (the dirs
+  still held at exit - empty unless `"expired"`).
 - `release`: `data.dir`, `data.released` (`true`/`false`).
 - `status`: `data.dir`, `data.held`, `data.owner`, `data.age_seconds`,
   `data.holder_alive` (`true`, `false`, or `null` when it cannot be
@@ -779,6 +814,8 @@ report what was used, whenever a slot pool was named.
 Standard kit exit codes. `status` always exits 0 (a read-only probe, never
 a judgment); `acquire`, `release`, and `clear` exit 1 when they report
 `blocked` (contention, a foreign owner, or an unprovable staleness claim).
+`acquire` also blocks `keeper_spawn_failed` when `--hold-seconds` could not
+spawn its keeper.
 
 ## `campaign_state.rb`: which campaign may a scheduler start
 
