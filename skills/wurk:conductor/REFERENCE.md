@@ -355,7 +355,11 @@ under the current directory) and `--locks-dir DIR`.
   `QUEUED <now> after ID` instead (refusing `queued_after_self`); plain
   `arm` on a QUEUED plan is the manual promotion path and flips the file
   to `ARMED <now>` even when the queue already reports it virtually
-  armed.
+  armed. On a QUEUED plan either form drops the old `after <id>` tail
+  before writing its own, so a promoted plan reads `ARMED <now>` with no
+  tail and a re-queued one names only the new predecessor; prose past
+  the tail is kept, and the `--dry-run` command text says
+  `(drops after OLD)`.
 
   A plan bound to another machine, or one this machine cannot verify
   ("The Machine line" above), is refused before the consent check:

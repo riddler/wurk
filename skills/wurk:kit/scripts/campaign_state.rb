@@ -253,8 +253,9 @@ module CampaignState
 
     # Rewrites the Status line's word and stamp to `<word> <now>`, keeping
     # everything after the stamp on that line. `drop_after` also removes an
-    # `after <id>` tail directly after the old stamp (disarm on a QUEUED
-    # plan: the predecessor means nothing once the plan is DRAFTED); prose
+    # `after <id>` tail directly after the old stamp (disarm or arm on a
+    # QUEUED plan: the old predecessor means nothing once the plan is
+    # DRAFTED or ARMED, and arm --after writes its own tail); prose
     # past that tail is still kept. With no Status line, inserts one as its
     # own paragraph after the first H1 (or at the top when there is no H1).
     # Returns the new content; never touches the filesystem.
@@ -641,24 +642,32 @@ module CampaignStateCli
       host_name, host_blocked = resolve_host(env, options)
       return env.emit(io) if host_blocked
 
+      # Only a QUEUED line's `after <id>` is a tail; on any other word the
+      # text past the stamp is prose and is kept as it stands.
+      queued = campaign[:status] == CampaignState::QUEUED
       if options[:after]
         if options[:after] == id
           env.block!(code: "queued_after_self", message: "#{id} cannot queue behind itself")
           return env.emit(io)
         end
-        already_queued = campaign[:status] == CampaignState::QUEUED && campaign[:queued_after] == options[:after]
+        already_queued = queued && campaign[:queued_after] == options[:after]
         env.warn(code: "already_queued", message: "#{id} is already QUEUED after #{options[:after]} (#{campaign[:status_stamp]})") if already_queued
-        rewrite(env, options, path, campaign, already_queued ? nil : CampaignState::QUEUED, this_machine, tail: "after #{options[:after]}", host: host_name)
+        # Re-queueing a QUEUED plan behind a new predecessor replaces the old
+        # `after <id>` tail rather than stacking a second one in front of it.
+        rewrite(env, options, path, campaign, already_queued ? nil : CampaignState::QUEUED, this_machine,
+                tail: "after #{options[:after]}", host: host_name, drop_after: queued)
         return env.emit(io)
       end
 
       # Plain arm on a QUEUED plan is the manual promotion path: the file
       # flips to ARMED even when the queue already reports it virtually
-      # armed, so the file stops depending on the predecessor's state.
-      already_armed = campaign[:armed] && campaign[:status] != CampaignState::QUEUED
+      # armed, so the file stops depending on the predecessor's state - and
+      # the `after <id>` tail goes with it, since an ARMED line names no
+      # predecessor. Prose past the tail is kept.
+      already_armed = campaign[:armed] && !queued
       env.warn(code: "already_armed", message: "#{id} is already ARMED (#{campaign[:status_stamp]})") if already_armed
 
-      rewrite(env, options, path, campaign, already_armed ? nil : CampaignState::ARMED, this_machine, host: host_name)
+      rewrite(env, options, path, campaign, already_armed ? nil : CampaignState::ARMED, this_machine, host: host_name, drop_after: queued)
       env.emit(io)
     end
 

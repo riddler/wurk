@@ -945,6 +945,100 @@ class CampaignStateQueueTest < Minitest::Test
     assert env["blocked"].any? { |b| b["code"] == "queued_after_self" }, env.inspect
   end
 
+  # --- arm on a queued plan drops the old after tail (wu-7bpp) ---------------
+
+  # sabotage: pass drop_after: false on run_arm's plain path -> red on the
+  # Status line (the old `after 042` survives behind ARMED).
+  def test_plain_arm_on_a_queued_plan_drops_the_after_tail_and_keeps_the_prose
+    write_plan(@dir, "042", status: "ARMED 2026-09-14 18:41 -0600")
+    write_consent(@dir, "042")
+    path = write_plan(@dir, "043", status: "QUEUED 2026-09-14 19:00 -0600 after 042 (queued by the operator)")
+    write_consent(@dir, "043")
+
+    code, env = run_cli(["arm", "043", "--dir", @dir])
+
+    assert_equal 0, code
+    assert env["ok"], env.inspect
+    assert env["data"]["changed"]
+    assert_equal "QUEUED", env["data"]["before"]
+    assert_equal "ARMED", env["data"]["after"]
+    assert_equal ["rewrite Status line in #{path}: QUEUED -> ARMED 2026-09-14 20:00 -0600 (drops after 042)"], env["commands"]
+    assert_includes File.read(path), "Status: ARMED 2026-09-14 20:00 -0600 (queued by the operator)\n"
+    assert_nil env["data"]["campaign"]["queued_after"]
+  end
+
+  # sabotage: pass drop_after: false on run_arm's --after path -> red (the
+  # line reads `after 044 after 042`).
+  def test_arm_after_on_a_queued_plan_replaces_the_after_tail
+    write_plan(@dir, "042", status: "ARMED 2026-09-14 18:41 -0600")
+    write_plan(@dir, "044", status: "ARMED 2026-09-14 18:50 -0600")
+    path = write_plan(@dir, "043", status: "QUEUED 2026-09-14 19:00 -0600 after 042 (queued by the operator)")
+    write_consent(@dir, "043")
+
+    code, env = run_cli(["arm", "043", "--dir", @dir, "--after", "044"])
+
+    assert_equal 0, code
+    assert env["ok"], env.inspect
+    assert_equal ["rewrite Status line in #{path}: QUEUED -> QUEUED 2026-09-14 20:00 -0600 after 044 (drops after 042)"], env["commands"]
+    assert_includes File.read(path), "Status: QUEUED 2026-09-14 20:00 -0600 after 044 (queued by the operator)\n"
+    assert_equal "044", env["data"]["campaign"]["queued_after"]
+  end
+
+  def test_arm_dry_run_on_a_queued_plan_writes_nothing
+    path = write_plan(@dir, "043", status: "QUEUED 2026-09-14 19:00 -0600 after 042")
+    write_consent(@dir, "043")
+    before = File.read(path)
+
+    _, plain = run_cli(["arm", "043", "--dir", @dir, "--dry-run"])
+    _, requeue = run_cli(["arm", "043", "--dir", @dir, "--after", "044", "--dry-run"])
+
+    assert plain["data"]["changed"]
+    assert_match(/QUEUED -> ARMED 2026-09-14 20:00 -0600 \(drops after 042\)\z/, plain["commands"].first)
+    assert_match(/QUEUED -> QUEUED 2026-09-14 20:00 -0600 after 044 \(drops after 042\)\z/, requeue["commands"].first)
+    assert_equal before, File.read(path)
+  end
+
+  # A satisfied queue reports armed (virtual promotion) while the file
+  # still says QUEUED; arm keys the tail drop off the Status word, not
+  # off armed, so it drops the tail on that path too.
+  # sabotage: pass drop_after: queued && !campaign[:armed] on the plain
+  # path -> red here.
+  def test_arm_on_a_virtually_promoted_queued_plan_drops_the_after_tail
+    write_plan(@dir, "042", status: "WRAPPED 2026-09-14 19:30 -0600")
+    path = write_plan(@dir, "043", status: "QUEUED 2026-09-14 19:00 -0600 after 042")
+    write_consent(@dir, "043")
+
+    code, env = run_cli(["arm", "043", "--dir", @dir])
+
+    assert_equal 0, code
+    assert env["ok"], env.inspect
+    assert_equal "QUEUED", env["data"]["before"]
+    assert_includes File.read(path), "Status: ARMED 2026-09-14 20:00 -0600\n"
+  end
+
+  # Only a QUEUED line's `after <id>` is a tail. On DRAFTED the text past
+  # the stamp is prose and stays verbatim; an ARMED re-arm writes nothing.
+  # sabotage: pass drop_after: true unconditionally in run_arm -> red here.
+  def test_arm_on_drafted_keeps_after_looking_prose_and_armed_re_arm_is_unchanged
+    drafted = write_plan(@dir, "043", status: "DRAFTED 2026-09-13 after review (plan written)")
+    write_consent(@dir, "043")
+    armed = write_plan(@dir, "045", status: "ARMED 2026-09-14 19:00 -0600 after 042")
+    write_consent(@dir, "045")
+    armed_before = File.read(armed)
+
+    _, env = run_cli(["arm", "043", "--dir", @dir])
+    assert env["ok"], env.inspect
+    assert_includes File.read(drafted), "Status: ARMED 2026-09-14 20:00 -0600 after review (plan written)\n"
+
+    _, env = run_cli(["arm", "043", "--dir", @dir, "--after", "042"])
+    assert_includes File.read(drafted), "Status: QUEUED 2026-09-14 20:00 -0600 after 042 after review (plan written)\n"
+
+    _, env = run_cli(["arm", "045", "--dir", @dir])
+    assert_equal ["already_armed"], env["warnings"].map { |w| w["code"] }
+    refute env["data"]["changed"]
+    assert_equal armed_before, File.read(armed)
+  end
+
   # --- disarm on a queued plan (wu-vmia) ------------------------------------
 
   # sabotage: keep run_disarm's guard at `campaign[:armed]` alone -> red
@@ -1016,7 +1110,8 @@ class CampaignStateQueueTest < Minitest::Test
   end
 
   # The ARMED path is untouched: drop_after applies only to QUEUED, so a
-  # promoted plan's leftover `after <id>` (plain arm keeps it) stays put.
+  # plan's hand-written `after <id>` (plain arm no longer leaves one,
+  # wu-7bpp) stays put.
   # sabotage: pass drop_after: true unconditionally -> red.
   def test_disarm_of_an_armed_plan_keeps_the_rest_of_the_line_verbatim
     path = write_plan(@dir, "043", status: "ARMED 2026-09-14 19:00 -0600 after 042")
@@ -1601,6 +1696,20 @@ class CampaignStateArmHostTest < Minitest::Test
       assert env["ok"], env.inspect
       content = File.read(path)
       assert_match(/Status: QUEUED 2026-09-14 20:00 -0600 after 041\nMachine: mbp\n/, content)
+    end
+  end
+
+  def test_arm_host_on_a_queued_plan_drops_the_after_tail
+    path = write_plan(@dir, "042", status: "QUEUED 2026-09-14 19:00 -0600 after 041")
+    write_consent(@dir, "042")
+
+    with_user_config("machine" => { "name" => "mbp" }) do
+      code, env = run_cli(["arm", "042", "--dir", @dir, "--host", "mbp"])
+
+      assert_equal 0, code
+      assert env["ok"], env.inspect
+      assert_equal 2, env["commands"].length
+      assert_match(/\AStatus: ARMED 2026-09-14 20:00 -0600\nMachine: mbp\n/, File.read(path)[File.read(path).index("Status:")..])
     end
   end
 
