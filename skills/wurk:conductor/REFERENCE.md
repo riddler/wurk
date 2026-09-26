@@ -560,7 +560,10 @@ the prose, but the heading the script matches is `Scope`. A plan headed
 `## Footprint` reports `scope: null` and a campaign comparing
 footprints reads nothing; `campaign_state.rb fence` reads the same
 heading, so a `## Footprint` plan also fails the fence check with
-`scope_missing`.
+`scope_missing`. The invariant block's SCOPE slot is derived from this
+section, never carried from a predecessor's block - see SKILL.md's
+appendix, "Carrying the block - once per campaign, not once per
+dispatch".
 
 **A fact that can move while the campaign runs is stated as a claim to
 re-verify, never as a fact.** File lengths, bead counts, label sets,
