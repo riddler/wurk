@@ -2138,9 +2138,22 @@ after writing the file at wave zero and after every `[adoption]` change
 to it, before the next dispatch. A blocked result is fixed by
 re-deriving the slot from the plan, never by editing the plan to match
 the block, unless the operator's own scope statement actually says what
-the block claims. Journal the check's result with the wave-zero
-entries. State the limit: the check sees only the SCOPE slot, not a
-fence stated anywhere else in the block.
+the block claims.
+
+A `scope_missing` result - the plan has no `## Scope` heading, which an
+older plan hits routinely when it titled the section something else,
+most often `## Footprint` (REFERENCE.md's "Title the footprint section
+`## Scope`") - is stop-and-report to the operator, not a fix the
+conductor makes itself. Quote the plan's existing footprint prose in
+the report and ask the operator to retitle that section `## Scope`, or
+to state plainly that this campaign has no scope. The conductor never
+retitles the plan itself, never writes a SCOPE slot without a plan
+source, and never skips the check: skipping would let a carried fence
+through unchecked, which is the exact bug this slot exists to catch.
+
+Journal the check's result with the wave-zero entries. State the
+limit: the check sees only the SCOPE slot, not a fence stated anywhere
+else in the block.
 
 The file is skill prose's equivalent for the campaign: pinned when the
 campaign starts. A mid-campaign change to it needs an `[adoption]`

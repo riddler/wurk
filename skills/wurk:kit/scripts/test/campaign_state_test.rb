@@ -2039,22 +2039,43 @@ class CampaignStateFenceTest < Minitest::Test
   # --- invariant_block_missing / scope_missing / campaign_not_found -----------
 
   def test_a_missing_block_path_is_invariant_block_missing
-    write_plan(@dir, "gadget", status: "ARMED 2026-09-14 18:41 -0600", body: "Single-repo campaign.\n\n## Scope\n\n#{GADGET_SCOPE_BODY}\n")
+    plan_path = write_plan(@dir, "gadget", status: "ARMED 2026-09-14 18:41 -0600", body: "Single-repo campaign.\n\n## Scope\n\n#{GADGET_SCOPE_BODY}\n")
+    missing_block = File.join(@dir, "nope.md")
 
-    code, env = run_cli(["fence", "gadget", "--block", File.join(@dir, "nope.md"), "--dir", @dir])
+    code, env = run_cli(["fence", "gadget", "--block", missing_block, "--dir", @dir])
 
     assert_equal 1, code
     assert_equal ["invariant_block_missing"], env["blocked"].map { |b| b["code"] }
+    # data.fence holds every field even on this early return, per REFERENCE.md:
+    # a caller can see what was actually parsed. block_path and plan_path
+    # live only under data.fence, never flat on data too.
+    assert_equal(
+      { "block_path" => missing_block, "plan_path" => plan_path, "campaign" => nil, "source_lines" => nil, "paths" => nil },
+      env["data"]["fence"]
+    )
+    assert_nil env["data"]["block_path"]
+    assert_nil env["data"]["plan_path"]
   end
 
   def test_a_plan_without_scope_is_scope_missing
-    write_plan(@dir, "gadget", status: "ARMED 2026-09-14 18:41 -0600", body: "Single-repo campaign, no Scope section at all.\n")
+    plan_path = write_plan(@dir, "gadget", status: "ARMED 2026-09-14 18:41 -0600", body: "Single-repo campaign, no Scope section at all.\n")
     block = write_block(@dir, scope_block)
 
     code, env = run_cli(["fence", "gadget", "--block", block, "--dir", @dir])
 
     assert_equal 1, code
     assert_equal ["scope_missing"], env["blocked"].map { |b| b["code"] }
+    finding = env["blocked"].first
+    assert_includes finding["message"], "## Scope"
+    assert_includes finding["message"], "Fix:"
+    # Same shape as the invariant_block_missing early return: data.fence
+    # is present with the known fields, the rest null, no flat copies.
+    assert_equal(
+      { "block_path" => block, "plan_path" => plan_path, "campaign" => nil, "source_lines" => nil, "paths" => nil },
+      env["data"]["fence"]
+    )
+    assert_nil env["data"]["block_path"]
+    assert_nil env["data"]["plan_path"]
   end
 
   def test_an_unknown_id_is_campaign_not_found
