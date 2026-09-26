@@ -404,6 +404,45 @@ under the current directory) and `--locks-dir DIR`.
   `campaign_running` check, for QUEUED exactly as for ARMED: this
   machine cannot see a foreign machine's mutex, so a disarm from here
   cannot know whether a conductor there already read ARMED.
+- **`fence ID --block PATH`** - read-only, never writes; `--dry-run` is
+  accepted for symmetry and changes nothing. Checks the SCOPE slot of one
+  invariant-block file (`--block`, required for this subcommand only -
+  a usage exit 2 the same way `--host` is arm-only) against the id's
+  plan: the check covers the SCOPE slot only, nothing else in the block.
+
+  The slot is the paragraph starting at the first column-1 `SCOPE:` line
+  and ending at the next blank line or end of file. The header is that
+  first line, matched against `SCOPE: campaign <id>` (the id is the next
+  whitespace-delimited token, trailing `,` or `.` stripped). Source lines
+  are the slot's other lines whose first non-blank character is `|`; the
+  text after `|` and one optional space, stripped, is the quoted line - a
+  quoted line that is empty after stripping is dropped. Path tokens are
+  the whitespace-delimited tokens on the slot's remaining lines (neither
+  the header nor a source line) that contain `/`, after stripping
+  surrounding backticks, quotes, and parentheses and trailing `.,;:`. The
+  plan side is `section(plan, "Scope")`: a source line is compared
+  against it one stripped line at a time, a path token by substring.
+
+  Finding codes, each a `blocked` entry (`needs: "human"`, the kit's only
+  value; every message ends with a `Fix:` clause naming the
+  re-derivation): `invariant_block_missing` (`--block` names no readable
+  file), `scope_missing` (the plan has no `## Scope` section),
+  `fence_missing` (the block has no `SCOPE:` paragraph, or its header
+  does not match the grammar above), `fence_wrong_campaign` (the header
+  names a campaign id other than ID - both ids are named),
+  `fence_unsourced` (the slot has no non-empty source line),
+  `fence_line_not_in_plan` (a source line is not a stripped line of the
+  plan's `## Scope` - one entry per line), `fence_path_not_in_plan` (a
+  path token is not a substring of the plan's `## Scope` body - one
+  entry per path). `campaign_not_found` comes from the same `locate` as
+  `show`. The first three (`invariant_block_missing`, `scope_missing`,
+  `fence_missing`) short-circuit, since nothing further can be read; the
+  last four are all reported together, so one run lists every stale
+  line and path at once.
+
+  `data.fence` carries `block_path`, `plan_path`, `campaign` (the
+  header's id, whatever it named), `source_lines`, and `paths` - present
+  even on a blocked run, so a caller can see what was actually parsed.
 
 Both mutations write via a sibling temp file and rename, so a concurrent
 `list` sees the old file or the new one.
@@ -490,7 +529,7 @@ script; it fails hours later, in a dispatch that had to guess.
 | `## Goal`, carrying an explicit **Exit** condition | yes | Phase 6 and the morning report - the exit is how a reader decides the campaign is done |
 | `## Consent` | yes | the pointer to `<id>-consent.md`, whose ADOPTED status is what `arm` reads |
 | `## Mode` | yes | `campaign_state.rb`, and every dispatch's mode override |
-| `## Scope` | yes | `campaign_state.rb`; this is the footprint the multi-campaign protocol's rule 2 compares between two RUNNING campaigns |
+| `## Scope` | yes | `campaign_state.rb`; this is the footprint the multi-campaign protocol's rule 2 compares between two RUNNING campaigns; and `campaign_state.rb fence`, which checks the invariant block's SCOPE slot against it |
 | `## Phase 0 preconditions` | yes | Phase 0, one numbered item per decision it owes |
 | `## Waves` | yes | Phase 2's graph render, and the order every dispatch runs in |
 | `## Hazards` | yes | Phase 1's claim check, and the dispatch template's per-repo hazard slot |
@@ -519,7 +558,9 @@ word in the first line of the body and let the heading repeat it.
 calls the concept a footprint and a plan may use that word freely in
 the prose, but the heading the script matches is `Scope`. A plan headed
 `## Footprint` reports `scope: null` and a campaign comparing
-footprints reads nothing.
+footprints reads nothing; `campaign_state.rb fence` reads the same
+heading, so a `## Footprint` plan also fails the fence check with
+`scope_missing`.
 
 **A fact that can move while the campaign runs is stated as a claim to
 re-verify, never as a fact.** File lengths, bead counts, label sets,

@@ -87,6 +87,14 @@ module CampaignFixtures
   def hold_mutex(dir, id, pid: Process.pid)
     Lock.try_acquire(File.join(dir, "locks", "campaign-#{id}"), "campaign" => id, "bead" => "zz-1", "pid" => pid.to_s)
   end
+
+  # An invariant-block.md fixture for the fence subcommand. Written under a
+  # name distinct from any plan id, since a block is never itself a plan.
+  def write_block(dir, content, name: "invariant-block.md")
+    path = File.join(dir, name)
+    File.write(path, content)
+    path
+  end
 end
 
 # CampaignState's pure functions: plan discovery, Status parsing, section
@@ -247,6 +255,37 @@ class CampaignStateLibTest < Minitest::Test
 
   def test_section_is_nil_when_the_heading_is_absent
     assert_nil CampaignState.section("# Campaign x\n\nprose\n", "Scope")
+  end
+
+  # --- fence_findings (pure) -------------------------------------------------
+
+  def test_fence_findings_slot_ends_at_a_blank_line_a_path_after_it_is_not_checked
+    scope_body = "writes: lib/widgets"
+    block = <<~BLOCK
+      SCOPE: campaign a, derived from `## Scope`.
+      | writes: lib/widgets
+
+      Note: vendor/old-engine untouched (outside the slot).
+    BLOCK
+
+    result = CampaignState.fence_findings(block, "a", scope_body)
+
+    assert_empty result[:findings]
+    assert_empty result[:paths]
+  end
+
+  def test_fence_findings_strips_a_backticked_path_token_with_trailing_punctuation
+    scope_body = "writes: a/b"
+    block = <<~BLOCK
+      SCOPE: campaign a, derived from `## Scope`.
+      | writes: a/b
+      See `a/b`.
+    BLOCK
+
+    result = CampaignState.fence_findings(block, "a", scope_body)
+
+    assert_empty result[:findings]
+    assert_equal ["a/b"], result[:paths]
   end
 
   # --- rewrite ------------------------------------------------------------------
@@ -1822,6 +1861,239 @@ class CampaignStateArmHostTest < Minitest::Test
     _code, status = capture_exit { run_cli(["list", "--dir", @dir, "--host", "mbp"]) }
 
     assert_equal 2, status
+  end
+
+  private
+
+  def capture_exit
+    yield
+    [nil, 0]
+  rescue SystemExit => e
+    [nil, e.status]
+  end
+end
+
+# `fence ID --block PATH`: a read-only check of an invariant block's SCOPE
+# slot against the campaign plan it claims to belong to. wu-wgoa: a
+# consumer's campaign inherited a predecessor's stale scope fence and a
+# worker lost a round obeying a path the new plan never named - this
+# subcommand is the mechanized half of the fix (SKILL.md prose is the
+# other half, in Phase 2).
+class CampaignStateFenceTest < Minitest::Test
+  include CampaignFixtures
+
+  GADGET_SCOPE_BODY = "writes: lib/gadgets\nreads: vendor/old-engine untouched"
+  GADGET_INDENTED_BODY = <<~MD
+    Single-repo campaign.
+
+    ## Scope
+
+        writes: lib/gadgets
+        reads: vendor/old-engine untouched
+
+    ## Gate
+
+    make test
+  MD
+
+  def setup
+    @dir = Dir.mktmpdir
+  end
+
+  def teardown
+    FileUtils.remove_entry(@dir)
+  end
+
+  def run_cli(argv)
+    io = StringIO.new
+    code = CampaignStateCli.run(argv, io: io)
+    [code, JSON.parse(io.string)]
+  end
+
+  def scope_block(header_id: "gadget", extra: nil)
+    lines = [
+      "AUTHORITY: normal.",
+      "",
+      "SCOPE: campaign #{header_id}, derived from `## Scope` in the plan.",
+      "| writes: lib/gadgets",
+      "| reads: vendor/old-engine untouched"
+    ]
+    lines << extra if extra
+    lines << ""
+    lines << "GATE: make test"
+    "#{lines.join("\n")}\n"
+  end
+
+  # --- the ok path ------------------------------------------------------------
+
+  def test_a_block_quoting_the_plans_scope_verbatim_is_ok
+    write_plan(@dir, "gadget", status: "ARMED 2026-09-14 18:41 -0600", body: "Single-repo campaign.\n\n## Scope\n\n#{GADGET_SCOPE_BODY}\n")
+    block = write_block(@dir, scope_block)
+
+    code, env = run_cli(["fence", "gadget", "--block", block, "--dir", @dir])
+
+    assert_equal 0, code
+    assert env["ok"], env.inspect
+    assert_empty env["blocked"]
+    assert_equal "gadget", env["data"]["fence"]["campaign"]
+    assert_equal ["writes: lib/gadgets", "reads: vendor/old-engine untouched"], env["data"]["fence"]["source_lines"]
+  end
+
+  def test_quoted_lines_match_despite_different_leading_indentation
+    write_plan(@dir, "gadget", status: "ARMED 2026-09-14 18:41 -0600", body: GADGET_INDENTED_BODY)
+    block = write_block(@dir, scope_block)
+
+    code, env = run_cli(["fence", "gadget", "--block", block, "--dir", @dir])
+
+    assert_equal 0, code
+    assert env["ok"], env.inspect
+  end
+
+  def test_a_note_line_citing_a_backticked_path_the_plan_names_is_ok
+    write_plan(@dir, "gadget", status: "ARMED 2026-09-14 18:41 -0600", body: "Single-repo campaign.\n\n## Scope\n\n#{GADGET_SCOPE_BODY}\n")
+    block = write_block(@dir, scope_block(extra: "See `lib/gadgets` for the touched code."))
+
+    code, env = run_cli(["fence", "gadget", "--block", block, "--dir", @dir])
+
+    assert_equal 0, code
+    assert env["ok"], env.inspect
+    assert_includes env["data"]["fence"]["paths"], "lib/gadgets"
+  end
+
+  # --- the reported bug: a fence path the plan never names --------------------
+
+  def test_a_note_line_citing_a_path_the_plan_does_not_name_is_blocked
+    write_plan(@dir, "gadget", status: "ARMED 2026-09-14 18:41 -0600", body: "Single-repo campaign.\n\n## Scope\n\nwrites: lib/gadgets\n")
+    block = write_block(@dir, [
+      "AUTHORITY: normal.",
+      "",
+      "SCOPE: campaign gadget, derived from `## Scope` in the plan.",
+      "| writes: lib/gadgets",
+      "vendor/old-engine untouched",
+      "",
+      "GATE: make test"
+    ].join("\n") + "\n")
+
+    code, env = run_cli(["fence", "gadget", "--block", block, "--dir", @dir])
+
+    assert_equal 1, code
+    refute env["ok"]
+    codes = env["blocked"].map { |b| b["code"] }
+    assert_includes codes, "fence_path_not_in_plan"
+    finding = env["blocked"].find { |b| b["code"] == "fence_path_not_in_plan" }
+    assert_includes finding["message"], "vendor/old-engine"
+    assert_includes finding["message"], "Fix:"
+  end
+
+  # --- wrong campaign -----------------------------------------------------------
+
+  def test_a_header_naming_another_campaign_is_blocked_naming_both_ids
+    write_plan(@dir, "alpha", status: "ARMED 2026-09-14 18:41 -0600", body: "Single-repo campaign.\n\n## Scope\n\nwrites: lib/widgets\n")
+    block = write_block(@dir, scope_block(header_id: "gadget"))
+
+    code, env = run_cli(["fence", "alpha", "--block", block, "--dir", @dir])
+
+    assert_equal 1, code
+    finding = env["blocked"].find { |b| b["code"] == "fence_wrong_campaign" }
+    refute_nil finding, env["blocked"].inspect
+    assert_includes finding["message"], "gadget"
+    assert_includes finding["message"], "alpha"
+  end
+
+  # --- lines not in the plan ----------------------------------------------------
+
+  def test_a_source_line_not_in_the_plan_is_blocked_and_two_lines_give_two_entries
+    write_plan(@dir, "gadget", status: "ARMED 2026-09-14 18:41 -0600", body: "Single-repo campaign.\n\n## Scope\n\nwrites: lib/gadgets\n")
+    block = write_block(@dir, scope_block)
+
+    code, env = run_cli(["fence", "gadget", "--block", block, "--dir", @dir])
+
+    assert_equal 1, code
+    findings = env["blocked"].select { |b| b["code"] == "fence_line_not_in_plan" }
+    assert_equal 1, findings.length, env["blocked"].inspect
+    assert_includes findings.first["message"], "vendor/old-engine untouched"
+  end
+
+  # --- unsourced / missing -------------------------------------------------------
+
+  def test_no_pipe_lines_is_fence_unsourced
+    write_plan(@dir, "gadget", status: "ARMED 2026-09-14 18:41 -0600", body: "Single-repo campaign.\n\n## Scope\n\n#{GADGET_SCOPE_BODY}\n")
+    block = write_block(@dir, "SCOPE: campaign gadget, derived from `## Scope` in the plan.\nNo pipes here.\n\nGATE: make test\n")
+
+    code, env = run_cli(["fence", "gadget", "--block", block, "--dir", @dir])
+
+    assert_equal 1, code
+    assert_equal ["fence_unsourced"], env["blocked"].map { |b| b["code"] }
+  end
+
+  def test_no_scope_paragraph_is_fence_missing
+    write_plan(@dir, "gadget", status: "ARMED 2026-09-14 18:41 -0600", body: "Single-repo campaign.\n\n## Scope\n\n#{GADGET_SCOPE_BODY}\n")
+    block = write_block(@dir, "AUTHORITY: normal.\n\nGATE: make test\n")
+
+    code, env = run_cli(["fence", "gadget", "--block", block, "--dir", @dir])
+
+    assert_equal 1, code
+    assert_equal ["fence_missing"], env["blocked"].map { |b| b["code"] }
+  end
+
+  # --- invariant_block_missing / scope_missing / campaign_not_found -----------
+
+  def test_a_missing_block_path_is_invariant_block_missing
+    write_plan(@dir, "gadget", status: "ARMED 2026-09-14 18:41 -0600", body: "Single-repo campaign.\n\n## Scope\n\n#{GADGET_SCOPE_BODY}\n")
+
+    code, env = run_cli(["fence", "gadget", "--block", File.join(@dir, "nope.md"), "--dir", @dir])
+
+    assert_equal 1, code
+    assert_equal ["invariant_block_missing"], env["blocked"].map { |b| b["code"] }
+  end
+
+  def test_a_plan_without_scope_is_scope_missing
+    write_plan(@dir, "gadget", status: "ARMED 2026-09-14 18:41 -0600", body: "Single-repo campaign, no Scope section at all.\n")
+    block = write_block(@dir, scope_block)
+
+    code, env = run_cli(["fence", "gadget", "--block", block, "--dir", @dir])
+
+    assert_equal 1, code
+    assert_equal ["scope_missing"], env["blocked"].map { |b| b["code"] }
+  end
+
+  def test_an_unknown_id_is_campaign_not_found
+    block = write_block(@dir, scope_block)
+
+    code, env = run_cli(["fence", "nope", "--block", block, "--dir", @dir])
+
+    assert_equal 1, code
+    assert_equal ["campaign_not_found"], env["blocked"].map { |b| b["code"] }
+  end
+
+  # --- usage --------------------------------------------------------------------
+
+  def test_fence_without_block_is_a_usage_error
+    write_plan(@dir, "gadget", status: "ARMED 2026-09-14 18:41 -0600", body: "Single-repo campaign.\n\n## Scope\n\n#{GADGET_SCOPE_BODY}\n")
+
+    _code, status = capture_exit { run_cli(["fence", "gadget", "--dir", @dir]) }
+
+    assert_equal 2, status
+  end
+
+  def test_block_flag_on_show_is_a_usage_error
+    _code, status = capture_exit { run_cli(["show", "gadget", "--block", "x", "--dir", @dir]) }
+
+    assert_equal 2, status
+  end
+
+  # --- read-only ------------------------------------------------------------------
+
+  def test_fence_never_writes_the_block_or_the_plan
+    plan_path = write_plan(@dir, "gadget", status: "ARMED 2026-09-14 18:41 -0600", body: "Single-repo campaign.\n\n## Scope\n\n#{GADGET_SCOPE_BODY}\n")
+    block = write_block(@dir, scope_block)
+    plan_before = File.read(plan_path)
+    block_before = File.read(block)
+
+    run_cli(["fence", "gadget", "--block", block, "--dir", @dir])
+
+    assert_equal plan_before, File.read(plan_path)
+    assert_equal block_before, File.read(block)
   end
 
   private
