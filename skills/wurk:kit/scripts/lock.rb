@@ -27,6 +27,12 @@ module LockCli
   DEFAULT_STALE_AFTER_SECONDS = 1800
   KEEPER_POLL_SECONDS = 2
 
+  # How long spawn_keeper_and_emit polls a freshly spawned keeper for
+  # immediate death before trusting its pid as the lock's owner: a bound
+  # of tries * interval seconds, about 1s at the defaults.
+  KEEPER_DEATH_CHECK_TRIES = 20
+  KEEPER_DEATH_CHECK_INTERVAL = 0.05
+
   # The absolute path to this file, used to spawn the detached keeper
   # (`ruby <this file> keep ...`), the same move gate_run.rb makes to spawn
   # its own detached supervisor (gate_run.rb:67).
@@ -44,6 +50,12 @@ module LockCli
   KEEP_USAGE = "lock.rb keep --dir DIR [--dir DIR ...] --acquirer-pid N --hold-until ISO [--poll-seconds N]"
 
   class << self
+    # Test-only seam: a test that wants to exercise the immediate-death
+    # detection without a real dying process can install a fake here
+    # (e.g. ->(pid) { false }) and must reset it to nil in teardown. Left
+    # nil, #probe_keeper_alive uses the real Process.kill(0, pid) poll.
+    attr_accessor :keeper_probe
+
     def run(argv, io: $stdout)
       argv = argv.dup
       unless SUBCOMMANDS.include?(argv.first)
@@ -149,8 +161,21 @@ end
     # (missing ruby, unusable argv) releases every lock just taken - a hold
     # with no keeper would record this CLI's own pid, which is dead the
     # moment it exits - and blocks keeper_spawn_failed.
+    #
+    # Sh.spawn_detached's returned pid is only ever a live keeper as far as
+    # this method has checked: it is the pid Process.spawn handed back, not
+    # proof the keeper is still running a moment later. A keeper that dies
+    # immediately after starting (a usage exit 2 out of its own Cli.parse!,
+    # an unparseable --hold-until, any startup exception) would otherwise
+    # get recorded as the owner and reported acquired, and probe would then
+    # read a genuinely dead lock as alive for as long as nothing kills that
+    # pid a second time. So the rewrite is followed by a brief bounded poll
+    # (probe_keeper_alive) before the lock is trusted; on a dead keeper this
+    # rolls back exactly like the spawn-failure path and blocks with its own
+    # distinct code, keeper_died_immediately, so the two causes (could not
+    # spawn at all vs. spawned and died at once) stay tellable apart.
     def spawn_keeper_and_emit(env, io, locks, owner)
-      keeper_argv = build_keeper_argv(locks, owner)
+      keeper_argv = build_keeper_argv(locks.map { |l| l[:dir] }, owner["hold_until"])
 
       begin
         keeper_pid = Sh.spawn_detached(keeper_argv, out_path: File::NULL)
@@ -163,6 +188,16 @@ end
       end
 
       locks.each { |l| Lock.rewrite_owner_pid(l[:dir], keeper_pid) }
+
+      if premature_keeper_death?(keeper_pid, owner["hold_until"])
+        locks.reverse_each { |l| Lock.release(l[:dir], owner, force: true) }
+        env.data[:acquired] = []
+        env.block!(code: "keeper_died_immediately",
+                   message: "the lock keeper (pid #{keeper_pid}) exited immediately after starting; " \
+                             "the lock was released rather than left recorded under a dead pid")
+        return env.emit(io)
+      end
+
       env.data[:acquired] = locks.map { |l| l.merge(owner: l[:owner].merge("pid" => keeper_pid.to_s)) }
       env.data[:keeper_pid] = keeper_pid
       env.data[:hold_until] = owner["hold_until"]
@@ -170,12 +205,69 @@ end
       env.emit(io)
     end
 
-    def build_keeper_argv(locks, owner)
+    # dirs is a plain list of lock directory strings (the concrete slot dir,
+    # not the pool) - shared by spawn_keeper_and_emit and the dry-run
+    # preview so the two never drift on what the keeper command looks like.
+    #
+    # LOCK_RB_TEST_KEEPER_HOLD_UNTIL_OVERRIDE is a test-only seam: when set,
+    # it replaces the --hold-until value the real keeper is spawned with, so
+    # a real-process test can make the spawned keeper's own Cli.parse!
+    # reject it and exit immediately, exercising probe_keeper_alive against
+    # a genuinely dying process rather than a mock. It is never set outside
+    # a test; the dry-run preview also reflects it (nothing is ever spawned
+    # under --dry-run, so there is nothing for the override to make die).
+    def build_keeper_argv(dirs, hold_until)
       [RbConfig.ruby, SELF_PATH, "keep",
-       *locks.flat_map { |l| ["--dir", l[:dir]] },
+       *dirs.flat_map { |d| ["--dir", d] },
        "--acquirer-pid", Process.pid.to_s,
-       "--hold-until", owner["hold_until"],
+       "--hold-until", ENV["LOCK_RB_TEST_KEEPER_HOLD_UNTIL_OVERRIDE"] || hold_until,
        "--poll-seconds", KEEPER_POLL_SECONDS.to_s]
+    end
+
+    # Polls Process.kill(0, pid) briefly (about KEEPER_DEATH_CHECK_TRIES *
+    # KEEPER_DEATH_CHECK_INTERVAL seconds) for a keeper that has already
+    # died. Sh.spawn_detached detaches via Process.detach - a background
+    # thread in THIS process that waits on the child - not a double fork,
+    # so a keeper that exited the instant it started is a zombie
+    # until that thread gets scheduled and reaps it; until then kill(0,pid)
+    # still succeeds (the process table entry exists), so a single
+    # immediate check would wrongly read a dead keeper as alive. Polling
+    # gives the detach thread room to run (Kernel#sleep between tries yields
+    # the scheduler) so a genuinely dead keeper turns into a real ESRCH
+    # inside the bound; a keeper still unreaped after the bound is treated
+    # as alive, since a slow reap is not evidence of death. Delegates to
+    # keeper_probe when a test has installed one.
+    def probe_keeper_alive(pid)
+      return keeper_probe.call(pid) if keeper_probe
+
+      KEEPER_DEATH_CHECK_TRIES.times do |i|
+        begin
+          Process.kill(0, pid)
+        rescue Errno::ESRCH
+          return false
+        rescue Errno::EPERM
+          return true
+        end
+        sleep(KEEPER_DEATH_CHECK_INTERVAL) unless i == KEEPER_DEATH_CHECK_TRIES - 1
+      end
+      true
+    end
+
+    # A dead keeper is only a bug when its own lease had not yet run out -
+    # probe_keeper_alive's poll window (about 1s) can outlast a --hold-
+    # seconds short enough that the keeper legitimately expired while we
+    # were still watching (the plan's own expiry test uses --hold-seconds
+    # 1). That case is not a crash: it is the ordinary "expired" exit
+    # Lock.keep already documents, and the dead pid it leaves behind is
+    # exactly what probe/clear expect - rolling it back here would be
+    # wrong. So a dead keeper is reported premature (a real
+    # keeper_died_immediately) only while hold_until is still in the
+    # future; at or past it, this method defers to the ordinary expired-
+    # lease path and returns false (not premature).
+    def premature_keeper_death?(pid, hold_until_iso)
+      return false if probe_keeper_alive(pid)
+
+      Time.iso8601(hold_until_iso) > Time.now
     end
 
     # Builds the ordered lock specs from whichever lock flags were given.
@@ -258,12 +350,7 @@ end
       env.data[:waited_seconds] = 0
 
       if owner["hold_until"]
-        keeper_argv = [RbConfig.ruby, SELF_PATH, "keep",
-                       *targets.map { |t| ["--dir", t] }.flatten,
-                       "--acquirer-pid", Process.pid.to_s,
-                       "--hold-until", owner["hold_until"],
-                       "--poll-seconds", KEEPER_POLL_SECONDS.to_s]
-        env.commands << Sh.render(keeper_argv)
+        env.commands << Sh.render(build_keeper_argv(targets, owner["hold_until"]))
         env.data[:hold_until] = owner["hold_until"]
       end
 

@@ -727,7 +727,13 @@ worker's lock always goes through `--hold-seconds`, never `--pid`.
   (usage error, exit 2): a hold has exactly one liveness source. A spawn
   failure releases every lock this call just took and blocks
   `keeper_spawn_failed`, rather than leaving a hold whose recorded pid is
-  this CLI's own and dies the moment it exits.
+  this CLI's own and dies the moment it exits. Even a successful spawn is
+  not trusted outright: after the owner rewrite, `acquire` polls the
+  keeper's pid briefly (about 1s) for immediate death - a usage exit 2 out
+  of the keeper's own argument parsing, an exception during its startup -
+  and on a dead keeper rolls back the same way, blocking with its own code,
+  `keeper_died_immediately`, so the two spawn failure modes stay tellable
+  apart.
 - **`keep`** - internal; the detached keeper `acquire --hold-seconds`
   spawns, not meant to be run by hand (like `gate_run.rb supervise`).
   `--dir DIR` (repeatable, at least one), `--acquirer-pid N` (the acquiring
@@ -815,7 +821,8 @@ Standard kit exit codes. `status` always exits 0 (a read-only probe, never
 a judgment); `acquire`, `release`, and `clear` exit 1 when they report
 `blocked` (contention, a foreign owner, or an unprovable staleness claim).
 `acquire` also blocks `keeper_spawn_failed` when `--hold-seconds` could not
-spawn its keeper.
+spawn its keeper, and `keeper_died_immediately` when the keeper spawned but
+was already dead by the time `acquire` checked.
 
 ## `campaign_state.rb`: which campaign may a scheduler start
 

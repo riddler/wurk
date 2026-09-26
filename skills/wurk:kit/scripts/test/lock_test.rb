@@ -570,11 +570,18 @@ class LockCliTest < Minitest::Test
     @dir = Dir.mktmpdir
     @fake = FakeSh.new
     Sh.runner = @fake
+    # FakeSh's canned detached pids are not real processes, so the real
+    # immediate-death probe (Process.kill(0, pid)) would read every one of
+    # them as dead. These tests are about the spawn/rewrite wiring, not the
+    # death check itself (that gets its own real-process coverage below),
+    # so every keeper here is stubbed alive.
+    LockCli.keeper_probe = ->(_pid) { true }
   end
 
   def teardown
     FileUtils.remove_entry(@dir)
     Sh.runner = nil
+    LockCli.keeper_probe = nil
   end
 
   def run_cli(argv)
@@ -798,6 +805,21 @@ class LockCliTest < Minitest::Test
     assert Dir.exist?(lock_dir)
   end
 
+  # --- keep: CLI usage -----------------------------------------------------
+  #
+  # Same shape as the RELEASE_USAGE/CLEAR_USAGE usage-error tests above: a
+  # malformed --hold-until is caught by run_keep's own Time.iso8601 rescue
+  # and reported as a usage error (exit 2), never a raised ArgumentError.
+
+  def test_keep_with_malformed_hold_until_is_a_usage_error
+    io = StringIO.new
+    _, status = capture_exit do
+      LockCli.run(%W[keep --dir #{lock_dir} --acquirer-pid 123 --hold-until not-a-time], io: io)
+    end
+
+    assert_equal 2, status
+  end
+
   # --- acquire --hold-seconds: the keeper, via FakeSh ------------------------
 
   def test_acquire_with_hold_seconds_spawns_one_keeper_and_records_its_pid
@@ -945,10 +967,12 @@ class LockKeeperProcessTest < Minitest::Test
   end
 
   # Runs `lock.rb <argv>` as its own process, waits for it, and returns the
-  # parsed envelope. Standing in for one conductor tool call.
-  def run_lock_process(argv)
+  # parsed envelope. Standing in for one conductor tool call. `env` adds to
+  # (never replaces) this process's own environment - used only by the
+  # immediate-death test below, to set the keeper-argv test seam.
+  def run_lock_process(argv, env: {})
     env_path = File.join(@dir, "env-#{rand(1_000_000)}.json")
-    pid = Process.spawn(RbConfig.ruby, LOCK_RB, *argv, out: env_path)
+    pid = Process.spawn(env, RbConfig.ruby, LOCK_RB, *argv, out: env_path)
     Process.wait(pid)
     JSON.parse(File.read(env_path))
   end
@@ -1002,6 +1026,28 @@ class LockKeeperProcessTest < Minitest::Test
     assert release_env["data"]["released"]
 
     assert wait_until { !pid_alive?(keeper_pid) }, "the keeper did not exit after release"
+  end
+
+  # --- a keeper that dies the instant it starts is never trusted -----------
+  #
+  # Sh.spawn_detached only ever hands back the pid Process.spawn returned -
+  # not proof the keeper is still alive a moment later. LOCK_RB_TEST_-
+  # KEEPER_HOLD_UNTIL_OVERRIDE (lock.rb's build_keeper_argv) substitutes an
+  # unparseable --hold-until into the real spawned keeper's own argv, so the
+  # keeper's own Cli.parse! -> Time.iso8601 rescue exits it with status 2
+  # within a moment of starting - a real dying process, not a mock -
+  # exercising spawn_keeper_and_emit's own probe_keeper_alive poll.
+
+  def test_a_keeper_that_dies_immediately_is_not_trusted_as_the_owner
+    env = run_lock_process(
+      %W[acquire --gate-lock #{gate_dir} --campaign c1 --bead zz-1 --hold-seconds 60],
+      env: { "LOCK_RB_TEST_KEEPER_HOLD_UNTIL_OVERRIDE" => "not-a-time" }
+    )
+
+    refute env["ok"]
+    assert_equal "keeper_died_immediately", env["blocked"].first["code"]
+    assert_equal [], env["data"]["acquired"]
+    refute Dir.exist?(gate_dir), "a keeper that died immediately must not leave the lock behind"
   end
 
   # --- acceptance 2: a killed keeper leaves a provably stale lock ----------
