@@ -887,8 +887,13 @@ module CampaignStateCli
       path = locate(env, options, id)
       return env.emit(io) unless path
 
-      env.data[:block_path] = options[:block]
-      env.data[:plan_path] = path
+      env.data[:fence] = {
+        block_path: options[:block],
+        plan_path: path,
+        campaign: nil,
+        source_lines: nil,
+        paths: nil
+      }
 
       block_content = read_block(options[:block])
       if block_content.nil?
@@ -905,7 +910,8 @@ module CampaignStateCli
         env.block!(
           code: "scope_missing",
           message: "#{path} has no ## Scope section; " \
-                    "Fix: title the footprint section \"## Scope\" so fence has something to check the block against"
+                    "Fix: retitle the footprint section \"## Scope\", or, if this campaign truly has none, " \
+                    "have the operator state that in the plan"
         )
         return env.emit(io)
       end

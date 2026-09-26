@@ -426,7 +426,9 @@ under the current directory) and `--locks-dir DIR`.
   Finding codes, each a `blocked` entry (`needs: "human"`, the kit's only
   value; every message ends with a `Fix:` clause naming the
   re-derivation): `invariant_block_missing` (`--block` names no readable
-  file), `scope_missing` (the plan has no `## Scope` section),
+  file), `scope_missing` (the plan has no `## Scope` section - the `Fix:`
+  clause says to retitle the footprint section `## Scope`, or, if this
+  campaign truly has none, to have the operator state that in the plan),
   `fence_missing` (the block has no `SCOPE:` paragraph, or its header
   does not match the grammar above), `fence_wrong_campaign` (the header
   names a campaign id other than ID - both ids are named),
@@ -440,9 +442,15 @@ under the current directory) and `--locks-dir DIR`.
   last four are all reported together, so one run lists every stale
   line and path at once.
 
-  `data.fence` carries `block_path`, `plan_path`, `campaign` (the
-  header's id, whatever it named), `source_lines`, and `paths` - present
-  even on a blocked run, so a caller can see what was actually parsed.
+  `data.fence` is set before every return that has resolved the id to a
+  plan path, including `invariant_block_missing` and `scope_missing`:
+  `block_path` and `plan_path` are always known by then, `campaign`,
+  `source_lines`, and `paths` are `null` until the slot is actually
+  parsed. It carries `block_path`, `plan_path`, `campaign` (the header's
+  id, whatever it named), `source_lines`, and `paths` - present even on
+  a blocked run, so a caller can see what was actually parsed. These
+  live only under `data.fence`; `run` never also writes `block_path` or
+  `plan_path` flat on `data`.
 
 Both mutations write via a sibling temp file and rename, so a concurrent
 `list` sees the old file or the new one.
