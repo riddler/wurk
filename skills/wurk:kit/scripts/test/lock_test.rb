@@ -406,6 +406,157 @@ class LockLibTest < Minitest::Test
     assert_equal "not_provably_stale", result[:reason]
     assert Dir.exist?(dir)
   end
+
+  # --- rewrite_owner_pid: hold_until survives ------------------------------
+
+  def test_rewrite_owner_pid_preserves_hold_until
+    dir = lock_dir
+    Lock.try_acquire(dir, owner("hold_until" => "2026-09-26T12:00:00Z"))
+
+    Lock.rewrite_owner_pid(dir, 999)
+
+    parsed = Lock.read_owner(dir)
+    assert_equal "999", parsed["pid"]
+    assert_equal "2026-09-26T12:00:00Z", parsed["hold_until"]
+  end
+
+  # --- keep: the pure keeper loop -------------------------------------------
+
+  def keeper_owner(pid, extra = {})
+    owner("pid" => pid.to_s).merge(extra)
+  end
+
+  def test_keep_returns_released_when_every_dir_is_removed
+    dir = lock_dir
+    Lock.try_acquire(dir, keeper_owner(4242))
+
+    waiter = FakeWaiter.new
+    waiter.sleeper.define_singleton_method(:call) do |seconds|
+      calls << seconds
+      FileUtils.remove_entry(dir)
+    end
+
+    result = Lock.keep(
+      [dir], own_pid: 4242, acquirer_pid: 1, hold_until: waiter.clock.call + 60,
+      poll_seconds: 5, clock: waiter.clock_proc, sleeper: waiter.sleeper_proc
+    )
+
+    assert_equal "released", result[:reason]
+    assert_equal [], result[:watching]
+  end
+
+  def test_keep_treats_the_acquirer_pid_as_ours_until_rewritten
+    dir = lock_dir
+    acquirer_pid = 111
+    own_pid = 222
+    Lock.try_acquire(dir, keeper_owner(acquirer_pid))
+
+    waiter = FakeWaiter.new
+    waiter.sleeper.define_singleton_method(:call) do |seconds|
+      calls << seconds
+      if calls.length == 1
+        Lock.rewrite_owner_pid(dir, own_pid)
+      else
+        FileUtils.remove_entry(dir)
+      end
+    end
+
+    result = Lock.keep(
+      [dir], own_pid: own_pid, acquirer_pid: acquirer_pid, hold_until: waiter.clock.call + 60,
+      poll_seconds: 5, clock: waiter.clock_proc, sleeper: waiter.sleeper_proc
+    )
+
+    assert_equal "released", result[:reason]
+    assert_equal 2, waiter.sleeper.calls.length
+  end
+
+  def test_keep_drops_a_dir_whose_owner_has_no_pid
+    dir = lock_dir
+    Dir.mkdir(dir)
+    File.write(File.join(dir, Lock::OWNER_FILE), "campaign=c1\nbead=zz-1\n")
+
+    result = Lock.keep(
+      [dir], own_pid: 1, acquirer_pid: 2, hold_until: Time.now + 60,
+      poll_seconds: 5
+    )
+
+    assert_equal "superseded", result[:reason]
+    assert_equal [], result[:watching]
+  end
+
+  def test_keep_returns_superseded_when_another_holder_owns_the_dir
+    dir = lock_dir
+    own_pid = 333
+    acquirer_pid = 334
+    other_pid = 999
+    Lock.try_acquire(dir, keeper_owner(own_pid))
+
+    other_owner = keeper_owner(other_pid)
+    waiter = FakeWaiter.new
+    waiter.sleeper.define_singleton_method(:call) do |seconds|
+      calls << seconds
+      FileUtils.remove_entry(dir)
+      Lock.try_acquire(dir, other_owner)
+    end
+
+    result = Lock.keep(
+      [dir], own_pid: own_pid, acquirer_pid: acquirer_pid, hold_until: waiter.clock.call + 60,
+      poll_seconds: 5, clock: waiter.clock_proc, sleeper: waiter.sleeper_proc
+    )
+
+    assert_equal "superseded", result[:reason]
+    assert_equal [], result[:watching]
+  end
+
+  def test_keep_expires_at_hold_until_and_leaves_the_lock_in_place
+    dir = lock_dir
+    own_pid = 4444
+    Lock.try_acquire(dir, keeper_owner(own_pid))
+
+    start = Time.now
+    clock = FakeClock.new(start)
+    sleeper = RecordingSleeper.new
+    hold_until = start + 30
+
+    result = Lock.keep(
+      [dir], own_pid: own_pid, acquirer_pid: 1, hold_until: hold_until,
+      poll_seconds: 5, clock: -> { clock.call.tap { clock.advance(30) } }, sleeper: sleeper
+    )
+
+    assert_equal "expired", result[:reason]
+    assert_equal [dir], result[:watching]
+    assert Dir.exist?(dir)
+    assert_equal keeper_owner(own_pid), Lock.read_owner(dir)
+
+    dead_pid = DeadPid.obtain
+    Lock.rewrite_owner_pid(dir, dead_pid)
+    probe = Lock.probe(dir, stale_after_seconds: 1800)
+    assert_equal "dead_holder_pid", probe[:staleness_reason]
+  end
+
+  def test_keep_never_sleeps_past_hold_until
+    dir = lock_dir
+    own_pid = 5555
+    Lock.try_acquire(dir, keeper_owner(own_pid))
+
+    waiter = FakeWaiter.new
+    hold_until = waiter.clock.call + 12
+
+    Lock.keep(
+      [dir], own_pid: own_pid, acquirer_pid: 1, hold_until: hold_until,
+      poll_seconds: 5, clock: waiter.clock_proc,
+      sleeper: ->(seconds) {
+        waiter.sleeper.call(seconds)
+        waiter.clock.advance(seconds)
+        FileUtils.remove_entry(dir) if waiter.sleeper.calls.length >= 3
+      }
+    )
+
+    waiter.sleeper.calls.each do |seconds|
+      assert_operator seconds, :<=, 5
+    end
+    assert_equal [5, 5, 2], waiter.sleeper.calls
+  end
 end
 
 # LockCli - the envelope-wrapped subcommands, driven through the CLI

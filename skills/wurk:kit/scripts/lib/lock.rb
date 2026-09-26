@@ -15,6 +15,11 @@ require "time"
 # directory, exactly one succeeds and the other gets Errno::EEXIST. Releasing
 # one is removing the owner file then the directory. Nothing here uses
 # flock, a pid file library, or any gem - stdlib only, per ADR-0006.
+#
+# The recorded pid must be a process whose lifetime IS the hold - the
+# session for a session-held lock, the gate supervisor for gate_run.rb, the
+# keeper for an `acquire --hold-seconds` hold - because probe trusts it and
+# nothing else: it has no other way to tell a live hold from a dead one.
 module Lock
   OWNER_FILE = "owner"
 
@@ -32,8 +37,10 @@ module Lock
 
   # Keys the owner file may carry, in the order they are written. Not every
   # key is present on every lock (a human-held lock may carry no pid); an
-  # absent key is simply not written, never written empty.
-  OWNER_KEYS = %w[campaign bead pid host purpose acquired_at].freeze
+  # absent key is simply not written, never written empty. `hold_until` is
+  # present only on a lock held through a keeper, and is the time the
+  # keeper stops keeping it.
+  OWNER_KEYS = %w[campaign bead pid host purpose acquired_at hold_until].freeze
 
   DEFAULT_CLOCK = -> { Time.now }
   DEFAULT_SLEEPER = ->(seconds) { Kernel.sleep(seconds) }
@@ -272,6 +279,41 @@ module Lock
 
       FileUtils.rm_rf(dir)
       { cleared: true, probe: result }
+    end
+
+    # The loop behind `lock.rb keep`: the process whose pid a keeper-held
+    # lock records, and which therefore IS the hold as far as probe's
+    # liveness check is concerned. Watches dirs until one of three things:
+    #   released   - every watched dir is gone (lock.rb release removed it)
+    #   superseded - every remaining dir is owned by a pid that is neither
+    #                own_pid nor acquirer_pid (released, then re-taken)
+    #   expired    - clock passed hold_until; the dirs are left exactly as
+    #                they are, so the exit leaves a dead pid behind and probe
+    #                reports dead_holder_pid, which clear may remove
+    # acquirer_pid counts as "ours" because the acquiring CLI rewrites the
+    # owner pid to the keeper only after the keeper has started. A missing or
+    # unreadable owner file counts as not ours. Pure filesystem + clock: no
+    # Sh, no envelope. Returns {reason:, watching:} where watching is the
+    # dirs still held at exit (empty unless expired).
+    def keep(dirs, own_pid:, acquirer_pid:, hold_until:, poll_seconds:, clock: DEFAULT_CLOCK, sleeper: DEFAULT_SLEEPER)
+      ours = [own_pid.to_s, acquirer_pid.to_s]
+      watching = dirs.dup
+      superseded = false
+      loop do
+        watching.select! do |dir|
+          next false unless Dir.exist?(dir)
+          owner = read_owner(dir)
+          mine = owner && ours.include?(owner["pid"])
+          superseded ||= !mine
+          mine
+        end
+        return { reason: superseded ? "superseded" : "released", watching: [] } if watching.empty?
+
+        now = clock.call
+        return { reason: "expired", watching: watching } if now >= hold_until
+
+        sleeper.call([poll_seconds, hold_until - now].min)
+      end
     end
 
     # Field-by-field owner identity comparison, exposed publicly so a CLI
