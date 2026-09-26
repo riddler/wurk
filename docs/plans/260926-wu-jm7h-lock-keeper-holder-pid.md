@@ -447,20 +447,20 @@ mkdir-mutex"
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `/usr/bin/ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] The acceptance tests are green:
+- [x] Full quality gate passes: `/usr/bin/ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] The acceptance tests are green:
       `/usr/bin/ruby skills/wurk:kit/scripts/test/lock_test.rb -n /LockKeeperProcessTest/`
-- [ ] The FakeSh CLI tests are green:
+- [x] The FakeSh CLI tests are green:
       `/usr/bin/ruby skills/wurk:kit/scripts/test/lock_test.rb -n /hold_seconds|keeper/`
-- [ ] The contract test still passes with `lock.rb` now spawning (it goes
+- [x] The contract test still passes with `lock.rb` now spawning (it goes
       through `Sh.spawn_detached`, so the process-creation scan stays
       clean): `/usr/bin/ruby skills/wurk:kit/scripts/test/contract_test.rb`
-- [ ] No keeper is left running after the suite:
+- [x] No keeper is left running after the suite:
       `pgrep -f 'lock.rb keep'` prints nothing once the suite exits
-- [ ] The reference documents the new surface:
+- [x] The reference documents the new surface:
       `grep -n "hold-seconds\|hold_until\|keeper_pid\|keeper_spawn_failed" skills/wurk:kit/REFERENCE.md`
       finds each term
-- [ ] No existing test changed expectation: `git diff main -U0 -- skills/wurk:kit/scripts/test/lock_test.rb | grep -c '^-[^-]'` prints `0`
+- [x] No existing test changed expectation: `git diff main -U0 -- skills/wurk:kit/scripts/test/lock_test.rb | grep -c '^-[^-]'` prints `0`
       (the `LockCliTest` setup/teardown edits add lines only)
 
 #### Manual Verification:
@@ -670,6 +670,27 @@ before considering the plan fully landed.
       someone who knows only the old owner-file shape
 - [ ] No regressions in related features: `campaign_state_test.rb` and
       `gate_run_test.rb` untouched and green
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 2
+
+- [ ] Manual Testing Steps 1-4 below behave as described
+- [ ] The keeper survives closing the tmux window it was started from
+      (Manual Testing Step 2) - the property the real-process tests can
+      only approximate by letting the acquirer exit
+- [ ] The reference's `pid` paragraph is clear on which of the three
+      sources a caller should use, without reading the code
+- [ ] No regressions in related features: `gate_run.rb start --gate-lock`
+      still records the supervisor pid and releases on finish
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,

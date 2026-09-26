@@ -43,6 +43,15 @@ class FakeSh
     @calls = []
     @detached_calls = []
     @next_detached_pid = 424_242
+    @detached_failure = nil
+  end
+
+  # Opt-in, one-shot failure for the next #spawn_detached call: raises
+  # `exception` instead of returning a canned pid, then reverts to the
+  # normal canned-pid behavior. Existing #spawn_detached callers that never
+  # call this are unaffected.
+  def fail_detached!(exception)
+    @detached_failure = exception
   end
 
   # Registers a fake response for the next call whose argv starts with
@@ -82,6 +91,12 @@ class FakeSh
   # Result to script.
   def spawn_detached(argv, chdir: nil, out_path:)
     @detached_calls << DetachedCall.new(argv, chdir, out_path)
+    if @detached_failure
+      failure = @detached_failure
+      @detached_failure = nil
+      raise failure
+    end
+
     @next_detached_pid += 1
   end
 
