@@ -92,7 +92,11 @@ wait on the same lock:
 - `locks/registry/` - rule 1.
 
 Owner-file discipline: the owner file carries `campaign=<id> bead=<id>
-pid=<pid>`; 10s polls (30s starves); re-read the owner before any
+pid=<pid>`; `pid` is the pid of a process whose lifetime IS the hold -
+the conductor session for its own mutex, the keeper `lock.rb acquire
+--hold-seconds` spawns for a worker's lock, the supervisor for
+`gate_run.rb start`. A keeper-held lock's owner file also carries
+`hold_until`. 10s polls (30s starves); re-read the owner before any
 staleness conclusion; never remove a lock you did not create;
 ownerless locks are resolved by a conductor after an owner re-read and
 journaled. A conductor may clear a verified-stale lock owned by ANOTHER

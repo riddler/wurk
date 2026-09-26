@@ -533,16 +533,16 @@ for a keeper-held lock.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `/usr/bin/ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] Full quality gate passes: `/usr/bin/ruby skills/wurk:kit/scripts/test/run.rb`
       (it includes `build_agents.rb --check`, so a stale generated agent
       turns it red)
-- [ ] The worker instructions no longer tell anyone to mkdir or rmdir a
+- [x] The worker instructions no longer tell anyone to mkdir or rmdir a
       lock by hand: `grep -n "mkdir to acquire\|rmdir after" agents/blocks/gate-discipline.md agents/wurk-repo-worker.md`
       prints nothing
-- [ ] Every caller surface names the flag:
+- [x] Every caller surface names the flag:
       `grep -ln -- "--hold-seconds" agents/blocks/gate-discipline.md agents/wurk-repo-worker.md skills/wurk:conductor/SKILL.md skills/wurk:conductor/REFERENCE.md`
       lists all four files
-- [ ] Plain ASCII in the edited prose:
+- [x] Plain ASCII in the edited prose:
       `git diff main -- agents skills/wurk:conductor | grep '^+' | LC_ALL=C grep -n '[^ -~]'`
       prints nothing
 
@@ -691,6 +691,28 @@ of blocking here.
       sources a caller should use, without reading the code
 - [ ] No regressions in related features: `gate_run.rb start --gate-lock`
       still records the supervisor pid and releases on finish
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 3
+
+- [ ] Read as a worker: the gate-semaphore bullet alone tells you which
+      command to run, which flag to use, and why not `--pid`
+- [ ] Read as a conductor: it is clear the campaign mutex keeps
+      `--pid <session pid>` and worker holds do not
+- [ ] The merge-time prose judge over `skills/**/SKILL.md` (ADR-0008,
+      through `.claude/wurk/mr.md`) passes at `/wurk:mr`
+- [ ] No regressions in related features: the conductor's other lock
+      prose (fixed acquisition order, "never let workers break locks")
+      is unchanged
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,

@@ -200,7 +200,10 @@ session, `$PPID`, confirmed with `ps -o comm= -p $PPID` before use. It
 is what lets the NEXT scheduled run tell a crashed session (a provably
 dead pid, which `lock.rb clear` will clear) from a live one (which it
 refuses to touch); a mutex taken without a pid can only ever be cleared
-by a human. A `lock_contended` block here is refusal 3 arriving late -
+by a human. The session pid is right here because the conductor session
+is the holder; a lock taken on a worker's behalf never carries it,
+since subagents run in the same process - that is what `--hold-seconds`
+is for. A `lock_contended` block here is refusal 3 arriving late -
 refuse `campaign_running`, do not wait. Holding the mutex is what
 `campaign_state.rb` reports as `running`; an interactive
 `campaign <id>` invocation takes the same mutex at Phase 0 for the same
@@ -821,8 +824,13 @@ worktree isolation when parallel workers share directories.
   silently merged the two caps into one, and will exceed whichever cap
   it stopped enforcing.
   The judgement stays yours even though the script performs the
-  locking. You decide both caps and their numbers before you dispatch,
-  and you verify staleness rather than assuming it: before trusting a
+  locking. You decide both caps and their numbers before you dispatch -
+  and the hold as well: `--hold-seconds`, sized from your Phase 0 gate
+  measurement plus the commit's internal gate re-run, with margin, and
+  relayed to the worker in the dispatch. An expired hold becomes
+  clearable, not cleared - the same verified-stale judgement below
+  decides whether to clear it.
+  You verify staleness rather than assuming it: before trusting a
   held lock, probe liveness yourself - lock mtime vs `ps` for any live
   gate process, machine-wide, alongside `lock.rb status`. Clear a
   verified-stale lock (`lock.rb clear` refuses anything not provably
@@ -1051,8 +1059,9 @@ nothing about a lock.** Two clauses, each from a resume that raced:
   same gate-semaphore slot a fresh dispatch would (Phase 3) and
   nothing more: under contending gates, "acquire the campaign mutex,
   the repo lock and a machine slot in that fixed order via `lock.rb
-  acquire`, bounded wait, else stop-and-report", never "a slot is
-  free"; under non-contending gates, the same explicit negative the
+  acquire` with `--hold-seconds <N>`, bounded wait, else
+  stop-and-report", never "a slot is free"; under non-contending
+  gates, the same explicit negative the
   dispatch template carries, which asserts no slot because there is no
   slot to assert. A resumed worker that finds a lock held stops and
   reports. Breaking one stays yours, and only against an owner you
@@ -2053,9 +2062,9 @@ never green.>
 <Gate-semaphore slot - fill exactly one, and never leave it empty.
 CONTENDING GATES: the campaign mutex dir, the repo gate-lock dir
 and the slots dir + slot count, acquired in that fixed order (campaign
-mutex, then repo lock, then machine slot) via `lock.rb acquire` and
-released in reverse; bounded-wait shape, always-release, staleness =
-report not break.
+mutex, then repo lock, then machine slot) via `lock.rb acquire` with
+`--hold-seconds <N>` and released in reverse; bounded-wait shape,
+always-release, staleness = report not break.
 NON-CONTENDING GATES: the explicit negative - "NO semaphore, no lock
 dir, no slots - gate measured at Ns; run it foreground and build no
 coordination around it.">

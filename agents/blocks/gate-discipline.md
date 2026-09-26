@@ -51,10 +51,15 @@ Gate discipline (learned the expensive way, campaigns 004 and 007):
   Either way the poll is a foreground command you repeat yourself, never
   a Monitor and never a background task.
 - **Gate semaphore.** If the dispatch names a campaign gate-lock dir:
-  mkdir to acquire before any full-suite run; bounded wait (the dispatch
-  names the loop shape) if held; ALWAYS rmdir after your run, pass or
-  fail. If you exhaust the wait twice, probe ps for a live gate process
-  and report staleness - never break another holder's lock yourself.
+  take the locks the dispatch names with `lock.rb acquire`, and
+  `--hold-seconds` set to the hold the dispatch names, before any
+  full-suite run; bounded wait (the dispatch names the loop shape) if
+  held. Never pass `--pid` - your shell's parent is the conductor's
+  session process, not you, so a pid from it makes your lock live and die
+  with the conductor's window. Release with `lock.rb release` after your
+  run, pass or fail. If you exhaust the wait twice, probe ps for a live
+  gate process and report staleness - never break another holder's lock
+  yourself.
 - **Completed is not done.** A child reporting "completed", or a gate
   run returning, tells you one thing only: you have no live child. It is
   not permission to yield. Your task is done when your own definition of
