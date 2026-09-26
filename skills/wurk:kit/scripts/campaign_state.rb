@@ -16,6 +16,10 @@ require_relative "lib/user_config"
 # the campaign mutex (lib/lock.rb, the same mkdir-mutex the conductor takes),
 # and - under arm/disarm - rewrites exactly one line of one plan file.
 #
+# `fence` reads one more thing: an invariant-block file named on the command
+# line (`--block PATH`), checked read-only against the plan it belongs to. It
+# writes nothing, same as list/show.
+#
 # It never invokes the conductor, never takes or releases a lock, and never
 # writes a consent file: consent is a human artifact, and arming is only
 # meaningful once a human has adopted it (the arm subcommand refuses
@@ -83,6 +87,16 @@ module CampaignState
   # must never be captured as the name - see parse_machine's malformed
   # branch.
   MACHINE_LINE = /\AMachine:[ \t]*([A-Za-z0-9._-]+)?[ \t]*\z/.freeze
+
+  # An invariant block's SCOPE slot header, `SCOPE: campaign <id>` at column
+  # 1; the id is the next whitespace-delimited token, with a trailing `,` or
+  # `.` stripped from the captured group by the caller (fence_findings), not
+  # by this pattern.
+  SCOPE_HEADER = /\ASCOPE:[ \t]*campaign[ \t]+(\S+)/.freeze
+  # A source line inside the SCOPE slot: the first non-blank character on
+  # the line is `|`; the captured group is the text after it and one
+  # optional space, unstripped (fence_findings strips it).
+  SCOPE_SOURCE = /\A[ \t]*\|[ ]?(.*)\z/.freeze
 
   # The four states a campaign's (or a predecessor's) machine binding can
   # be in. "unbound" and "this_machine" both count toward armed/runnable;
@@ -323,6 +337,118 @@ module CampaignState
       lines.join
     end
 
+    # The SCOPE slot of an invariant block, checked against a plan's ## Scope
+    # body. Returns {campaign:, source_lines:, paths:, findings: [{code:,
+    # message:}]}; findings is empty when the slot is derived from this plan.
+    # Grammar (also documented in skills/wurk:conductor/REFERENCE.md, "fence
+    # ID --block PATH"):
+    # - the slot is the paragraph starting at the first column-1 "SCOPE:"
+    #   line and ending at the next blank line or end of file;
+    # - the header is that first line, matched against SCOPE_HEADER; a
+    #   header that is missing, or present but not in that shape, is
+    #   fence_missing - there is no id to compare or slot to check further;
+    # - source lines are the slot's other lines matching SCOPE_SOURCE; a
+    #   quoted line empty after stripping is dropped, not counted;
+    # - path tokens are the whitespace-delimited tokens on the slot's
+    #   remaining lines (neither the header nor a source line) that contain
+    #   "/", after strip_path_token;
+    # - the plan side is scope_body, compared to a source line one stripped
+    #   line at a time, and to a path token by substring.
+    # fence_missing short-circuits (nothing further can be read); the other
+    # findings are all collected together so one run reports every stale
+    # line and path at once.
+    def fence_findings(block_content, id, scope_body)
+      lines = block_content.lines.map(&:chomp)
+      start_index = lines.index { |line| line.start_with?("SCOPE:") }
+      if start_index.nil?
+        return fence_result(findings: [fence_finding(
+          "fence_missing",
+          "the invariant block has no SCOPE: paragraph (a column-1 line starting \"SCOPE:\"); " \
+          "Fix: add a SCOPE slot derived from this plan's ## Scope section"
+        )])
+      end
+
+      slot = []
+      lines[start_index..].each do |line|
+        break if line.strip.empty?
+
+        slot << line
+      end
+
+      header = slot.first
+      header_match = header.match(SCOPE_HEADER)
+      if header_match.nil?
+        return fence_result(findings: [fence_finding(
+          "fence_missing",
+          "the SCOPE: line does not match \"SCOPE: campaign <id>\" (#{header.inspect}); " \
+          "Fix: rewrite the header to name this campaign's id"
+        )])
+      end
+
+      header_id = header_match[1].sub(/[.,]\z/, "")
+      findings = []
+      if header_id != id
+        findings << fence_finding(
+          "fence_wrong_campaign",
+          "the SCOPE slot's header names campaign #{header_id.inspect}, not #{id.inspect}; " \
+          "Fix: re-derive the SCOPE slot from this campaign's (#{id}) plan - never carried from another campaign's block"
+        )
+      end
+
+      source_lines = []
+      other_lines = []
+      slot[1..].each do |line|
+        source_match = line.match(SCOPE_SOURCE)
+        if source_match
+          quoted = source_match[1].strip
+          source_lines << quoted unless quoted.empty?
+        else
+          other_lines << line
+        end
+      end
+
+      if source_lines.empty?
+        findings << fence_finding(
+          "fence_unsourced",
+          "the SCOPE slot has no source line (a line whose first non-blank character is \"|\"); " \
+          "Fix: quote the plan's ## Scope lines the fence derives from, each on its own \"| \" line"
+        )
+      end
+
+      plan_lines = (scope_body || "").lines.map(&:strip)
+      source_lines.each do |source_line|
+        next if plan_lines.include?(source_line)
+
+        findings << fence_finding(
+          "fence_line_not_in_plan",
+          "the SCOPE slot quotes #{source_line.inspect}, which is not a line of this plan's ## Scope section; " \
+          "Fix: re-derive the SCOPE slot from the plan's current ## Scope"
+        )
+      end
+
+      paths = []
+      other_lines.each do |line|
+        line.split(/\s+/).each do |token|
+          next unless token.include?("/")
+
+          path = strip_path_token(token)
+          paths << path if !path.empty? && path.include?("/")
+        end
+      end
+      paths.uniq!
+      paths.each do |path|
+        next if (scope_body || "").include?(path)
+
+        findings << fence_finding(
+          "fence_path_not_in_plan",
+          "the SCOPE slot cites #{path.inspect}, which this plan's ## Scope section does not name; " \
+          "Fix: add #{path.inspect} to ## Scope if it belongs to this campaign, or remove it from the block"
+        )
+      end
+
+      fence_result(campaign: header_id, source_lines: source_lines, paths: paths, findings: findings)
+    end
+
     def stamp(time)
       time.strftime("%Y-%m-%d %H:%M %z")
     end
@@ -465,6 +591,28 @@ module CampaignState
       probe = Lock.probe(dir)
       { dir: dir }.merge(probe)
     end
+
+    def fence_result(campaign: nil, source_lines: [], paths: [], findings: [])
+      { campaign: campaign, source_lines: source_lines, paths: paths, findings: findings }
+    end
+
+    def fence_finding(code, message)
+      { code: code, message: message }
+    end
+
+    # A path token, stripped per fence_findings' grammar: trailing
+    # `.,;:` first, then one surrounding layer of backtick/quote/paren,
+    # then trailing `.,;:` again (a wrapped token can expose more, as in
+    # `` `a/b`. `` - the trailing "." strips, the backticks strip, and
+    # nothing is left to strip a third time).
+    def strip_path_token(token)
+      # \x60 is a backtick, spelled as an escape (not a literal backtick
+      # pair) so this code line does not read as inline command
+      # substitution to the kit contract test's system_or_backticks scan.
+      token = token.sub(/[.,;:]+\z/, "")
+      token = token.sub(/\A[\x60'"(]/, "").sub(/[\x60'")]\z/, "")
+      token.sub(/[.,;:]+\z/, "")
+    end
   end
 end
 
@@ -472,8 +620,8 @@ end
 # line and nothing else (disarm takes ARMED or QUEUED back to DRAFTED).
 # Every subcommand takes the same location flags.
 module CampaignStateCli
-  SUBCOMMANDS = %w[list show arm disarm].freeze
-  USAGE = "campaign_state.rb <list|show ID|arm ID [--after ID] [--host NAME]|disarm ID> [--dir DIR ...] [--locks-dir DIR] [--dry-run]"
+  SUBCOMMANDS = %w[list show arm disarm fence].freeze
+  USAGE = "campaign_state.rb <list|show ID|arm ID [--after ID] [--host NAME]|disarm ID|fence ID --block PATH> [--dir DIR ...] [--locks-dir DIR] [--dry-run]"
 
   class << self
     def run(argv, io: $stdout)
@@ -490,10 +638,21 @@ module CampaignStateCli
         opts.on("--locks-dir DIR", "where campaign mutexes live (default <first --dir>/#{CampaignState::LOCKS_SUBDIR})") { |v| options[:locks_dir] = v }
         opts.on("--after ID", "arm only: queue behind campaign ID (writes Status: QUEUED ... after ID)") { |v| options[:after] = v }
         opts.on("--host NAME", "arm only: bind the plan to this machine; NAME must equal ~/.claude/wurk.local.json machine.name") { |v| options[:host] = v }
+        opts.on("--block PATH", "fence only: the invariant-block.md to check") { |v| options[:block] = v }
       end
       args = Cli.parse!(parser, argv)
 
       if options[:host] && subcommand != "arm"
+        warn "usage: #{USAGE}\n\n#{parser}"
+        exit 2
+      end
+
+      if options[:block] && subcommand != "fence"
+        warn "usage: #{USAGE}\n\n#{parser}"
+        exit 2
+      end
+
+      if subcommand == "fence" && !options[:block]
         warn "usage: #{USAGE}\n\n#{parser}"
         exit 2
       end
@@ -716,6 +875,62 @@ module CampaignStateCli
 
       rewrite(env, options, path, campaign, CampaignState::DRAFTED, this_machine, drop_after: queued)
       env.emit(io)
+    end
+
+    # --- fence ------------------------------------------------------------------
+    #
+    # Read-only, like list/show: checks one invariant-block file's SCOPE
+    # slot against the plan it claims to belong to and never writes either.
+    # locate refuses campaign_not_found the same as show/arm/disarm.
+
+    def run_fence(env, options, id, io, _this_machine)
+      path = locate(env, options, id)
+      return env.emit(io) unless path
+
+      env.data[:block_path] = options[:block]
+      env.data[:plan_path] = path
+
+      block_content = read_block(options[:block])
+      if block_content.nil?
+        env.block!(
+          code: "invariant_block_missing",
+          message: "--block #{options[:block]} names no readable file; " \
+                    "Fix: pass the invariant-block.md this campaign actually writes"
+        )
+        return env.emit(io)
+      end
+
+      scope_body = CampaignState.section(CampaignState.read_utf8(path), "Scope")
+      if scope_body.nil?
+        env.block!(
+          code: "scope_missing",
+          message: "#{path} has no ## Scope section; " \
+                    "Fix: title the footprint section \"## Scope\" so fence has something to check the block against"
+        )
+        return env.emit(io)
+      end
+
+      result = CampaignState.fence_findings(block_content, id, scope_body)
+      result[:findings].each { |finding| env.block!(code: finding[:code], message: finding[:message]) }
+
+      env.data[:fence] = {
+        block_path: options[:block],
+        plan_path: path,
+        campaign: result[:campaign],
+        source_lines: result[:source_lines],
+        paths: result[:paths]
+      }
+      env.emit(io)
+    end
+
+    def read_block(path)
+      return nil unless path && File.file?(path)
+
+      begin
+        CampaignState.read_utf8(path)
+      rescue SystemCallError
+        nil
+      end
     end
 
     # --- shared -------------------------------------------------------------------
