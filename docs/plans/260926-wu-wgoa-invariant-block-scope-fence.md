@@ -361,10 +361,10 @@ appendix's carrying section by name.
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] Full quality gate passes: `/usr/bin/ruby skills/wurk:kit/scripts/test/run.rb`
-- [ ] `grep -n "^SCOPE: campaign" skills/wurk:conductor/SKILL.md` finds the slot inside the appendix template
-- [ ] `grep -n "campaign_state.rb fence" skills/wurk:conductor/SKILL.md` finds the carrying section's command
-- [ ] `git diff main -- skills/wurk:conductor | ruby -ne 'print if /^\+/ && !$_.ascii_only?'` prints nothing (plain ASCII in added lines)
+- [x] Full quality gate passes: `/usr/bin/ruby skills/wurk:kit/scripts/test/run.rb`
+- [x] `grep -n "^SCOPE: campaign" skills/wurk:conductor/SKILL.md` finds the slot inside the appendix template
+- [x] `grep -n "campaign_state.rb fence" skills/wurk:conductor/SKILL.md` finds the carrying section's command
+- [x] `git diff main -- skills/wurk:conductor | ruby -ne 'print if /^\+/ && !$_.ascii_only?'` prints nothing (plain ASCII in added lines)
 
 #### Manual Verification:
 - [ ] The template's SCOPE slot text parses under the Phase 1 grammar when filled (paste a filled copy into a scratch block and run `fence` against a scratch plan)
@@ -447,6 +447,23 @@ before considering the plan fully landed.
 - [ ] Run `campaign_state.rb fence` by hand against a scratch campaigns dir with a copied predecessor block and read the blocked messages - each names the offending line or path and a `Fix:`
 - [ ] REFERENCE.md's grammar text matches the regexes in the code
 - [ ] No regressions in `list`/`show`/`arm`/`disarm`
+
+**Implementation Note**: Use the project's loop gate between edits while
+iterating; run the full gate as the phase gate. In interactive execution,
+pause here for the human to confirm the manual testing before moving to the
+next phase. In looped (`--loop`) execution, this phase's Automated
+Verification gates advancement automatically (via `/wurk:commit --auto`), and
+Manual Verification items are deferred and surfaced once at the end instead
+of blocking here.
+
+---
+
+### Phase 2
+
+- [ ] The template's SCOPE slot text parses under the Phase 1 grammar when filled (paste a filled copy into a scratch block and run `fence` against a scratch plan)
+- [ ] No step number is cited from outside a skill; cross-references use section names
+- [ ] No consumer path, bead prefix or campaign id appears in the new prose
+- [ ] The successor section's by-name fence rule and the new derivation rule read as one rule, not two in tension
 
 **Implementation Note**: Use the project's loop gate between edits while
 iterating; run the full gate as the phase gate. In interactive execution,

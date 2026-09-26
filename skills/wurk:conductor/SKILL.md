@@ -348,7 +348,11 @@ authority rather than a habit:
   the conservative reading, and the one that cannot damage anything.
   Then say so in the restatement, because a fence that was only ever
   about the predecessor's scope is needlessly sticky and the operator
-  is the one who can tell you which it was in one word.
+  is the one who can tell you which it was in one word. A carried
+  fence is written into the successor plan's `## Scope` (and its
+  `## Inheritance` reading), and the successor's block quotes it from
+  there like any other scope line - never copied from the
+  predecessor's block.
 
 **A successor has its own plan and its own consent file.** Neither is
 inherited (REFERENCE.md's multi-campaign rule 5: consent stays
@@ -870,7 +874,10 @@ worktree isolation when parallel workers share directories.
   first; it is binding. The per-dispatch slots stay inline and stay
   per-dispatch. The rule and the split are in the appendix's
   "Carrying the block" section; read it before wave zero, because
-  the file has to exist before the first dispatch does.
+  the file has to exist before the first dispatch does. The file is
+  written fresh per campaign, its SCOPE slot quotes this plan's
+  `## Scope`, and `campaign_state.rb fence` passes before the first
+  dispatch.
 - **Name a report file in every dispatch.** Fill the appendix's REPORT
   slot with an absolute per-bead path `<reports dir>/<bead-id>-report.json`.
   The reports dir sits inside the campaign state dir (Journal and
@@ -2007,6 +2014,13 @@ overrides for THIS dispatch (each cites its source):
   self-clear, so report it and the conductor cuts your worktree.>
 - <per-repo hazard slot, or "none">
 
+SCOPE: campaign <id>, derived from `## Scope` in <absolute plan path>.
+| <line, verbatim from that section>
+| <line, verbatim from that section>
+Anything written outside those lines is stop-and-report. This fence is
+re-derived from this campaign's plan whenever the block is written; it
+is never carried from an earlier campaign's block.
+
 <Moved-files slot - fill exactly one, and never leave it empty. The
 bead describes the tree as it stood when it was FILED; what expires is
 that description, never the bead's premise.
@@ -2096,17 +2110,37 @@ carry three things:
   path.
 
 What goes IN the file is only what is genuinely constant for the whole
-campaign: the AUTHORITY preamble, the gate path chosen from the Phase
-0 budget, the gate-semaphore slot, the known-flake slot, the MECHANICS
-block, and the RETURN shape. What stays OUT is anything that differs
-per bead. Freezing a per-dispatch slot into the file is worse than
-having no file at all, and the moved-files slot is the sharp case: its
-whole purpose is that the tree moved between two dispatches, so a
-frozen one tells every worker after the first that nothing has
-changed - which is the exact error the slot was added to stop. Read
-the list above as the boundary, and when a slot's value turns out to
-be the same for every bead in a campaign, that is a coincidence of
-that campaign and not a reason to move it into the file.
+campaign: the AUTHORITY preamble, the SCOPE slot, the gate path chosen
+from the Phase 0 budget, the gate-semaphore slot, the known-flake slot,
+the MECHANICS block, and the RETURN shape. What stays OUT is anything
+that differs per bead. Freezing a per-dispatch slot into the file is
+worse than having no file at all, and the moved-files slot is the
+sharp case: its whole purpose is that the tree moved between two
+dispatches, so a frozen one tells every worker after the first that
+nothing has changed - which is the exact error the slot was added to
+stop. Read the list above as the boundary, and when a slot's value
+turns out to be the same for every bead in a campaign, that is a
+coincidence of that campaign and not a reason to move it into the
+file.
+
+**The SCOPE slot is derived, never carried.** A campaign's block once
+carried its predecessor's "<path> untouched" fence forward unchanged,
+and a worker lost a round obeying a fence the new plan never drew. The
+file is written fresh from this appendix for every campaign, never
+started from an earlier campaign's `invariant-block.md` - the SCOPE
+slot is the only place the block states a scope fence, so a path the
+conductor wants fenced goes into the plan's `## Scope` first, and the
+block quotes it from there. Then run
+
+    ruby ~/.claude/skills/wurk:kit/scripts/campaign_state.rb fence <id> --block <absolute path to invariant-block.md>
+
+after writing the file at wave zero and after every `[adoption]` change
+to it, before the next dispatch. A blocked result is fixed by
+re-deriving the slot from the plan, never by editing the plan to match
+the block, unless the operator's own scope statement actually says what
+the block claims. Journal the check's result with the wave-zero
+entries. State the limit: the check sees only the SCOPE slot, not a
+fence stated anywhere else in the block.
 
 The file is skill prose's equivalent for the campaign: pinned when the
 campaign starts. A mid-campaign change to it needs an `[adoption]`
