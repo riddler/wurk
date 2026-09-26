@@ -58,7 +58,7 @@ class FleetManifest
               stacking landingCheck],
     "repos[]" => %w[dir package beadsPrefix note],
     "depOverride" => %w[ledger localStage pushedStage],
-    "campaignState" => %w[dir journalDir reports],
+    "campaignState" => %w[dir journalDir reports armCommand],
     "multiCampaign" => %w[protocol registry locksDir machineGateSlots]
   }.freeze
 
@@ -69,8 +69,11 @@ class FleetManifest
   # or an empty string. Paths are checkout-relative, like every path in
   # docs/manifest.md, and an absolute one blocks: the fleet manifest is
   # shared by every machine that runs the fleet, and an absolute path is
-  # right on at most one of them.
-  STRING_FIELDS = %w[fleet description depOverride.localStage depOverride.pushedStage
+  # right on at most one of them. campaignState.armCommand is a command
+  # line run from the workload root (a consumer arm script that writes
+  # more than the plan Status line, e.g. a fleet registry row), so it is a
+  # string and not a path: the kit never runs it, only reports it.
+  STRING_FIELDS = %w[fleet description depOverride.localStage depOverride.pushedStage campaignState.armCommand
                      multiCampaign.protocol stacking.sameRepo stacking.crossRepo].freeze
   PATH_FIELDS = %w[depOverride.ledger campaignState.dir campaignState.journalDir campaignState.reports
                    multiCampaign.registry multiCampaign.locksDir multiCampaign.protocol].freeze
@@ -265,6 +268,15 @@ class FleetManifest
   # dispatch.
   def reports_dir
     fetch("campaignState.reports") || File.join(campaigns_dir, "reports", "<campaign-id>")
+  end
+
+  # The workload's own arm/disarm command line, or nil: a consumer whose
+  # arming writes more than the plan Status line (a fleet registry row,
+  # say) names the script that writes both, and a peer arm runs it from
+  # the workload root instead of campaign_state.rb arm. The kit only
+  # reports it here; nothing in the kit runs it.
+  def arm_command
+    fetch("campaignState.armCommand")
   end
 
   def locks_dir
@@ -577,6 +589,7 @@ module FleetManifestCli
       env.data[:campaigns_dir] = manifest.campaigns_dir
       env.data[:journal_dir] = manifest.journal_dir
       env.data[:reports_dir] = manifest.reports_dir
+      env.data[:arm_command] = manifest.arm_command
       env.data[:locks_dir] = manifest.locks_dir
       env.data[:registry] = manifest.registry
       env.data[:ledger] = manifest.ledger

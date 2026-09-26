@@ -216,6 +216,23 @@ class FleetManifestValidationTest < Minitest::Test
     assert_match(/stacking\.sameRepo must be a non-empty string/, joined)
   end
 
+# wu-05f9: a consumer whose arming writes more than the plan Status line
+# names its own arm script here (riddler-84). sabotage: drop armCommand
+# from KNOWN["campaignState"] or from STRING_FIELDS -> red
+def test_campaign_state_arm_command_is_a_known_non_blank_string
+  m = FleetFixtures.load_with("valid", "campaignState" => { "armCommand" => "ruby .claude/fleet/bin/campaign-arm.rb" })
+  assert_empty m.errors
+  assert_empty m.warnings
+  assert_equal "ruby .claude/fleet/bin/campaign-arm.rb", m.arm_command
+
+  assert_nil FleetFixtures.load("valid").arm_command
+
+  m = FleetFixtures.load_with("valid", "campaignState" => { "armCommand" => 7 })
+  assert_match(/campaignState\.armCommand must be a non-empty string/, m.errors.join("\n"))
+  m = FleetFixtures.load_with("valid", "campaignState" => { "armCommand" => " " })
+  assert_match(/campaignState\.armCommand must be a non-empty string/, m.errors.join("\n"))
+end
+
   # sabotage: drop validate_dep_override -> red
   def test_dep_override_requires_a_ledger
     m = FleetFixtures.load_with("valid", "depOverride" => { "localStage" => "x", "pushedStage" => "y" })
@@ -378,6 +395,7 @@ class FleetManifestCliTest < Minitest::Test
     assert_equal 2, data["machine_gate_slots"]
     assert_equal ".claude/fleet/journal", data["journal_dir"]
     assert_equal ".claude/fleet/reports", data["reports_dir"]
+    assert_nil data["arm_command"]
     assert_equal ".claude/fleet/locks", data["locks_dir"]
     assert_equal ".claude/fleet/campaigns/ACTIVE.md", data["registry"]
     assert_equal ".claude/fleet/linkage-ledger.json", data["ledger"]

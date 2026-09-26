@@ -83,8 +83,10 @@ with a default or a documented degraded behavior.
   "campaignState": {                  // (opt) where campaign state lives
     "dir": ".claude/fleet/campaigns", // (opt) default .claude/campaigns
     "journalDir": ".claude/fleet/journal",           // (opt) default <dir>/journal
-    "reports": ".claude/fleet/reports"               // (opt) default
+    "reports": ".claude/fleet/reports",              // (opt) default
                                       // <dir>/reports/<campaign-id>
+    "armCommand": "ruby .claude/fleet/bin/campaign-arm.rb"  // (opt) the
+                                      // workload's own arm/disarm command
   },
 
   "multiCampaign": {                  // (opt) declares the multi-campaign protocol
@@ -182,7 +184,7 @@ schema; only their descriptions are the consumer's.
 
 ### `campaignState`
 
-Where campaign state lives. All three are optional and every default is
+Where campaign state lives. The three locations are optional and every default is
 the one the conductor already applies to a project with no fleet
 manifest, so declaring the section changes locations and nothing else:
 
@@ -196,6 +198,17 @@ manifest, so declaring the section changes locations and nothing else:
   report files' parent (SKILL.md, "Name a report file in every
   dispatch"; REFERENCE.md, "Staleness threshold and report files"). A
   declared value is used as given; the default appends the campaign id.
+- `armCommand` (opt, no default) - a command line, run from the
+  workload root, that arms, queues or disarms a campaign when the kit's
+  `campaign_state.rb arm` writes too little: a consumer whose crank also
+  reads a fleet registry row names the script that writes the plan
+  Status line and the row together. The contract is the peer arm's:
+  `<armCommand> <id> [--after PRED]` arms or queues, `<armCommand> <id>
+  --disarm` disarms, and it exits 0 only when every fact the crank checks
+  agrees. The kit reports the value (`fleet_manifest.rb check` data
+  `arm_command`) and never runs it; Howie's peer `arm` / `disarm` do, in
+  place of `campaign_state.rb`, when the key is set. A string, not a
+  path: it is not resolved against the fleet root.
 
 Wherever it ends up, campaign state is excluded from git via
 `.git/info/exclude` (SKILL.md, "Campaign state lives outside what the
@@ -321,7 +334,7 @@ machine config alone.
   `multiCampaign.protocol`. A leading `/` blocks.
 - **String fields must be non-empty strings**: `fleet`, `description`,
   `depOverride.localStage`, `depOverride.pushedStage`,
-  `stacking.sameRepo`, `stacking.crossRepo`.
+  `campaignState.armCommand`, `stacking.sameRepo`, `stacking.crossRepo`.
 - **`policy.stalenessMinutes` and `multiCampaign.machineGateSlots` must be
   positive integers.** Zero, a negative, a float, a string, and a boolean
   all block.
