@@ -44,14 +44,30 @@ class UserConfig
   # `metrics.prices` is deliberately absent from this map: its keys are model
   # ids, which are data and not schema, so the walk stops at `metrics` and a
   # new model never warns as an unknown key.
+  # `typesafe.sites` is likewise absent: its keys are site names, which are
+  # data, so a new site never warns as an unknown key and a site bead needs no
+  # edit here. Keys inside a site entry are checked by validate_typesafe.
   KNOWN = {
-    nil => %w[wurk tmux outbound_scan machine workloads metrics],
+    nil => %w[wurk tmux outbound_scan machine workloads metrics typesafe],
     "tmux" => %w[permission_mode],
     "outbound_scan" => %w[patterns_file control_term],
     "machine" => %w[name gate_slots],
     "workloads[]" => %w[root fleet_manifest enabled primary],
-    "metrics" => %w[prices error_events]
+    "metrics" => %w[prices error_events],
+    "typesafe" => %w[key_path model budget state_dir log_state sites restricted_sources],
+    "typesafe.budget" => %w[monthly_usd per_minute]
   }.freeze
+
+  # The TypeSafe Jev client's machine config (lib/typesafe.rb). Every site is
+  # off unless named here with another mode; see docs/machine-config.md.
+  TYPESAFE_MODES = %w[off shadow on].freeze
+  TYPESAFE_SITE_KEYS = %w[mode deadline_ms].freeze
+  TYPESAFE_DEFAULT_MODEL = "jev-1.13.0"
+  TYPESAFE_DEFAULT_DEADLINE_MS = 1500
+  TYPESAFE_DEFAULT_PER_MINUTE = 60
+  TYPESAFE_MAX_DEADLINE_MS = 60_000
+  # Site names, and the question-set id rule too.
+  TYPESAFE_NAME = /\A[a-z0-9][a-z0-9_-]{0,63}\z/
 
   # The components a per-model price entry may quote, each in US dollars per
   # million tokens. A component outside this list warns rather than blocks:
@@ -262,6 +278,77 @@ class UserConfig
     fetch("metrics.error_events")
   end
 
+  # Whether the machine has a typesafe section at all.
+  def typesafe_declared?
+    raw.key?("typesafe")
+  end
+
+  # Path of the file that holds the API key. A path, never the key. The
+  # default is under HOME, so a HOME override points a run at another config.
+  def typesafe_key_path
+    configured = typesafe_string("key_path")
+    return File.expand_path(configured) if configured
+
+    File.join(typesafe_home, ".claude", "typesafe-api-token")
+  end
+
+  # The pinned model id. Never a floating alias; validation blocks `-latest`.
+  def typesafe_model
+    typesafe_string("model") || TYPESAFE_DEFAULT_MODEL
+  end
+
+  # Where the budget ledger and decision log live. Same convention as
+  # hooks/harness-event.sh: XDG_STATE_HOME, else HOME/.local/state.
+  def typesafe_state_dir
+    configured = typesafe_string("state_dir")
+    return File.expand_path(configured) if configured
+
+    xdg = ENV["XDG_STATE_HOME"]
+    base = xdg.nil? || xdg.strip.empty? ? File.join(typesafe_home, ".local", "state") : xdg
+    File.join(base, "wurk", "typesafe")
+  end
+
+  # Whether decision lines may carry state and question text. Default false.
+  def typesafe_log_state?
+    typesafe_section["log_state"] == true
+  end
+
+  # The monthly dollar cap, or nil. No default on purpose: absent means no
+  # live calls at all, because dollars must be explicit.
+  def typesafe_monthly_usd
+    value = typesafe_budget["monthly_usd"]
+    value.is_a?(Numeric) ? value : nil
+  end
+
+  def typesafe_per_minute
+    value = typesafe_budget["per_minute"]
+    value.is_a?(Integer) ? value : TYPESAFE_DEFAULT_PER_MINUTE
+  end
+
+  # Source labels a caller must refuse to send. Empty when absent.
+  def typesafe_restricted_sources
+    value = typesafe_section["restricted_sources"]
+    value.is_a?(Array) ? value.select { |v| v.is_a?(String) } : []
+  end
+
+  # One site's normalized entry. Any site name answers: an unconfigured site
+  # is off with the default deadline.
+  def typesafe_site(name)
+    entry = typesafe_sites_raw[name.to_s]
+    entry = {} unless entry.is_a?(Hash)
+    mode = entry["mode"]
+    deadline = entry["deadline_ms"]
+    {
+      "mode" => TYPESAFE_MODES.include?(mode) ? mode : "off",
+      "deadline_ms" => deadline.is_a?(Integer) ? deadline : TYPESAFE_DEFAULT_DEADLINE_MS
+    }
+  end
+
+  # `{name => normalized entry}` for the configured sites only.
+  def typesafe_sites
+    typesafe_sites_raw.keys.each_with_object({}) { |name, out| out[name] = typesafe_site(name) }
+  end
+
   # Dotted lookup with defaults applied. Returns nil for an absent optional
   # key that has no default.
   def fetch(dotted)
@@ -271,6 +358,31 @@ class UserConfig
   end
 
   private
+
+  def typesafe_home
+    ENV["HOME"] || Dir.home
+  end
+
+  def typesafe_section
+    section = raw["typesafe"]
+    section.is_a?(Hash) ? section : {}
+  end
+
+  def typesafe_budget
+    budget = typesafe_section["budget"]
+    budget.is_a?(Hash) ? budget : {}
+  end
+
+  def typesafe_sites_raw
+    sites = typesafe_section["sites"]
+    sites.is_a?(Hash) ? sites : {}
+  end
+
+  # A configured non-blank string, or nil.
+  def typesafe_string(key)
+    value = typesafe_section[key]
+    value.is_a?(String) && !value.strip.empty? ? value : nil
+  end
 
   # raw is always a Hash by the time this runs - initialize normalizes a
   # non-object top level to {} and records the error itself - so these
@@ -282,6 +394,7 @@ class UserConfig
     validate_machine
     validate_workloads
     validate_metrics
+    validate_typesafe
     collect_unknown_keys(raw, nil)
   end
 
@@ -482,6 +595,102 @@ class UserConfig
     end
   end
 
+  # Shape validation of the typesafe section. An unrecognized site mode
+  # BLOCKS: it selects whether text leaves the machine, so guessing is worse
+  # than stopping. A floating model id (`-latest`) blocks because a threshold
+  # cannot be keyed on it. An unknown key inside a site entry warns.
+  def validate_typesafe
+    return unless raw.key?("typesafe")
+
+    section = raw["typesafe"]
+    unless section.is_a?(Hash)
+      errors << "#{path}: typesafe must be a JSON object, got #{section.class}"
+      return
+    end
+
+    %w[key_path state_dir model].each do |key|
+      next unless section.key?(key)
+
+      value = section[key]
+      if !value.is_a?(String) || value.strip.empty?
+        errors << "#{path}: typesafe.#{key} must be a non-blank string, got #{value.inspect}"
+      end
+    end
+
+    model = section["model"]
+    if model.is_a?(String) && model.end_with?("-latest")
+      errors << "#{path}: typesafe.model is #{model.inspect}; a floating model id cannot key a threshold, pin a version"
+    end
+
+    if section.key?("log_state") && ![true, false].include?(section["log_state"])
+      errors << "#{path}: typesafe.log_state must be true or false, got #{section['log_state'].inspect}"
+    end
+
+    validate_typesafe_budget(section["budget"]) if section.key?("budget")
+    validate_typesafe_sites(section["sites"]) if section.key?("sites")
+
+    return unless section.key?("restricted_sources")
+
+    sources = section["restricted_sources"]
+    return if sources.is_a?(Array) && sources.all? { |v| v.is_a?(String) && !v.strip.empty? }
+
+    errors << "#{path}: typesafe.restricted_sources must be an array of non-blank strings, got #{sources.inspect}"
+  end
+
+  def validate_typesafe_budget(budget)
+    unless budget.is_a?(Hash)
+      errors << "#{path}: typesafe.budget must be a JSON object, got #{budget.class}"
+      return
+    end
+
+    if budget.key?("monthly_usd")
+      cap = budget["monthly_usd"]
+      unless cap.is_a?(Numeric) && !cap.negative?
+        errors << "#{path}: typesafe.budget.monthly_usd must be a non-negative number, got #{cap.inspect}"
+      end
+    end
+
+    return unless budget.key?("per_minute")
+
+    rate = budget["per_minute"]
+    return if rate.is_a?(Integer) && rate.positive?
+
+    errors << "#{path}: typesafe.budget.per_minute must be a positive integer, got #{rate.inspect}"
+  end
+
+  def validate_typesafe_sites(sites)
+    unless sites.is_a?(Hash)
+      errors << "#{path}: typesafe.sites must be a JSON object, got #{sites.class}"
+      return
+    end
+
+    sites.each do |name, entry|
+      label = "typesafe.sites.#{name}"
+      unless name.match?(TYPESAFE_NAME)
+        errors << "#{path}: #{label} is not a valid site name (lowercase letters, digits, - and _, at most 64)"
+      end
+      unless entry.is_a?(Hash)
+        errors << "#{path}: #{label} must be a JSON object, got #{entry.class}"
+        next
+      end
+
+      entry.each_key do |key|
+        warnings << "#{path}: unknown key #{label}.#{key} (ignored)" unless TYPESAFE_SITE_KEYS.include?(key)
+      end
+
+      if entry.key?("mode") && !TYPESAFE_MODES.include?(entry["mode"])
+        errors << "#{path}: #{label}.mode is #{entry['mode'].inspect}; expected one of #{TYPESAFE_MODES.join(', ')}"
+      end
+
+      next unless entry.key?("deadline_ms")
+
+      deadline = entry["deadline_ms"]
+      next if deadline.is_a?(Integer) && deadline.between?(1, TYPESAFE_MAX_DEADLINE_MS)
+
+      errors << "#{path}: #{label}.deadline_ms must be an integer in 1..#{TYPESAFE_MAX_DEADLINE_MS}, got #{deadline.inspect}"
+    end
+  end
+
   # Forward compatibility: a key this kit does not know about is a warning,
   # never an error - same reasoning as Manifest#collect_unknown_keys. An
   # array under a key with a "<key>[]" entry in KNOWN is walked element by
@@ -543,6 +752,10 @@ module UserConfigCli
       # the useful answer, and the numbers are the operator's business.
       env.data[:metrics_priced_models] = config.metrics_prices.keys.sort
       env.data[:metrics_error_events_declared] = !config.metrics_error_events_path.nil?
+      # Declared-ness and per-site modes only: never the key path, the state
+      # dir or a budget number, same reasoning as the two above.
+      env.data[:typesafe_declared] = config.typesafe_declared?
+      env.data[:typesafe_site_modes] = config.typesafe_sites.each_with_object({}) { |(n, e), h| h[n] = e["mode"] }
 
       config.warnings.each { |w| env.warn(code: "unknown_key", message: w) }
       config.errors.each { |e| env.block!(code: "invalid", message: e) }

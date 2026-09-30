@@ -580,6 +580,158 @@ class UserConfigRequireTest < Minitest::Test
   end
 end
 
+class UserConfigTypesafeTest < Minitest::Test
+  include UserConfigHelper
+
+  def teardown
+    UserConfig.reset!
+  end
+
+  def with_xdg(value)
+    previous = ENV["XDG_STATE_HOME"]
+    value.nil? ? ENV.delete("XDG_STATE_HOME") : ENV["XDG_STATE_HOME"] = value
+    yield
+  ensure
+    previous.nil? ? ENV.delete("XDG_STATE_HOME") : ENV["XDG_STATE_HOME"] = previous
+  end
+
+  def typesafe_errors(section)
+    in_tmp_home("typesafe" => section) { UserConfig.load.errors }
+  end
+
+  # sabotage: return a non-off default from typesafe_site, or give
+  # typesafe_monthly_usd a default number -> red (ships dark)
+  def test_absent_section_is_all_defaults_and_every_site_is_off
+    in_tmp_home(nil) do |home|
+      with_xdg(nil) do
+        config = UserConfig.load
+        assert config.valid?
+        assert_empty config.warnings
+        refute config.typesafe_declared?
+        assert_equal File.join(home, ".claude", "typesafe-api-token"), config.typesafe_key_path
+        assert_equal "jev-1.13.0", config.typesafe_model
+        assert_equal File.join(home, ".local", "state", "wurk", "typesafe"), config.typesafe_state_dir
+        assert_equal false, config.typesafe_log_state?
+        assert_nil config.typesafe_monthly_usd
+        assert_equal 60, config.typesafe_per_minute
+        assert_equal [], config.typesafe_restricted_sources
+        assert_equal({ "mode" => "off", "deadline_ms" => 1500 }, config.typesafe_site("anything"))
+        assert_equal({}, config.typesafe_sites)
+      end
+    end
+  end
+
+  # sabotage: ignore XDG_STATE_HOME in typesafe_state_dir, or treat a blank
+  # value as set -> red
+  def test_state_dir_follows_xdg_state_home_when_set
+    Dir.mktmpdir do |xdg|
+      in_tmp_home({}) do
+        with_xdg(xdg) do
+          assert_equal File.join(xdg, "wurk", "typesafe"), UserConfig.load.typesafe_state_dir
+        end
+        with_xdg("  ") do
+          assert_match(%r{/\.local/state/wurk/typesafe\z}, UserConfig.load.typesafe_state_dir)
+        end
+      end
+    end
+  end
+
+  # sabotage: skip File.expand_path on a configured key_path or state_dir
+  # -> red
+  def test_configured_paths_are_expanded_against_home
+    in_tmp_home("typesafe" => { "key_path" => "~/k/token", "state_dir" => "~/st" }) do |home|
+      config = UserConfig.load
+      assert_equal File.join(home, "k", "token"), config.typesafe_key_path
+      assert_equal File.join(home, "st"), config.typesafe_state_dir
+    end
+  end
+
+  # sabotage: drop deadline_ms from the normalized entry, or return the
+  # unconfigured site's default as something other than off/1500 -> red
+  def test_configured_site_reads_back_normalized_and_others_stay_off
+    section = {
+      "model" => "jev-1.14.0", "log_state" => true,
+      "budget" => { "monthly_usd" => 1.5, "per_minute" => 7 },
+      "restricted_sources" => %w[private],
+      "sites" => { "review" => { "mode" => "shadow", "deadline_ms" => 800 }, "bare" => {} }
+    }
+    in_tmp_home("typesafe" => section) do
+      config = UserConfig.load
+      assert config.valid?, config.errors.inspect
+      assert config.typesafe_declared?
+      assert_equal({ "mode" => "shadow", "deadline_ms" => 800 }, config.typesafe_site("review"))
+      assert_equal({ "mode" => "off", "deadline_ms" => 1500 }, config.typesafe_site("bare"))
+      assert_equal({ "mode" => "off", "deadline_ms" => 1500 }, config.typesafe_site("other"))
+      assert_equal %w[bare review], config.typesafe_sites.keys.sort
+      assert_equal "jev-1.14.0", config.typesafe_model
+      assert_equal true, config.typesafe_log_state?
+      assert_equal 1.5, config.typesafe_monthly_usd
+      assert_equal 7, config.typesafe_per_minute
+      assert_equal %w[private], config.typesafe_restricted_sources
+    end
+  end
+
+  # sabotage: fall back to off (or accept) on an unrecognized mode instead
+  # of blocking -> red. The mode selects whether text leaves the machine.
+  def test_unknown_mode_blocks
+    errors = typesafe_errors("sites" => { "review" => { "mode" => "maybe" } })
+    assert_match(/typesafe\.sites\.review\.mode is "maybe"; expected one of off, shadow, on/, errors.join("\n"))
+  end
+
+  # sabotage: drop the -latest check -> red
+  def test_floating_model_id_blocks
+    assert_match(/typesafe\.model is "jev-latest"/, typesafe_errors("model" => "jev-latest").join("\n"))
+  end
+
+  # sabotage: accept the bad value in the named check -> red, one case each
+  def test_bad_values_each_block
+    [
+      ["budget", { "monthly_usd" => -1 }],
+      ["budget", { "monthly_usd" => "5" }],
+      ["budget", { "per_minute" => 0 }],
+      ["budget", "cheap"],
+      ["log_state", "yes"],
+      ["key_path", "  "],
+      ["state_dir", 3],
+      ["model", ""],
+      ["restricted_sources", "private"],
+      ["sites", []]
+    ].each do |key, value|
+      errors = typesafe_errors(key => value)
+      refute_empty errors, "#{key} => #{value.inspect} should block"
+    end
+    assert_match(/deadline_ms/, typesafe_errors("sites" => { "a" => { "deadline_ms" => 0 } }).join)
+    assert_match(/deadline_ms/, typesafe_errors("sites" => { "a" => { "deadline_ms" => 70_000 } }).join)
+    assert_match(/deadline_ms/, typesafe_errors("sites" => { "a" => { "deadline_ms" => 1.5 } }).join)
+    assert_match(/not a valid site name/, typesafe_errors("sites" => { "has space" => {} }).join)
+    assert_match(/typesafe\.sites\.a must be a JSON object/, typesafe_errors("sites" => { "a" => "on" }).join)
+    assert_match(/restricted_sources/, typesafe_errors("restricted_sources" => ["ok", " "]).join)
+  end
+
+  # sabotage: accept a non-object section -> red
+  def test_non_object_section_blocks
+    in_tmp_home("typesafe" => "on") do
+      refute UserConfig.load.valid?
+      assert_match(/typesafe must be a JSON object/, UserConfig.load.errors.join)
+    end
+  end
+
+  # sabotage: add "sites" to KNOWN["typesafe"]'s descendants (a KNOWN
+  # "typesafe.sites" entry), or drop the site-entry key warning -> red
+  def test_unknown_keys_warn_and_a_new_site_name_does_not
+    section = { "nope" => 1, "sites" => { "review" => { "color" => "red" }, "brand-new-site" => { "mode" => "off" } } }
+    in_tmp_home("typesafe" => section) do
+      config = UserConfig.load
+      assert config.valid?, config.errors.inspect
+      warned = config.warnings.join("\n")
+      assert_match(/unknown key typesafe\.nope/, warned)
+      assert_match(/unknown key typesafe\.sites\.review\.color/, warned)
+      refute_match(/brand-new-site/, warned)
+      assert_equal 2, config.warnings.size
+    end
+  end
+end
+
 class UserConfigCliTest < Minitest::Test
   def teardown
     UserConfig.reset!
@@ -653,5 +805,27 @@ class UserConfigCliTest < Minitest::Test
       assert_equal 1, code
       assert_equal ["unparseable"], env["blocked"].map { |b| b["code"] }
     end
+  end
+
+  # sabotage: leave typesafe_declared or typesafe_site_modes off the
+  # envelope, or emit the key path or the monthly cap in it -> red
+  def test_check_reports_typesafe_modes_but_not_the_key_path_or_cap
+    section = {
+      "key_path" => "/fixture/secret-key-location",
+      "state_dir" => "/fixture/secret-state-location",
+      "budget" => { "monthly_usd" => 4321.5 },
+      "sites" => { "review" => { "mode" => "shadow" }, "quiet" => {} }
+    }
+    with_config_file("typesafe" => section) do |path|
+      code, env = run_cli(["check", "--file", path])
+      assert_equal 0, code
+      assert_equal true, env["data"]["typesafe_declared"]
+      assert_equal({ "review" => "shadow", "quiet" => "off" }, env["data"]["typesafe_site_modes"])
+      json = JSON.generate(env)
+      refute_match(/secret-key-location|secret-state-location|4321/, json)
+    end
+    _code, env = run_cli(["check", "--file", "/nonexistent/wurk.local.json"])
+    assert_equal false, env["data"]["typesafe_declared"]
+    assert_equal({}, env["data"]["typesafe_site_modes"])
   end
 end
