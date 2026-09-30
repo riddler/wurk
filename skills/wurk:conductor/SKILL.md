@@ -1276,6 +1276,20 @@ labels** rule, which covers the two ways a labelled filing still comes
 out wrong - `--parent` unioning the epic's areas onto the child, and a
 label-first `label add` - and the read-back that catches both.
 
+**The duplicate check rides along (bead_dedupe; off unless the
+operator turned it on).** `/wurk:issue`'s optional duplicate check runs
+before each bead you file here, with `--source repo:<owning repo dir
+basename>` and run from the owning repo, so the search reads that repo's
+tracker. It never stops a filing: file whatever it returns. In shadow,
+journal `data.journal_line` and file as you would have. In on, link each
+id in `data.likely_duplicates` as related after the create, per
+`/wurk:issue`'s **Link dependencies**, and journal it as added by Jev.
+Your own "one discovery = ONE bead" check above is still yours to make
+by reading the owning repo's beads; a flag is a hint toward it, never a
+substitute for it, and never a reason to skip a bead the discovery
+needs. Turning the site on is an operator act; never edit the machine
+config to switch it.
+
 ## Phase L - Landing
 
 MR mode: where the operator's consent quotes a carve-out letting the

@@ -1524,6 +1524,129 @@ The checklist the next site copies:
   refuses with no request; no input text in any log; and a sentinel sweep
   of every output and file.
 
+## `bead_dedupe.rb`: the bead_dedupe Jev site
+
+A pre-filing check built to the site pattern above. Before a bead is filed,
+plain code finds the open beads that share words with it, and Jev answers
+one yes/no (a `noul`) per candidate pair: do the two describe the same
+issue? `lib/bead_dedupe.rb` holds the question set, the tokenizer and
+ranking, the state builder and the reading of the answer; `bead_dedupe.rb`
+is the CLI a filer runs. It SHIPS DARK: the site is `off` unless the
+machine config names `bead_dedupe` under `typesafe.sites` with another
+mode, and switching it is an operator act.
+
+**It never touches the filing.** The script does not file, refuse, close,
+edit, link or block a bead; its only tracker access is one read. Every
+path but a usage error or an invalid machine config exits 0 with nothing
+blocked, and a caller files the bead whatever the script returned -
+including a non-zero exit or no output at all.
+
+### Usage and `data` keys
+
+```
+bead_dedupe.rb --title TEXT --source LABEL
+               [--description TEXT | --description-file PATH]
+               [--candidates PATH] [--max-candidates N] [--threshold N] [--dry-run]
+```
+
+`data`: `site`, `mode`, `outcome` (the last client outcome, `site_off`, or
+null when no call was made), `reason`, `action`, `threshold_key`,
+`threshold`, `max_candidates`, `searched` (how many beads the search read),
+`candidates`, `likely_duplicates`, `calls` (requests sent), `cost_usd`
+(summed over them), `dry_run`, `journal_line` (a one-line `[probe]` entry
+naming candidate ids and Jev's yes probabilities, the mode, the action and
+what was flagged; null when the site is off), and `request` (the first
+pair's) on a dry run. Each `candidates` entry is `id`, `title_overlap`,
+`body_overlap`, `jev_yes`, `action`, `reason`, `call_id`. No bead text
+appears in the envelope except in a dry run's `request.body`, and the key
+never appears.
+
+The top-level `action` is `site_off`, `skipped` (reason
+`description_unreadable`, `candidates_unreadable`,
+`candidate_search_failed` or `no_candidates`), `dry_run`, `judged` or
+`fallback` (reason: the outcome that stopped the run, or
+`state_dir_error`). A candidate's `action` is `dry_run`, `shadow_logged`,
+`flagged`, `no_change` (reason `no_threshold` or `below_threshold`),
+`fallback` (reason: the client's outcome or `answer_malformed`) or
+`not_judged` (an earlier pair's outcome stopped the run).
+
+### Routing and exit codes
+
+**A caller routes on `data.likely_duplicates` alone**: the ids Jev flagged.
+It is non-empty only in `on` mode, for a candidate whose yes probability is
+at or above `--threshold`. Exit 0 on every success, skip, off and fallback;
+exit 1 only for an invalid machine config (`user_config_invalid`); exit 2
+for usage: a missing or blank `--title`, a missing `--source` or one that
+is not a label, both description flags, a `--max-candidates` outside 1 to
+10, a threshold that is not a number in (0, 1], a stray argument or an
+unknown flag.
+
+### Candidate search is code, not Jev
+
+- **The pool.** `--candidates PATH` (a JSON array of `{id, title,
+  description}`) for a caller with its own list; otherwise one read-only
+  `bd list --status open,in_progress,blocked --json --limit 0` in the
+  current directory. A failed or unparseable read is a skip with a
+  warning, never a block.
+- **The overlap.** Both sides are tokenized the same way: lower-cased
+  words of three or more characters, a fixed stopword list dropped, a
+  plural `s` folded. A candidate qualifies on one shared title word, or on
+  five shared words across title and description. Candidates rank by
+  shared title words, then shared words overall, then id, and at most
+  `--max-candidates` (default 3) go to Jev. Counting and ranking stay in
+  code; Jev sees one pair at a time and answers one question.
+- **Jev adds, never removes.** Every keyword candidate stays in
+  `data.candidates` whatever Jev says; a low `jev_yes` never hides one.
+
+### The question set
+
+`bead_dedupe@1`, one question, `same_issue` (noul): `new_bead` is about to
+be filed and `candidate` is an open issue already in the tracker - do they
+describe the same problem or the same piece of work, so that finishing one
+would also finish the other? The false criterion says that sharing an
+area, a file or words is not enough, and that a part, follow-up or
+prerequisite of the other is not the same issue. The test pins version 1's
+text by digest, so a rewording is a deliberate version bump.
+
+### What state is sent
+
+`{new_bead: {title, description?}, candidate: {title, description?}}`,
+each text cut to 1500 characters. Excluded on purpose: ids, status,
+priority, labels, assignee, dates and every other field - identity and
+self-stated labels stay out of Jev. Bead text is authored in the tracker,
+so it is trusted-author text in the call-site contract's sense.
+
+### Modes and the fallback rule
+
+- **`shadow`**: call once per candidate, log Jev's answer (the decision
+  line) and the filer's own decision (the outcome line: `decision:
+  filed_unlinked`, `agreement: n/a` until the eval tooling supplies
+  labels), flag nothing.
+- **`on`**: flag a candidate only when `jev_yes` meets `--threshold`,
+  which is the eval tooling's enabled threshold for `data.threshold_key`
+  (`bead_dedupe:bead_dedupe@1:<pinned model>`), never a number the caller
+  picks. Without one, nothing is flagged (`no_threshold`).
+- **One failure stops the run.** The first non-`ok` outcome - a refusal,
+  a timeout, any error - is a `fallback` for that pair, the remaining
+  candidates are `not_judged`, and nothing is flagged by that pair. A
+  malformed answer (a missing `noul`, or one outside 0 to 1) is a
+  fallback for its pair. A state-dir failure is a fallback for the whole
+  run and clears any flag it had made. A fallback is never read as a
+  "no"; the filer files exactly as it did before this site existed.
+
+### Source label, and the link in on mode
+
+- **Source.** The caller passes `--source repo:<repo directory basename>`.
+  Listing that label in `typesafe.restricted_sources` refuses in `shadow`
+  and `on` alike, before any text leaves the machine.
+- **The link is the caller's, after filing.** In `on` mode a caller that
+  may write dependency links links each flagged id as related once the
+  bead exists, and says so in its output:
+  `bead.rb link <new-id> <flagged-id> --type related`, which runs
+  `bd link <new-id> <flagged-id> --type related`. A `related` link is
+  not `blocks` (bd's default type) and is removed with
+  `bd dep remove <new-id> <flagged-id>`. The script itself never runs it.
+
 ## Writing a new script
 
 First check that a script is the right home at all:

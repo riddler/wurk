@@ -165,6 +165,20 @@ new incident** rather than filing a twin. A duplicate bead splits the
 evidence, and split evidence is how a class stops clearing the bar it
 already cleared.
 
+The kit's duplicate check can widen that search (bead_dedupe; off unless
+the operator turned it on). Before a `bd create`, you may run
+
+    ruby ~/.claude/skills/wurk:kit/scripts/bead_dedupe.rb --title "<title>" --description "<description>" --source repo:<repo directory basename>
+
+from the repo root (add `--dry-run` under a dry run). It only reads the
+tracker. Read every id in `data.likely_duplicates` before you decide
+between filing and noting, and name them in your return and your
+journal. The decision stays yours, by the class, as above: a flag is a
+bead to read, never a reason on its own to skip a filing. It never links
+anything for you - a link is outside your write set - and anything it
+returns other than a flag (off, a skip, a fallback, a non-zero exit)
+leaves your search exactly as it was.
+
 Every bead you file carries, in its description:
 
 1. **The incident, per campaign.** Campaign id, artifact path, the

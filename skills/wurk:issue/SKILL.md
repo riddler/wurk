@@ -63,6 +63,35 @@ From `$ARGUMENTS` where given; otherwise ask for:
 **Infer type and priority when they are obvious; ask only about what is
 genuinely ambiguous.** Do not interrogate the user field by field.
 
+## Check for a likely duplicate (optional; off by default)
+
+In file mode, once the title and description are gathered, you may run the
+kit's bead_dedupe site. It never blocks the filing: whatever it returns - a
+skip, a fallback, a non-zero exit, no output - go on to **Create**.
+
+```bash
+ruby ~/.claude/skills/wurk:kit/scripts/bead_dedupe.rb --title "Title here" \
+  --description "Longer context..." --source repo:<repo directory basename>
+```
+
+Add `--threshold <n>` only when the eval tooling has an enabled threshold
+for the site's `data.threshold_key`; never pick a number yourself. The site
+is off unless the operator's machine config says otherwise, and off returns
+at once and reads nothing. Switching it is an operator act; never edit the
+machine config to turn it on.
+
+- **`data.likely_duplicates` empty** (off, shadow, any fallback, nothing
+  flagged): file as you would have.
+- **Non-empty** (on mode only): still file. After **Create**, link each
+  flagged id as related and say so in the report (see **Link
+  dependencies**). A flag is a hint for the reader, never a reason to skip,
+  merge, close or rewrite a bead; whether the two really are one issue is
+  a decision for the user.
+
+`data.candidates` lists every keyword match whatever Jev said; mention them
+to the user only when they asked for duplicates. The contract is the kit
+REFERENCE's "`bead_dedupe.rb`: the bead_dedupe Jev site".
+
 ## Create
 
 ```bash
@@ -89,6 +118,17 @@ assume, and put them in the description if the flag is absent, never nowhere.
 ruby ~/.claude/skills/wurk:kit/scripts/bead.rb link <new-id> <other-id> --type depends-on
 ruby ~/.claude/skills/wurk:kit/scripts/bead.rb link <new-id> <other-id> --type discovered-from
 ```
+
+For each id in the duplicate check's `data.likely_duplicates` (on mode
+only), after the create:
+
+```bash
+ruby ~/.claude/skills/wurk:kit/scripts/bead.rb link <new-id> <flagged-id> --type related
+```
+
+A `related` link is not `blocks`, the default type, and
+`bd dep remove <new-id> <flagged-id>` takes it back.
+Report it as "linked as a likely duplicate (Jev)".
 
 Use `discovered-from` for work found mid-task, and dependency links so the
 ready set reflects the real build order rather than a flat list. Where the
