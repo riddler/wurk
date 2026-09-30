@@ -890,6 +890,14 @@ workers' results silently. The conductor runs it at the sweep
 (`skills/wurk:conductor/SKILL.md`, "Sweep on every wake, and a heartbeat
 so wakes happen").
 
+One field is checked beyond parsing, and only when present: a report
+carrying `reviewRound.findingsByLevel` that is not an object of the four
+level counts (`mustFix`, `shouldFix`, `note`, `unranked`) as non-negative
+integers gets the `findings_by_level_malformed` warning, never a block.
+The field is optional ("`finding_severity.rb`: the finding_severity Jev
+site"), so a report without it passes; each entry in `data.reports`
+carries `findings_by_level` as null (absent), `ok` or `malformed`.
+
 ## `session_metrics.rb`: harness metrics from session transcripts
 
 Reads Claude Code session transcripts (JSONL) and reports what the harness
@@ -1646,6 +1654,144 @@ so it is trusted-author text in the call-site contract's sense.
   `bd link <new-id> <flagged-id> --type related`. A `related` link is
   not `blocks` (bd's default type) and is removed with
   `bd dep remove <new-id> <flagged-id>`. The script itself never runs it.
+
+## `finding_severity.rb`: the finding_severity Jev site
+
+A call site built on the Jev client, following "The site pattern" in the
+report_triage section above. After `/wurk:mr`'s pre-request review round,
+it counts the round's findings by level for the worker's report and, when
+the site is not off, asks Jev each finding's severity beside the reporting
+agent's own rank. `lib/finding_severity.rb` holds the question set, the
+rank mapping, the state builder, the reading of the answer and the count;
+`finding_severity.rb` is the CLI the review-round step runs. It SHIPS
+DARK: the site is `off` unless the machine config names `finding_severity`
+under `typesafe.sites` with another mode, and switching it is an operator
+act.
+
+### Usage and `data` keys
+
+```
+finding_severity.rb --findings PATH --source LABEL [--threshold N] [--dry-run]
+```
+
+`--findings` is a JSON array, one object per finding the round's agents
+returned: `agent` (the agent's name), `rank` (the severity it wrote,
+verbatim, or null), `mustFix` (true when the agent declared the finding
+must-fix) and `text` (the finding as written). A file that cannot be read,
+is not JSON, or is not an array of objects is the `findings_unreadable`
+warning, with nothing counted or sent and `findings_by_level` null.
+
+`data`: `site`, `mode`, `outcome` (`site_off`; `ok` when every call
+answered; the first non-`ok` client outcome; or null when no call was
+made), `threshold_key`, `findings_path`, `findings` (one entry per
+finding: `index`, `agent` when it is a label, `critic_level`, `jev_level`,
+`jev_confidence`, `level` (the counted one), `agreement`, `action`,
+`reason`, `call_id`), `findings_by_level`, `raised`, `calls` (requests
+sent, or on a dry run that would be), `threshold`, `cost_usd` (summed),
+`dry_run`, `outcome_lines_written`, `summary_line` (one `[probe]` line of
+labels and counts for a bead note), and `request` (the first one) on a dry
+run. No finding text appears in the envelope except in a dry run's
+`request.body`; the key never appears.
+
+A finding's `action` is one of `site_off`, `skipped` (reason
+`nothing_to_judge`: blank text), `dry_run`, `shadow_logged`, `raised`,
+`no_change` (reason `critic_must_fix`, `jev_not_higher`, `no_threshold` or
+`below_threshold`) or `fallback` (reason: the client's outcome,
+`answer_malformed`, `stopped`, `call_cap` or `state_dir_error`). No action
+lowers a level.
+
+### The count, and routing
+
+**A caller routes on `data.findings_by_level` alone**: an object with
+every bucket present - `mustFix`, `shouldFix`, `note`, `unranked` - each a
+count. A worker copies it verbatim into its report as
+`reviewRound.findingsByLevel`, an OPTIONAL, additive field: a report
+written without it (an older template, a round that did not run, a script
+that gave no count) is still a valid report, and `report_check.rb` only
+warns (`findings_by_level_malformed`) when the field is present and not
+that shape. Counting is code, in every mode, off included: the one
+difference from report_triage's pattern is that off still reads the
+findings file, locally, to count. Off never touches the key, the ledger,
+the logs or the network.
+
+Exit 0 on every success, skip, off and fallback. Exit 1 only for an
+invalid machine config (`user_config_invalid`). Exit 2 for usage: a
+missing `--findings` or `--source`, a source that is not a label, a
+threshold that is not a number in (0, 1], a stray argument or an unknown
+flag.
+
+### The critic's level
+
+Code maps each finding's own rank, never Jev: a finding whose agent
+declared it must-fix (`mustFix: true`) is `must-fix` whatever its label
+says; otherwise a `rank` of `must-fix`, `should-fix` or `note` (case,
+spaces and underscores forgiven) is that level; anything else - another
+consumer's vocabulary, or no rank - is `unranked`, which counts below
+`note` and is never a blocker. The rank label is never sent to Jev: a
+self-stated label makes the judgment label-reading.
+
+### The question set
+
+`finding_severity@1`, one `score` question over the finding's text,
+three levels each described as a concrete situation: `note` (a real
+observation the author may decline; nothing the change does is wrong),
+`should-fix` (works, but a reviewer will ask for it before approving),
+`must-fix` (should not merge with this in it). Jev's level is the most
+probable of the three (a tie goes to the higher, the cautious read), and
+that level's probability is the confidence a threshold is compared with.
+Any change to the question's instructions or criteria is a new version;
+the test pins version 1's text by digest.
+
+### What state is sent
+
+`{finding: <text>}` and nothing else, one call per finding with non-blank
+text. Excluded on purpose: the `rank` and `mustFix` (self-stated labels),
+the `agent` (identity), the finding's position and the round's counts
+(counting stays in code). The first non-`ok` outcome stops the calls:
+every later finding falls back (`stopped`) instead of spending or waiting
+again against a failing service. At most 25 requests per invocation;
+findings past that fall back (`call_cap`).
+
+### The raise rule, and the never-downgrades rule
+
+- **`shadow`**: call, log Jev's level (the client's decision line) beside
+  the agent's own level (the outcome line's `decision`, with the
+  agreement), count the agent's level only. `raised` is always 0.
+- **`on`**: a finding's counted level becomes Jev's ONLY when Jev's level
+  is above the agent's, a threshold was passed, and Jev's confidence is
+  at or above it. Everything else keeps the agent's level.
+- **Never downgrades.** Jev may add caution, never remove it. A finding
+  the agent ranked must-fix stays must-fix whatever Jev says
+  (`critic_must_fix`), and a Jev level at or below the agent's changes
+  nothing (`jev_not_higher`). A raise changes the count and is named in
+  the request body; it does not make the finding a must-fix the worker
+  must address, because what counts as must-fix stays the reporting
+  agent's call (`/wurk:mr`'s review-round step).
+- `agreement` is `agree` or `disagree` against a ranked agent, and `n/a`
+  for an unranked one or when there is no answer.
+
+### The fallback rule
+
+Any client outcome other than `ok`, a malformed answer (a missing or
+out-of-range probability for any level), and a state-dir failure fall
+back: the finding keeps the agent's level, with one `jev_fallback`
+warning per distinct reason (or `state_dir_error`, naming the exception
+class only; after one, every finding keeps its agent's level). A fallback
+is never read as an answer. Client warnings (`key_mode_open`,
+`ledger_malformed`) pass through once each.
+
+### Source label and threshold
+
+- **Source.** The review-round step passes `--source repo:<repo directory
+  basename>`. Findings are model-authored text about a diff, and in a
+  consumer they quote that consumer's code, so an operator keeps a repo's
+  findings off the wire by listing that label in
+  `typesafe.restricted_sources`, which refuses in `shadow` and `on` alike
+  (`source_restricted`, a fallback, no request).
+- **Threshold.** `--threshold` is the eval tooling's enabled threshold for
+  `data.threshold_key` (`finding_severity:finding_severity@1:<pinned
+  model>`), never a number the caller picks. Without one, `on` mode raises
+  nothing (`no_threshold`).
 
 ## Writing a new script
 

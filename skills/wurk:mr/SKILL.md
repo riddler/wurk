@@ -310,6 +310,33 @@ change:
    each returned, how many were must-fix, how many were addressed, what was
    deferred and why, and every agent that did not run.
 
+   **Count the round's findings by level (finding_severity; off unless the
+   operator turned it on).** Write every finding the agents that ran
+   returned into one scratch JSON file named for the bead, as an array of
+   objects - `agent` (its name), `rank` (the severity it wrote, verbatim, or
+   null), `mustFix` (true when it declared the finding must-fix) and `text`
+   (the finding as it wrote it) - then run the kit's Jev site over it:
+
+       ruby ~/.claude/skills/wurk:kit/scripts/finding_severity.rb --findings <file> --source repo:<repo dir basename>
+
+   adding `--threshold <n>` only when the eval tooling has an enabled
+   threshold for the site's `data.threshold_key`; never pick a number
+   yourself. `data.findings_by_level` is the count, by level, that a worker
+   copies verbatim into its report as `reviewRound.findingsByLevel`. The
+   site is off unless the operator's machine config says otherwise, and off
+   still counts - from the agents' own ranks, in code, with nothing sent -
+   so the count exists in every mode. Switching the site is an operator
+   act; never edit the machine config to do it. In shadow, Jev's level is
+   logged beside each agent's rank and changes nothing. In on, Jev can only
+   RAISE a finding's counted level, and a finding the agent declared
+   must-fix stays must-fix whatever Jev says. A raised finding is named in
+   the request body's Notes as rated higher by Jev; it does not become a
+   must-fix you address in this round, because what counts as must-fix is
+   still the reporting agent's call. A non-zero exit or a null
+   `findings_by_level` means no count: leave the field out rather than
+   count by hand, and say why. The contract is the kit REFERENCE's
+   "`finding_severity.rb`: the finding_severity Jev site".
+
 6. **Check the changelog.** Only when `data.touches_build` (from step 1) is
    true and the diff touches the project's public surface. Follow the branch
    of `/wurk:commit` Step 1.6 that the manifest's `changelog.mode` selects,

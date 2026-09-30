@@ -204,4 +204,51 @@ class ReportCheckTest < Minitest::Test
       assert_includes envelope["blocked"].map { |b| b["message"] }.join("\n"), "it is empty"
     end
   end
+
+  COUNTS = { "mustFix" => 1, "shouldFix" => 0, "note" => 2, "unranked" => 0 }.freeze
+
+  def with_review(counts)
+    review = { "agents" => ["wurk-diff-critic"], "findings" => 3, "mustFix" => 1,
+               "addressed" => 1, "deferred" => [] }
+    review["findingsByLevel"] = counts unless counts == :absent
+    GOOD.merge("reviewRound" => review)
+  end
+
+  # sabotage: require reviewRound.findingsByLevel, or check it when
+  # reviewRound is null -> red (a report on the old template, or with no
+  # round, would warn or block)
+  def test_findings_by_level_is_optional
+    Dir.mktmpdir do |dir|
+      bare(dir, "zz-old", with_review(:absent))
+      bare(dir, "zz-none", GOOD.merge("reviewRound" => nil))
+      bare(dir, "zz-new", with_review(COUNTS))
+      envelope, code = run_check(dir)
+
+      assert_equal 0, code
+      assert_empty envelope["blocked"]
+      assert_empty envelope["warnings"]
+      states = envelope["data"]["reports"].map { |r| [File.basename(r["path"]), r["findings_by_level"]] }
+      assert_equal({ "zz-old-report.json" => nil, "zz-none-report.json" => nil,
+                     "zz-new-report.json" => "ok" }, states.to_h)
+    end
+  end
+
+  # sabotage: block! on a malformed field, or accept a missing bucket, a
+  # negative count, a float or a string -> red
+  def test_a_malformed_findings_by_level_warns_and_never_blocks
+    bad = [COUNTS.reject { |k, _| k == "unranked" }, COUNTS.merge("note" => -1),
+           COUNTS.merge("note" => 1.5), COUNTS.merge("extra" => 0), "3 must-fix", []]
+    bad.each_with_index do |counts, i|
+      Dir.mktmpdir do |dir|
+        path = bare(dir, "zz-bad#{i}", with_review(counts))
+        envelope, code = run_check(dir)
+
+        assert_equal 0, code, counts.inspect
+        assert envelope["ok"], counts.inspect
+        assert_empty envelope["blocked"], counts.inspect
+        assert_equal ["findings_by_level_malformed"], codes(envelope, "warnings"), counts.inspect
+        assert_includes envelope["warnings"].first["message"], path
+      end
+    end
+  end
 end

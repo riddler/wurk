@@ -116,7 +116,10 @@ Process:
    re-gate. One round is the bound that keeps an MR step from becoming an
    all-night session, and a second round would review your fixes rather
    than the branch: if the findings are big enough to want another pass,
-   stop and report instead.
+   stop and report instead. Then count the round's findings by level with
+   `/wurk:mr`'s finding_severity paragraph in its review-round step, and
+   copy its `data.findings_by_level` verbatim into your result as
+   `reviewRound.findingsByLevel`.
 4. Write bead notes locally (dated, factual). Never push the tracker -
    the conductor owns tracker pushes. Report the reason in the vocabulary
    that distinguishes the two cases, because they land differently: under
@@ -421,7 +424,8 @@ exactly:
   "mr": "url or null",
   "reviewRound": {
     "agents": ["..."], "findings": 0, "mustFix": 0, "addressed": 0,
-    "deferred": ["..."]
+    "deferred": ["..."],
+    "findingsByLevel": {"mustFix": 0, "shouldFix": 0, "note": 0, "unranked": 0}
   },
   "repos_touched": ["every repo you wrote to, including trackers"],
 "scopeAuthority": [{"repo": "...", "quote": "verbatim consent sentence"}],
@@ -435,6 +439,13 @@ exactly:
 `reviewRound` is `null` when no MR was authorized or the repo declares no
 `mr.review_agents`; a round that ran always reports it, so the conductor's
 journal records who reviewed the branch and what was left undone.
+
+`reviewRound.findingsByLevel` is OPTIONAL and additive: the counts
+`finding_severity.rb` returned as `data.findings_by_level`, copied
+verbatim, never counted by hand. Leave it out when the script gave no
+count (a non-zero exit or a null field) and say why in `judgementCalls`.
+A report without it is still a valid report; the retro reads it, where
+present, as the round's rework counter.
 
 `repos_touched` is mandatory and audited: the conductor diffs it against
 your dispatch scope. Writing anywhere not in your dispatch - even
