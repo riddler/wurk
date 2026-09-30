@@ -1132,3 +1132,561 @@ class TypesafeEvalRunTest < Minitest::Test
     end
   end
 end
+
+# Phase 4: the read-only on-gate. Decision and outcome lines are written into
+# the tmp state dir by the tests; no call is ever made (FakeHTTP has no
+# scripted step and its call list is asserted empty).
+class TypesafeEvalGateTest < Minitest::Test
+  include UserConfigHelper
+
+  MODEL = "jev-1.13.0"
+  SITE = "review"
+  QSET = { "id" => "note-urgency", "version" => 1 }.freeze
+  KEY = "review:note-urgency@1:#{MODEL}"
+  APPLIED = Time.utc(2026, 9, 1, 0, 0, 0)
+  DAY = 86_400
+
+  def setup
+    @tmp = Dir.mktmpdir("wurk-eval-gate-")
+    @state_dir = File.join(@tmp, "state")
+    FileUtils.mkdir_p(@state_dir)
+    @fake = FakeHTTP.new
+    @seq = 0
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmp)
+  end
+
+  def config(model: nil)
+    section = { "key_path" => File.join(@tmp, "absent-key"), "state_dir" => @state_dir,
+                "budget" => { "monthly_usd" => 1.0 } }
+    section["model"] = model if model
+    cfg = UserConfig.new(path: "(fixture)", raw: { "typesafe" => section }, exists: true)
+    assert_empty cfg.errors
+    cfg
+  end
+
+  def write_store(labels: { "low" => { "threshold" => 0.5 }, "high" => { "threshold" => nil } },
+                  key: KEY, applied_at: APPLIED)
+    entry = { "site" => SITE, "question_set" => QSET, "question" => "urgency", "labels" => labels,
+              "run_id" => "r", "corpus_digest" => "d", "applied_at" => applied_at.utc.iso8601(3) }
+    dir = File.join(@state_dir, "eval")
+    FileUtils.mkdir_p(dir)
+    File.write(File.join(dir, "thresholds.json"),
+               JSON.generate("format" => 1, "keys" => { key => entry }))
+  end
+
+  def append(month, hash)
+    File.open(File.join(@state_dir, "decisions-#{month}.jsonl"), "a") { |f| f.puts(JSON.generate(hash)) }
+  end
+
+  def month_of(time)
+    time.utc.strftime("%Y-%m")
+  end
+
+  # One routed shadow decision (unless overridden) plus, when `agreement` is
+  # given, its outcome line one minute later.
+  def decision(at, agreement: "agree", label: "low", confidence: 0.9, mode: "shadow", site: SITE,
+               key: KEY, outcome: "ok", answers: nil)
+    @seq += 1
+    id = format("call%04d", @seq)
+    answers ||= { "urgency" => { "type" => "choice", "choice" => label, "probabilities" => {},
+                                 "confidence" => confidence } }
+    append(month_of(at), "kind" => "decision", "ts" => at.utc.iso8601(3), "call_id" => id, "site" => site,
+                         "mode" => mode, "question_set" => QSET, "threshold_key" => key, "model" => MODEL,
+                         "served_model" => MODEL, "outcome" => outcome, "answers" => answers)
+    outcome_line(id, at + 60, agreement) if agreement
+    id
+  end
+
+  def outcome_line(id, at, agreement)
+    append(month_of(at), "kind" => "outcome", "ts" => at.utc.iso8601(3), "call_id" => id, "site" => SITE,
+                         "action" => "act", "decision" => "d", "agreement" => agreement)
+  end
+
+  # `count` accepted decisions from `start`, the first at `start` and the
+  # last at `start + span`, agreement as given.
+  def spread(count, start, span, **opts)
+    count.times do |i|
+      decision(start + (count == 1 ? 0 : span * i / (count - 1)), **opts)
+    end
+  end
+
+  def gate(now, cfg = config)
+    TypesafeEval.on_gate(config: cfg, site: SITE, question_set: QSET, now: -> { now })
+  end
+
+  def tree
+    Dir.glob(File.join(@tmp, "**", "*"), File::FNM_DOTMATCH).sort.map do |path|
+      File.file?(path) ? [path, File.read(path), File.mtime(path)] : [path]
+    end
+  end
+
+  START = APPLIED + DAY
+
+  # ---- no enabled threshold ------------------------------------------------
+
+  # sabotage: allow a site whose store is empty, all n/a, or under another key
+  def test_refuses_without_an_enabled_threshold_and_writes_nothing
+    all_na = { "low" => { "threshold" => nil, "reason" => "below_bound" },
+               "high" => { "threshold" => nil, "reason" => "too_few_routed" } }
+    cases = {
+      "no store" => -> {},
+      "all n/a" => -> { write_store(labels: all_na) },
+      "old model key" => -> { write_store(key: "review:note-urgency@1:jev-1.12.0") }
+    }
+    cases.each do |name, setup|
+      setup.call
+      spread(40, START, 4 * DAY) # plenty of shadow traffic must not matter
+      before = tree
+      report = gate(START + 10 * DAY)
+      assert_equal false, report[:allowed], name
+      assert_equal "no_enabled_threshold", report[:code], name
+      assert_equal 0, report[:accepted], name
+      assert_equal before, tree, "#{name}: the gate must not write"
+      assert_empty @fake.calls
+      FileUtils.rm_rf(File.join(@state_dir, "eval"))
+    end
+  end
+
+  # sabotage: keep the entry after the pinned model moves the key
+  def test_a_model_change_moves_the_key_and_the_threshold_no_longer_applies
+    write_store
+    spread(40, START, 4 * DAY)
+    assert gate(START + 5 * DAY)[:allowed]
+    report = gate(START + 5 * DAY, config(model: "jev-1.14.0"))
+    assert_equal "no_enabled_threshold", report[:code]
+    assert_equal "review:note-urgency@1:jev-1.14.0", report[:threshold_key]
+  end
+
+  # sabotage: read a store that is not format 1, or raise on it
+  def test_an_unreadable_store_is_no_enabled_threshold
+    FileUtils.mkdir_p(File.join(@state_dir, "eval"))
+    File.write(File.join(@state_dir, "eval", "thresholds.json"), "garbage")
+    assert_equal "no_enabled_threshold", gate(START)[:code]
+    assert_equal "garbage", File.read(File.join(@state_dir, "eval", "thresholds.json"))
+  end
+
+  # ---- evidence counting ---------------------------------------------------
+
+  # sabotage: treat 3 days minus a second as enough, or 34 as 35
+  def test_35_accepted_over_three_days_plus_a_second_is_allowed
+    write_store
+    spread(35, START, 3 * DAY + 1)
+    report = gate(START + 3 * DAY + 1)
+    assert report[:allowed], report.inspect
+    assert_nil report[:code]
+    assert_equal 35, report[:accepted]
+    assert_equal 0, report[:disagreed]
+    assert_equal 3 * DAY + 1, report[:span_s]
+    assert_equal START.iso8601(3), report[:first_routed_at]
+    assert_equal %w[low], report[:enabled_labels]
+    assert_empty report[:shortfall]
+  end
+
+  # sabotage: count 34, or compare the span with > instead of >=
+  def test_34_accepted_is_short_and_so_is_a_span_a_second_under_three_days
+    write_store
+    spread(34, START, 4 * DAY)
+    report = gate(START + 4 * DAY)
+    assert_equal "shadow_evidence_short", report[:code]
+    assert_equal %w[accepted agreement_bound], report[:shortfall] # 34/34 -> 0.898482 < 0.90
+    FileUtils.rm(Dir.glob(File.join(@state_dir, "decisions-*")))
+    spread(35, START, 4 * DAY)
+    exactly = gate(START + 3 * DAY)
+    assert exactly[:allowed]
+    short = gate(START + 3 * DAY - 1)
+    assert_equal "shadow_evidence_short", short[:code]
+    assert_equal %w[days], short[:shortfall]
+  end
+
+  # sabotage: count a line the bound should exclude; each variant carries an
+  # agree outcome, so a leak raises `accepted` above the 35 baseline
+  def test_lines_that_must_not_count
+    write_store
+    spread(35, START, 4 * DAY)
+    at = START + 2 * DAY
+    decision(at, mode: "on")
+    decision(at, mode: "probe")
+    decision(at, site: "other")
+    decision(at, key: "review:note-urgency@2:#{MODEL}")
+    decision(at, outcome: "model_mismatch")
+    decision(APPLIED - 60) # before applied_at
+    decision(at, confidence: 0.49) # below the stored 0.5
+    decision(at, label: "high") # a non-enabled label
+    decision(at, answers: { "other" => { "type" => "choice", "choice" => "low", "confidence" => 0.9 } })
+    decision(at, agreement: nil) # no outcome line at all
+    decision(at, agreement: "n/a")
+    report = gate(START + 5 * DAY)
+    assert_equal 35, report[:accepted]
+    assert_equal 0, report[:disagreed]
+    assert report[:allowed]
+  end
+
+  # sabotage: use the first outcome line, or the earliest agreement
+  def test_the_latest_outcome_line_decides
+    write_store
+    spread(35, START, 4 * DAY)
+    id = decision(START + DAY, agreement: "agree")
+    outcome_line(id, START + DAY + 3600, "disagree")
+    report = gate(START + 5 * DAY)
+    assert_equal 35, report[:accepted]
+    assert_equal 1, report[:disagreed]
+    other = decision(START + DAY, agreement: "disagree")
+    outcome_line(other, START + DAY + 3600, "agree")
+    report = gate(START + 5 * DAY)
+    assert_equal 36, report[:accepted]
+    assert_equal 1, report[:disagreed]
+  end
+
+  # sabotage: read only the current month's decisions file
+  def test_decision_lines_spread_over_two_monthly_files_are_both_read
+    applied = Time.utc(2026, 9, 25)
+    write_store(applied_at: applied)
+    start = Time.utc(2026, 9, 28)
+    spread(35, start, 7 * DAY) # ends Oct 5
+    assert_equal %w[decisions-2026-09.jsonl decisions-2026-10.jsonl],
+                 Dir.children(@state_dir).select { |f| f.start_with?("decisions") }.sort
+    report = gate(Time.utc(2026, 10, 6))
+    assert report[:allowed], report.inspect
+    assert_equal 35, report[:accepted]
+  end
+
+  # sabotage: start the span at applied_at instead of the first routed decision
+  def test_the_span_starts_at_the_first_routed_shadow_decision
+    write_store
+    decision(APPLIED + 60, mode: "on") # not shadow: must not start the span
+    spread(35, START + 5 * DAY, 2 * DAY)
+    report = gate(START + 6 * DAY)
+    assert_equal (START + 5 * DAY).iso8601(3), report[:first_routed_at]
+    assert_equal DAY, report[:span_s]
+    assert_includes report[:shortfall], "days"
+  end
+
+  # sabotage: skip the malformed-line count, or crash on a torn line
+  def test_malformed_lines_are_skipped_and_counted
+    write_store
+    spread(35, START, 4 * DAY)
+    File.open(File.join(@state_dir, "decisions-2026-09.jsonl"), "a") do |f|
+      f.puts("{torn")
+      f.puts("[1]")
+      f.puts("")
+    end
+    report = gate(START + 5 * DAY)
+    assert report[:allowed]
+    assert_equal 2, report[:malformed]
+  end
+
+  # ---- disagreements count against the bound -------------------------------
+
+  # Wilson lower bounds, z = 1.96 (z^2 = 3.8416), agree / (agree + disagree):
+  #   35/36: p = 0.972222; z^2/2n = 0.053356; p(1-p)/n = 0.000750;
+  #     z^2/4n^2 = 0.000741; sqrt(0.001491) = 0.038614; * 1.96 = 0.075683;
+  #     numerator 0.972222 + 0.053356 - 0.075683 = 0.949895;
+  #     denominator 1 + 0.106711 = 1.106711; lb = 0.858300
+  #   51/52: lb = 0.898793      52/53: lb = 0.900569      35/35: 35/38.8416 = 0.901096
+  # sabotage: ignore disagreements, or count them as advisory only
+  def test_disagreements_count_against_the_wilson_bound
+    [[35, 1, false, 0.858300], [51, 1, false, 0.898793], [52, 1, true, 0.900569],
+     [35, 0, true, 0.901096]].each do |agree, disagree, allowed, bound|
+      FileUtils.rm(Dir.glob(File.join(@state_dir, "decisions-*")))
+      write_store
+      spread(agree, START, 4 * DAY)
+      spread(disagree, START + DAY, 2 * DAY, agreement: "disagree")
+      report = gate(START + 5 * DAY)
+      label = "#{agree} agree + #{disagree} disagree"
+      assert_equal allowed, report[:allowed], label
+      assert_equal agree, report[:accepted], label
+      assert_equal disagree, report[:disagreed], label
+      assert_in_delta bound, report[:lower_bound], 1e-6, label
+      assert_equal(allowed ? [] : %w[agreement_bound], report[:shortfall], label)
+    end
+  end
+end
+
+# Phase 4: the fixture runner and the model-change trigger. FakeHTTP is the
+# only transport.
+class TypesafeEvalFixturesTest < Minitest::Test
+  include UserConfigHelper
+
+  MODEL = "jev-1.13.0"
+  NEW_MODEL = "jev-1.14.0"
+  SET_KEY = "review:note-urgency@1"
+  QUESTION = { "type" => "choice", "instructions" => "Decide how urgent the note is for its reader.",
+               "criteria" => { "low" => "Nothing waits.", "high" => "Someone is blocked." } }.freeze
+  SENTINEL_KEY = "sentinel-evalfix-#{SecureRandom.hex(12)}"
+  STATE_MARK = "fixmark-#{SecureRandom.hex(6)}"
+
+  def setup
+    @tmp = Dir.mktmpdir("wurk-eval-fix-")
+    @state_dir = File.join(@tmp, "state")
+    @key_path = File.join(@tmp, "key")
+    File.write(@key_path, "#{SENTINEL_KEY}\n")
+    File.chmod(0o600, @key_path)
+    @fake = FakeHTTP.new
+    @time = Time.utc(2026, 9, 15, 12, 0, 0)
+    @now = -> { @time }
+    @sleeper = ->(_s) {}
+    @path = File.join(@tmp, "fixtures.json")
+  end
+
+  def teardown
+    Dir.glob(File.join(@tmp, "**", "*"), File::FNM_DOTMATCH).each do |path|
+      next unless File.file?(path)
+      next if path == @key_path
+
+      refute_includes File.read(path), SENTINEL_KEY, "sentinel key found in #{path}"
+    end
+  ensure
+    FileUtils.remove_entry(@tmp)
+  end
+
+  def config(model: nil, restricted: [])
+    section = { "key_path" => @key_path, "state_dir" => @state_dir, "budget" => { "monthly_usd" => 1.0 },
+                "restricted_sources" => restricted }
+    section["model"] = model if model
+    raw = { "typesafe" => section,
+            "metrics" => { "prices" => { (model || MODEL) => { "input" => 0.042, "output" => 0 } } } }
+    cfg = UserConfig.new(path: "(fixture)", raw: raw, exists: true)
+    assert_empty cfg.errors
+    cfg
+  end
+
+  def write_fixtures(path = @path, expects: [["a", "low"], ["b", "high"], ["c", "low"]], extra: {})
+    fixtures = expects.map do |id, label|
+      { "id" => id, "state" => "#{STATE_MARK} #{id}", "source" => "synthetic", "expect" => { "label" => label } }
+    end
+    doc = { "site" => "review", "question_set" => { "id" => "note-urgency", "version" => 1 },
+            "question" => "urgency", "questions" => { "urgency" => QUESTION }, "fixtures" => fixtures }
+    File.write(path, JSON.generate(doc.merge(extra)))
+  end
+
+  def body(choice, confidence: 0.9, model: MODEL)
+    JSON.generate("model" => model,
+                  "answers" => { "urgency" => { "type" => "choice", "choice" => choice, "confidence" => confidence } },
+                  "usage" => { "input_tokens" => 400, "output_tokens" => 0 })
+  end
+
+  def script(*choices, model: MODEL)
+    choices.each { |c| @fake.respond(200, body: body(c, model: model)) }
+  end
+
+  def run_set(cfg = config, **opts)
+    TypesafeEval.run_fixtures(config: cfg, fixtures_path: @path, now: @now, http_class: @fake,
+                              sleeper: @sleeper, **opts)
+  end
+
+  def check(cfg = config, paths: [@path], **opts)
+    TypesafeEval.check_fixtures(config: cfg, fixtures_paths: paths, now: @now, http_class: @fake,
+                                sleeper: @sleeper, **opts)
+  end
+
+  def state
+    JSON.parse(File.read(File.join(@state_dir, "eval", "fixtures-state.json")))
+  end
+
+  def fresh_fake
+    @fake = FakeHTTP.new
+  end
+
+  # ---- run -----------------------------------------------------------------
+
+  # sabotage: skip a fixture, or write state text into the results
+  def test_all_pass_records_the_run_and_never_the_state_text
+    write_fixtures
+    script("low", "high", "low")
+    result = run_set
+    assert_equal true, result[:passed]
+    assert_empty result[:failed_ids]
+    assert_equal 3, @fake.calls.size
+    assert_equal 3, result[:sent]
+    assert_equal %w[a b c], result[:results].map { |r| r[:id] }
+    assert_equal "low", result[:results][0][:predicted]
+    recorded = state["sets"][SET_KEY]
+    assert_equal MODEL, recorded["model"]
+    assert_equal MODEL, recorded["served_model"]
+    assert_equal true, recorded["passed"]
+    assert_equal "2026-09-15T12:00:00.000Z", recorded["ran_at"]
+    refute_includes File.read(File.join(@state_dir, "eval", "fixtures-state.json")), STATE_MARK
+    refute_includes result.inspect, STATE_MARK
+  end
+
+  # sabotage: stop at the first failure, or pass on a wrong label
+  def test_a_wrong_label_fails_that_fixture_and_still_records_the_run
+    write_fixtures
+    script("low", "low", "low")
+    result = run_set
+    assert_equal false, result[:passed]
+    assert_equal %w[b], result[:failed_ids]
+    assert_equal 3, @fake.calls.size
+    assert_equal %w[b], state["sets"][SET_KEY]["failed_ids"]
+    assert_equal false, state["sets"][SET_KEY]["passed"]
+  end
+
+  # sabotage: ignore min_confidence
+  def test_min_confidence_is_enforced
+    write_fixtures(expects: [["a", "low"]])
+    doc = JSON.parse(File.read(@path))
+    doc["fixtures"][0]["expect"]["min_confidence"] = 0.95
+    File.write(@path, JSON.generate(doc))
+    script("low")
+    assert_equal %w[a], run_set[:failed_ids]
+  end
+
+  # sabotage: treat a non-ok outcome as a pass
+  def test_a_timeout_fails_the_fixture
+    write_fixtures(expects: [["a", "low"], ["b", "high"]])
+    @fake.raise_error(Net::ReadTimeout)
+    script("high")
+    result = run_set
+    assert_equal %w[a], result[:failed_ids]
+    assert_equal "timeout", result[:results][0][:outcome]
+    assert_nil result[:results][0][:predicted]
+  end
+
+  # sabotage: check restricted sources per call
+  def test_a_restricted_source_refuses_the_whole_set_with_zero_calls
+    write_fixtures
+    error = assert_raises(TypesafeEval::Refusal) { run_set(config(restricted: ["synthetic"])) }
+    assert_equal "source_restricted", error.code
+    assert_empty @fake.calls
+    refute File.exist?(@state_dir)
+  end
+
+  # sabotage: accept a label the question does not have, or a duplicate id
+  def test_invalid_fixture_sets_are_refused_by_field
+    write_fixtures(expects: [["a", "medium"]])
+    assert_equal "fixtures_invalid", assert_raises(TypesafeEval::Refusal) { run_set }.code
+    write_fixtures(expects: [["a", "low"], ["a", "low"]])
+    error = assert_raises(TypesafeEval::Refusal) { run_set }
+    assert_equal "fixtures_invalid", error.code
+    refute_includes error.message, STATE_MARK
+    File.write(@path, "not json")
+    assert_equal "fixtures_invalid", assert_raises(TypesafeEval::Refusal) { run_set }.code
+    write_fixtures(extra: { "site" => "Bad Site" })
+    assert_equal "fixtures_invalid", assert_raises(TypesafeEval::Refusal) { run_set }.code
+    assert_empty @fake.calls
+  end
+
+  # sabotage: send or write under dry_run
+  def test_dry_run_sends_and_writes_nothing
+    write_fixtures
+    result = run_set(dry_run: true)
+    assert_equal 3, result[:would_call]
+    assert_empty @fake.calls
+    refute File.exist?(@state_dir)
+  end
+
+  # ---- the model-change trigger --------------------------------------------
+
+  # sabotage: stamp ran_at before the calls, so the run re-triggers itself
+  def test_a_finished_run_does_not_retrigger_itself
+    write_fixtures
+    script("low", "high", "low")
+    run_set
+    assert_equal [false, nil], TypesafeEval.model_changed?(config: config, set_key: SET_KEY)
+  end
+
+  # sabotage: run every set on every check, or none
+  def test_check_runs_a_set_only_when_the_model_changed
+    write_fixtures
+    script("low", "high", "low")
+    run_set
+    fresh_fake
+    sets = check
+    assert_equal 0, @fake.calls.size
+    assert_equal false, sets[0][:triggered]
+    assert_nil sets[0][:reason]
+    assert_nil sets[0][:run]
+
+    script("low", "high", "low", model: NEW_MODEL)
+    sets = check(config(model: NEW_MODEL))
+    assert_equal 3, @fake.calls.size
+    assert_equal true, sets[0][:triggered]
+    assert_equal "pinned_model_changed", sets[0][:reason]
+    assert_equal true, sets[0][:run][:passed]
+    assert_equal NEW_MODEL, state["sets"][SET_KEY]["model"]
+    fresh_fake
+    check(config(model: NEW_MODEL))
+    assert_equal 0, @fake.calls.size
+  end
+
+  # sabotage: ignore the served model in later decision lines
+  def test_a_later_served_model_change_triggers
+    write_fixtures
+    script("low", "high", "low")
+    run_set
+    FileUtils.mkdir_p(@state_dir)
+    line = { "kind" => "decision", "ts" => (@time + 3600).iso8601(3), "call_id" => "x", "site" => "other",
+             "mode" => "shadow", "model" => MODEL, "served_model" => NEW_MODEL, "outcome" => "model_mismatch" }
+    File.write(File.join(@state_dir, "decisions-2026-09.jsonl"), "#{JSON.generate(line)}\n")
+    assert_equal [true, "served_model_changed"], TypesafeEval.model_changed?(config: config, set_key: SET_KEY)
+    fresh_fake
+    script("low", "high", "low")
+    sets = check
+    assert_equal 3, @fake.calls.size
+    assert_equal "served_model_changed", sets[0][:reason]
+  end
+
+  # sabotage: count decision lines from before the recorded run
+  def test_decision_lines_before_the_recorded_run_do_not_trigger
+    write_fixtures
+    script("low", "high", "low")
+    run_set
+    line = { "kind" => "decision", "ts" => (@time - 3600).iso8601(3), "call_id" => "x", "site" => nil,
+             "mode" => "probe", "model" => MODEL, "served_model" => NEW_MODEL, "outcome" => "ok" }
+    File.open(File.join(@state_dir, "decisions-2026-09.jsonl"), "a") { |f| f.puts(JSON.generate(line)) }
+    assert_equal [false, nil], TypesafeEval.model_changed?(config: config, set_key: SET_KEY)
+  end
+
+  # sabotage: treat a missing state file as unchanged
+  def test_no_state_file_is_no_baseline_and_triggers
+    write_fixtures
+    assert_equal [true, "no_baseline"], TypesafeEval.model_changed?(config: config, set_key: SET_KEY)
+    script("low", "high", "low")
+    sets = check
+    assert_equal 3, @fake.calls.size
+    assert_equal "no_baseline", sets[0][:reason]
+  end
+
+  # sabotage: validate lazily, after the first set already spent calls
+  def test_check_validates_every_set_before_the_first_call
+    write_fixtures
+    other = File.join(@tmp, "other.json")
+    File.write(other, "not json")
+    assert_raises(TypesafeEval::Refusal) { check(paths: [@path, other]) }
+    assert_empty @fake.calls
+    refute File.exist?(@state_dir)
+  end
+
+  # sabotage: send under dry_run
+  def test_check_dry_run_reports_and_sends_nothing
+    write_fixtures
+    sets = check(dry_run: true)
+    assert_equal "no_baseline", sets[0][:reason]
+    assert_equal 3, sets[0][:run][:would_call]
+    assert_empty @fake.calls
+    refute File.exist?(@state_dir)
+  end
+
+  # sabotage: retry a non-rate outcome, or never wait
+  def test_rate_limited_local_waits_and_retries_a_fixture
+    write_fixtures(expects: [["a", "low"]])
+    slept = []
+    sleeper = lambda do |s|
+      slept << s
+      @time += s
+    end
+    FileUtils.mkdir_p(@state_dir)
+    seed = 60.times.map do
+      JSON.generate("ts" => @time.utc.iso8601(3), "month" => "2026-09", "call_id" => "seed", "site" => nil,
+                    "model" => MODEL, "outcome" => "ok", "cost_usd" => 0.0, "cost_estimated" => false)
+    end
+    File.write(File.join(@state_dir, "ledger-2026-09.jsonl"), seed.map { |l| "#{l}\n" }.join)
+    script("low")
+    result = run_set(sleeper: sleeper)
+    assert_equal [60], slept
+    assert_equal true, result[:passed]
+  end
+end

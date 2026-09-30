@@ -28,6 +28,9 @@ module TypesafeEvalCli
            typesafe_eval.rb label --corpus PATH [--relabel] [--dry-run]
            typesafe_eval.rb run --corpus PATH [--dry-run]
            typesafe_eval.rb sweep --run PATH --corpus PATH [--apply] [--dry-run]
+           typesafe_eval.rb gate --site NAME --question-set ID@VERSION
+           typesafe_eval.rb fixtures run --fixtures PATH [--dry-run]
+           typesafe_eval.rb fixtures check --fixtures PATH... [--dry-run]
 
     corpus build  read-only sources -> one corpus file for a site and question
                   set. Every source needs a --source label, given after its
@@ -50,10 +53,19 @@ module TypesafeEvalCli
                   95% lower bound on precision is >= 0.90 with >= 10 routed
                   cases, else n/a. --apply stores it under the run's
                   threshold key; a partial run is refused.
+    gate          read-only: exit 0 only when the site's current threshold key
+                  has an enabled threshold AND the shadow evidence bar is met
+                  (>= 3 days, >= 35 accepted judgments, Wilson lower bound
+                  >= 0.90 on shadow agreement). Advisory: it changes nothing.
+    fixtures      run a site's synthetic fixture set on demand (run), or run
+                  each set only when the model id changed since its last
+                  run (check). Failure is exit 1 and a block; nothing is
+                  scheduled. --dry-run reports what would run and sends
+                  nothing.
   TEXT
   HELP_FLAGS = %w[--help -h].freeze
   REQUEST_COMMAND = "POST #{Typesafe::ENDPOINT}"
-  SUBCOMMANDS = %w[corpus label run sweep].freeze
+  SUBCOMMANDS = %w[corpus label run sweep gate fixtures].freeze
 
   class << self
     def run(argv, io: $stdout, stdin: $stdin, prompt: $stderr, http_class: Net::HTTP, now: nil, sleeper: nil)
@@ -69,7 +81,9 @@ module TypesafeEvalCli
       when "corpus" then run_corpus(argv, io)
       when "label" then run_label(argv, io, stdin, prompt)
       when "run" then run_eval(argv, io, clock_args(http_class, now, sleeper))
-      else run_sweep(argv, io, now)
+      when "sweep" then run_sweep(argv, io, now)
+      when "gate" then run_gate(argv, io, now)
+      else run_fixtures(argv, io, clock_args(http_class, now, sleeper))
       end
     end
 
@@ -348,6 +362,142 @@ module TypesafeEvalCli
       env.block!(code: "partial_run",
                  message: "the run is partial (#{reasons.join(', ')}); nothing was stored. " \
                           "Re-run the whole corpus against the current corpus and pinned model.",
+                 needs: "human")
+    end
+
+    # --- gate ---------------------------------------------------------------
+
+    QSET_ARG = /\A(.+)@([0-9]+)\z/.freeze
+
+    def run_gate(argv, io, now)
+      options, code = parse(argv, "gate") do |opts, o|
+        opts.on("--site NAME", "the call site") { |v| o[:site] = v }
+        opts.on("--question-set ID@VERSION", "the question set the site runs") { |v| o[:qset] = v }
+      end
+      return code if code
+
+      qset = gate_question_set(options)
+      return usage_error("gate needs --site NAME and --question-set ID@VERSION") unless qset
+
+      env = Envelope.new(script: "typesafe_eval")
+      config = UserConfig.require!(env)
+      return env.emit(io) unless config
+
+      args = { config: config, site: options[:site], question_set: qset }
+      args[:now] = now if now
+      fill_gate(env, TypesafeEval.on_gate(**args))
+      env.emit(io)
+    end
+
+    # {"id", "version"} or nil when a flag is missing or malformed.
+    def gate_question_set(options)
+      site, arg = options.values_at(:site, :qset)
+      return nil unless site.is_a?(String) && site.match?(UserConfig::TYPESAFE_NAME) && arg.is_a?(String)
+
+      match = QSET_ARG.match(arg)
+      return nil unless match && match[1].match?(UserConfig::TYPESAFE_NAME) && match[2].to_i.positive?
+
+      { "id" => match[1], "version" => match[2].to_i }
+    end
+
+    def fill_gate(env, report)
+      d = env.data
+      %i[allowed threshold_key enabled_labels accepted disagreed span_s first_routed_at].each do |k|
+        d[k] = report[k]
+      end
+      d[:lower_bound] = report[:lower_bound].nil? ? nil : report[:lower_bound].round(6)
+      d[:shortfall] = report[:shortfall]
+      if report[:malformed].positive?
+        env.warn(code: "decision_lines_malformed",
+                 message: "#{report[:malformed]} decision line(s) were unreadable and skipped")
+      end
+      return if report[:allowed]
+
+      env.block!(code: report[:code], message: gate_message(report), needs: "none")
+    end
+
+    def gate_message(report)
+      if report[:code] == "no_enabled_threshold"
+        "no enabled threshold is stored for #{report[:threshold_key]}: run the eval and apply a " \
+        "complete sweep for this question set and pinned model. Keep the site in shadow meanwhile."
+      else
+        "shadow evidence is short for #{report[:threshold_key]} (#{report[:shortfall].join(', ')}): " \
+        "#{report[:accepted]} accepted, #{report[:disagreed]} disagreed, #{report[:span_s]} s of span. " \
+        "Keep collecting shadow evidence."
+      end
+    end
+
+    # --- fixtures -----------------------------------------------------------
+
+    def run_fixtures(argv, io, injected)
+      verb = argv.first
+      return usage_error("fixtures needs run or check") unless %w[run check].include?(verb)
+
+      argv.shift
+      options, code = parse(argv, "fixtures #{verb}") do |opts, o|
+        o[:fixtures] = []
+        opts.on("--fixtures PATH", "a fixture set file (repeatable for check)") { |v| o[:fixtures] << v }
+      end
+      return code if code
+      return usage_error("fixtures #{verb} needs --fixtures") if options[:fixtures].empty?
+      return usage_error("fixtures run takes one --fixtures") if verb == "run" && options[:fixtures].size > 1
+
+      env = Envelope.new(script: "typesafe_eval")
+      config = UserConfig.require!(env)
+      return env.emit(io) unless config
+
+      fixtures(env, config, verb, options, injected)
+      env.emit(io)
+    rescue TypesafeEval::Refusal => e
+      refuse(env, e, io)
+    rescue SystemCallError, IOError => e
+      io_error(env, e, io)
+    end
+
+    def fixtures(env, config, verb, options, injected)
+      dry = options[:dry_run] ? true : false
+      env.data[:dry_run] = dry
+      if verb == "run"
+        run = TypesafeEval.run_fixtures(config: config, fixtures_path: options[:fixtures].first,
+                                        dry_run: dry, **injected)
+        fill_fixture_run(env, run)
+        fixture_block(env, [run]) unless dry
+      else
+        sets = TypesafeEval.check_fixtures(config: config, fixtures_paths: options[:fixtures],
+                                           dry_run: dry, **injected)
+        fill_fixture_check(env, sets)
+        fixture_block(env, sets.map { |s| s[:run] }.compact) unless dry
+      end
+    end
+
+    # A run's own keys go into data; the request lines go to commands.
+    def fill_fixture_run(env, run, into = env.data)
+      run.each { |k, v| into[k] = v unless k == :sent }
+      run[:sent].to_i.times { env.commands << REQUEST_COMMAND }
+    end
+
+    def fill_fixture_check(env, sets)
+      env.data[:sets] = sets.map do |s|
+        entry = { path: s[:path], set_key: s[:set_key], triggered: s[:triggered], reason: s[:reason] }
+        if s[:run]
+          entry[:run] = {}
+          fill_fixture_run(env, s[:run], entry[:run])
+        end
+        entry
+      end
+    end
+
+    def fixture_block(env, runs)
+      failed = runs.reject { |r| r[:passed] }
+      return if failed.empty?
+
+      detail = failed.map do |r|
+        bad = r[:results].reject { |x| x[:passed] }.map { |x| "#{x[:id]}=#{x[:outcome]}" }
+        "#{r[:set_key]}: #{bad.join(', ')}"
+      end
+      env.block!(code: "fixture_failed",
+                 message: "fixture(s) failed (id=outcome; ok means the label or confidence was wrong): " \
+                          "#{detail.join('; ')}",
                  needs: "human")
     end
   end

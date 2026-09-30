@@ -72,13 +72,13 @@ class TypesafeEvalCliTest < Minitest::Test
   end
 
   # [exit_code, parsed_envelope_or_nil, stdout, stderr, prompt_text].
-  def run_cli(argv, stdin_text: "")
+  def run_cli(argv, stdin_text: "", now: nil)
     io = StringIO.new
     prompt = StringIO.new
     code = nil
     out, err = capture_io do
       code = TypesafeEvalCli.run(argv, io: io, stdin: StringIO.new(stdin_text), prompt: prompt,
-                                       http_class: @fake)
+                                       http_class: @fake, now: now)
     end
     @outputs << io.string << out << err << prompt.string
     body = io.string.start_with?("{") ? JSON.parse(io.string) : nil
@@ -505,6 +505,239 @@ class TypesafeEvalCliTest < Minitest::Test
       assert_nil body
       assert_empty out
       refute_empty err
+    end
+  end
+
+  # ---- gate and fixtures (Phase 4) -----------------------------------------
+
+  KEY_OF = "review:note-urgency@1:#{MODEL}".freeze
+
+  def config_file
+    File.join(@home, ".claude", "wurk.local.json")
+  end
+
+  def listing(dir)
+    Dir.glob(File.join(dir, "**", "*"), File::FNM_DOTMATCH).sort.map do |path|
+      File.file?(path) ? [path, File.read(path)] : [path]
+    end
+  end
+
+  def write_store(labels: { "low" => { "threshold" => 0.5 } })
+    entry = { "site" => "review", "question_set" => { "id" => "note-urgency", "version" => 1 },
+              "question" => "urgency", "labels" => labels, "run_id" => "r", "corpus_digest" => "d",
+              "applied_at" => "2026-09-01T00:00:00.000Z" }
+    FileUtils.mkdir_p(File.join(@state, "eval"))
+    File.write(File.join(@state, "eval", "thresholds.json"),
+               JSON.generate("format" => 1, "keys" => { KEY_OF => entry }))
+  end
+
+  def add_decisions(count, agreement: "agree", from: Time.utc(2026, 9, 2), span: 4 * 86_400)
+    File.open(File.join(@state, "decisions-2026-09.jsonl"), "a") do |f|
+      count.times do |i|
+        at = from + span * i / [count - 1, 1].max
+        id = "c#{agreement}#{i}"
+        f.puts(JSON.generate("kind" => "decision", "ts" => at.iso8601(3), "call_id" => id, "site" => "review",
+                             "mode" => "shadow", "threshold_key" => KEY_OF, "outcome" => "ok",
+                             "answers" => { "urgency" => { "type" => "choice", "choice" => "low",
+                                                           "confidence" => 0.9 } }))
+        f.puts(JSON.generate("kind" => "outcome", "ts" => (at + 60).iso8601(3), "call_id" => id,
+                             "site" => "review", "action" => "a", "decision" => "d", "agreement" => agreement))
+      end
+    end
+  end
+
+  # sabotage: exit 0 with no enabled threshold, or write anything
+  def test_gate_refuses_with_no_enabled_threshold_and_changes_nothing
+    with_eval_home do
+      before = listing(@home)
+      config_bytes = File.read(config_file)
+      code, body, out, err = run_cli(["gate", "--site", "review", "--question-set", "note-urgency@1"])
+      assert_equal 1, code, err
+      assert_equal ["no_enabled_threshold"], body["blocked"].map { |b| b["code"] }
+      assert_equal "none", body["blocked"][0]["needs"]
+      assert_equal false, body["data"]["allowed"]
+      assert_equal KEY_OF, body["data"]["threshold_key"]
+      refute_match(/wurk\.local|edit/i, body["blocked"][0]["message"])
+      assert_equal before, listing(@home)
+      assert_equal config_bytes, File.read(config_file)
+      assert_empty @fake.calls
+      refute_includes out, STATE_MARK
+    end
+  end
+
+  # sabotage: let a threshold alone open the gate
+  def test_gate_with_a_threshold_but_short_evidence_is_shadow_evidence_short
+    with_eval_home do
+      write_store
+      add_decisions(34)
+      before = listing(@home)
+      config_bytes = File.read(config_file)
+      code, body, = run_cli(["gate", "--site", "review", "--question-set", "note-urgency@1"])
+      assert_equal 1, code
+      assert_equal ["shadow_evidence_short"], body["blocked"].map { |b| b["code"] }
+      assert_equal "none", body["blocked"][0]["needs"]
+      assert_equal 34, body["data"]["accepted"]
+      assert_equal %w[accepted agreement_bound], body["data"]["shortfall"]
+      assert_equal before, listing(@home)
+      assert_equal config_bytes, File.read(config_file)
+    end
+  end
+
+  # sabotage: exit 1 when the bar is met, or count 52/1 as short
+  def test_gate_allows_when_the_evidence_bar_is_met
+    with_eval_home do
+      write_store
+      add_decisions(52)
+      add_decisions(1, agreement: "disagree", from: Time.utc(2026, 9, 3))
+      before = listing(@home)
+      code, body, = run_cli(["gate", "--site", "review", "--question-set", "note-urgency@1"],
+                            now: -> { Time.utc(2026, 9, 20) })
+      assert_equal 0, code
+      assert_equal true, body["data"]["allowed"]
+      assert_equal 52, body["data"]["accepted"]
+      assert_equal 1, body["data"]["disagreed"]
+      assert_in_delta 0.900569, body["data"]["lower_bound"], 1e-6
+      assert_equal ["low"], body["data"]["enabled_labels"]
+      assert_empty body["blocked"]
+      assert_equal before, listing(@home)
+    end
+  end
+
+  # sabotage: crash on a torn decision line
+  def test_gate_warns_about_unreadable_decision_lines
+    with_eval_home do
+      write_store
+      add_decisions(35)
+      File.open(File.join(@state, "decisions-2026-09.jsonl"), "a") { |f| f.puts("{torn") }
+      code, body, = run_cli(["gate", "--site", "review", "--question-set", "note-urgency@1"],
+                            now: -> { Time.utc(2026, 9, 20) })
+      assert_equal 0, code
+      assert_equal ["decision_lines_malformed"], body["warnings"].map { |w| w["code"] }
+    end
+  end
+
+  # sabotage: accept a malformed question set, or an unknown flag
+  def test_gate_and_fixtures_usage_errors_exit_2
+    [
+      ["gate"], ["gate", "--site", "review"], ["gate", "--question-set", "note-urgency@1"],
+      ["gate", "--site", "review", "--question-set", "note-urgency"],
+      ["gate", "--site", "review", "--question-set", "note-urgency@0"],
+      ["gate", "--site", "Bad Site", "--question-set", "note-urgency@1"],
+      ["gate", "--site", "review", "--question-set", "x@1", "extra"],
+      ["fixtures"], ["fixtures", "frob"], ["fixtures", "run"], ["fixtures", "check"],
+      ["fixtures", "run", "--fixtures", "a", "--fixtures", "b"]
+    ].each do |argv|
+      code, body, out, err = run_cli(argv)
+      assert_equal 2, code, argv.inspect
+      assert_nil body
+      assert_empty out
+      refute_empty err
+    end
+  end
+
+  def write_fixtures(path, labels: %w[low high])
+    fixtures = labels.each_with_index.map do |label, i|
+      { "id" => "fx-#{i}", "state" => "#{STATE_MARK} #{i}", "source" => "synthetic",
+        "expect" => { "label" => label } }
+    end
+    spec = JSON.parse(File.read(QUESTION_SET))
+    File.write(path, JSON.generate(spec.merge("site" => "review", "fixtures" => fixtures)))
+  end
+
+  def answer_for(choice)
+    JSON.generate("model" => MODEL,
+                  "answers" => { "urgency" => { "type" => "choice", "choice" => choice, "confidence" => 0.9 } },
+                  "usage" => { "input_tokens" => 400, "output_tokens" => 0 })
+  end
+
+  # sabotage: exit 0 on a failed fixture, or leak state text into data
+  def test_fixtures_run_passes_and_fails_by_exit_status
+    with_eval_home do |dir|
+      path = File.join(dir, "fixtures.json")
+      write_fixtures(path)
+      @fake.respond(200, body: answer_for("low"))
+      @fake.respond(200, body: answer_for("high"))
+      code, body, out, err = run_cli(["fixtures", "run", "--fixtures", path])
+      assert_equal 0, code, err
+      assert_equal true, body["data"]["passed"]
+      assert_equal %w[fx-0 fx-1], body["data"]["results"].map { |r| r["id"] }
+      assert_equal 2, body["commands"].size
+      refute_includes out, STATE_MARK
+      assert_empty body["blocked"]
+
+      @fake.respond(200, body: answer_for("high"))
+      @fake.respond(200, body: answer_for("high"))
+      code, body, out, = run_cli(["fixtures", "run", "--fixtures", path])
+      assert_equal 1, code
+      assert_equal ["fixture_failed"], body["blocked"].map { |b| b["code"] }
+      assert_equal "human", body["blocked"][0]["needs"]
+      assert_includes body["blocked"][0]["message"], "fx-0=ok"
+      refute_includes out, STATE_MARK
+    end
+  end
+
+  # sabotage: send under --dry-run, or write the state file
+  def test_fixtures_dry_run_sends_nothing_and_writes_nothing
+    with_eval_home do |dir|
+      path = File.join(dir, "fixtures.json")
+      write_fixtures(path)
+      code, body, = run_cli(["fixtures", "run", "--fixtures", path, "--dry-run"])
+      assert_equal 0, code
+      assert_equal 2, body["data"]["would_call"]
+      code, body, = run_cli(["fixtures", "check", "--fixtures", path, "--dry-run"])
+      assert_equal 0, code
+      assert_equal true, body["data"]["sets"][0]["triggered"]
+      assert_equal "no_baseline", body["data"]["sets"][0]["reason"]
+      assert_equal 2, body["data"]["sets"][0]["run"]["would_call"]
+      assert_empty @fake.calls
+      refute File.exist?(@state)
+    end
+  end
+
+  # sabotage: run an unchanged set, or exit 0 when a triggered set failed
+  def test_fixtures_check_runs_only_a_changed_set_and_fails_by_exit_status
+    with_eval_home do |dir|
+      path = File.join(dir, "fixtures.json")
+      write_fixtures(path)
+      @fake.respond(200, body: answer_for("low"))
+      @fake.respond(200, body: answer_for("high"))
+      code, body, = run_cli(["fixtures", "check", "--fixtures", path])
+      assert_equal 0, code
+      assert_equal "no_baseline", body["data"]["sets"][0]["reason"]
+      assert_equal true, body["data"]["sets"][0]["run"]["passed"]
+      assert_equal 2, @fake.calls.size
+
+      code, body, = run_cli(["fixtures", "check", "--fixtures", path])
+      assert_equal 0, code
+      assert_equal false, body["data"]["sets"][0]["triggered"]
+      assert_nil body["data"]["sets"][0]["run"]
+      assert_equal 2, @fake.calls.size # no new calls
+
+      # a drifted served model makes the next check run again, and it fails
+      File.open(File.join(@state, "decisions-#{Time.now.utc.strftime("%Y-%m")}.jsonl"), "a") do |f|
+        f.puts(JSON.generate("kind" => "decision", "ts" => (Time.now.utc + 3600).iso8601(3), "call_id" => "z",
+                             "site" => nil, "mode" => "probe", "served_model" => "jev-9.9.9",
+                             "outcome" => "model_mismatch"))
+      end
+      @fake.respond(200, body: answer_for("high"))
+      @fake.respond(200, body: answer_for("high"))
+      code, body, = run_cli(["fixtures", "check", "--fixtures", path])
+      assert_equal 1, code
+      assert_equal "served_model_changed", body["data"]["sets"][0]["reason"]
+      assert_equal ["fixture_failed"], body["blocked"].map { |b| b["code"] }
+    end
+  end
+
+  # sabotage: check the source list per call
+  def test_fixtures_restricted_source_is_blocked_with_zero_calls
+    with_eval_home(restricted: ["synthetic"]) do |dir|
+      path = File.join(dir, "fixtures.json")
+      write_fixtures(path)
+      code, body, = run_cli(["fixtures", "run", "--fixtures", path])
+      assert_equal 1, code
+      assert_equal ["source_restricted"], body["blocked"].map { |b| b["code"] }
+      assert_empty @fake.calls
+      refute File.exist?(File.join(@state, "eval"))
     end
   end
 end
