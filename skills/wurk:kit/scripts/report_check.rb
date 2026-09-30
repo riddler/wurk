@@ -4,6 +4,7 @@
 require "json"
 require_relative "lib/envelope"
 require_relative "lib/cli"
+require_relative "lib/finding_severity"
 
 # ReportCheck answers one question about a campaign's per-bead worker report
 # files: does each one actually parse as the JSON its name and its contract
@@ -71,11 +72,29 @@ module ReportCheck
 
       content = read_utf8(path)
       begin
-        JSON.parse(content)
-        { path: path, exists: true, parsed: true, shape: shape(content), error: nil }
+        report = JSON.parse(content)
+        { path: path, exists: true, parsed: true, shape: shape(content), error: nil,
+          findings_by_level: findings_by_level_state(report) }
       rescue JSON::ParserError => e
         { path: path, exists: true, parsed: false, shape: shape(content), error: e.message.split("\n").first }
       end
+    end
+
+    # The optional reviewRound.findingsByLevel field (finding_severity.rb's
+    # data.findings_by_level, copied): nil when absent - a report written on
+    # the template before the field existed is still a good report - "ok"
+    # when it is an object holding exactly the four level counts as
+    # non-negative integers, else "malformed".
+    def findings_by_level_state(report)
+      review = report.is_a?(Hash) ? report["reviewRound"] : nil
+      return nil unless review.is_a?(Hash) && review.key?("findingsByLevel")
+
+      field = review["findingsByLevel"]
+      keys = FindingSeverity::BUCKETS.values
+      return "malformed" unless field.is_a?(Hash) && field.keys.sort == keys.sort
+      return "malformed" unless field.values.all? { |v| v.is_a?(Integer) && v >= 0 }
+
+      "ok"
     end
 
     # "fenced", "prose", "bare" or "empty", from the first non-blank line.
@@ -175,7 +194,10 @@ class ReportCheckCli
         env.warn(code: "report_missing", message: "no report file at #{report[:path]} yet")
         return
       end
-      return if report[:parsed]
+      if report[:parsed]
+        findings_by_level_warning(env, report)
+        return
+      end
 
       env.block!(
         code: "report_not_json",
@@ -186,6 +208,18 @@ class ReportCheckCli
                  "between-campaigns reader parse.",
         needs: "human"
       )
+    end
+
+    # A malformed optional field warns rather than blocks: the report still
+    # parses, so the sweep still reads the rest of it.
+    def findings_by_level_warning(env, report)
+      return unless report[:findings_by_level] == "malformed"
+
+      env.warn(code: "findings_by_level_malformed",
+               message: "#{report[:path]} carries a reviewRound.findingsByLevel that is not an " \
+                        "object of the four level counts (#{FindingSeverity::BUCKETS.values.join(', ')}) " \
+                        "as non-negative integers; copy finding_severity.rb's data.findings_by_level " \
+                        "verbatim, or omit the field")
     end
   end
 end
