@@ -1333,6 +1333,10 @@ it.
 - Never apply thresholds from a partial eval run.
 - Route on `data.outcome`; apply the fallback rule to everything but
   `ok`; write the outcome line after acting.
+- Always pass the site's own name (`--site`, or `site:` to
+  `Typesafe.judge`). A call with no site is a `probe` for operators and
+  smoke tests: it ignores site modes, so a call site that omits its name
+  bypasses the `off` default this contract depends on.
 
 ### The model and the key
 
