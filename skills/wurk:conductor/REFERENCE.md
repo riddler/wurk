@@ -807,6 +807,23 @@ to re-emit. `campaignState` and `policy` are already
 among the field names the skill reads (top of this file); both keys
 live under them rather than under a new top-level key.
 
+## Report triage - the report_triage site
+
+The sweep's optional second opinion on a landed report (SKILL.md,
+"Sweep on every wake", the report-triage paragraph) is the kit's first
+Jev call site, specified in `skills/wurk:kit/REFERENCE.md`
+("`report_triage.rb`: the report_triage Jev site"). It ships off: the
+site does nothing until the operator names `report_triage` in the
+machine config's `typesafe.sites` with a mode, and the conductor never
+switches it. The conductor passes the report file, its own
+classification (`--conductor done|blocked|stuck`), the source label
+`repo:<repo directory basename>` (an operator restricts a repo by
+listing that label in `typesafe.restricted_sources`), and a
+`--threshold` only when the eval tooling has one enabled for the site's
+threshold key. The one output field the conductor routes on is
+`data.add_needs_you`; everything else is journaled, and every fallback
+changes nothing.
+
 ## Between-campaigns synthesis - the retro reader
 
 Phase 6 is a single campaign's retro. Friction only visible across

@@ -1102,6 +1102,35 @@ with it. A `report_missing` warning is not that: it means the worker has
 not written its report yet, which is the ordinary state of a bead in
 flight.
 
+**Triage the report once, after your own read (report_triage; off
+unless the operator turned it on).** Once you have landed a report and
+journaled your own classification - done for a [complete], blocked or
+stuck otherwise - run the kit's Jev site over it:
+
+    ruby ~/.claude/skills/wurk:kit/scripts/report_triage.rb --report <file> --conductor <done|blocked|stuck> --source repo:<repo dir basename>
+
+adding `--threshold <n>` only when the eval tooling has an enabled
+threshold for the site's `data.threshold_key`; never pick a number
+yourself. The site is off unless the operator's machine config says
+otherwise, and off returns at once and changes nothing. Turning it to
+shadow or on is an operator act, never your judgement: never edit the
+machine config to switch it. Your own read of the report is
+authoritative. In shadow, journal `data.journal_line` (it names both
+classifications) and act on your own read only. In on, the only thing
+Jev can do is ADD: when `data.add_needs_you` is true, carry one item
+into the morning report's queue (the operator's needs-you list) naming
+the report, Jev's class and its confidence, labelled as added by Jev.
+Jev never marks a bead done, never clears, removes or downgrades an
+item, and never changes a journal entry or a bead's status - "never
+clears" is an authority rule, not a threshold. Any other result (a
+non-zero exit, `add_needs_you` false, a `jev_fallback` warning) leaves
+the sweep exactly as it was. Triage each report version once
+(`data.report_digest`), not on every sweep. A re-emitted report is
+triaged afresh, and an item Jev added for the earlier version is marked
+superseded in the same journal entry; an item you raised yourself is
+never touched. The contract is the kit REFERENCE's "`report_triage.rb`:
+the report_triage Jev site".
+
 The heartbeat: notifications are hints, so do not wait for one. Arm a
 Monitor whose only job is to wake you on a clock, and re-arm it at
 every expiry (the expiry notice is itself a wake):
