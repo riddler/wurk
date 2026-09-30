@@ -772,17 +772,359 @@ module TypesafeEval
 
   # tmp file then rename, mode 600, in a mode-700 dir.
   def self.write_store(config, store)
-    dir = eval_dir(config)
-    FileUtils.mkdir_p(dir, mode: 0o700)
-    path = thresholds_path(config)
+    write_eval_json(config, thresholds_path(config), store)
+  end
+  private_class_method :write_store
+
+  def self.write_eval_json(config, path, data)
+    FileUtils.mkdir_p(eval_dir(config), mode: 0o700)
     tmp = "#{path}.tmp#{Process.pid}"
     File.open(tmp, File::WRONLY | File::CREAT | File::TRUNC, 0o600) do |f|
-      f.write(JSON.generate(store))
+      f.write(JSON.generate(data))
       f.write("\n")
     end
     File.rename(tmp, path)
   ensure
     File.delete(tmp) if tmp && File.exist?(tmp)
   end
-  private_class_method :write_store
+  private_class_method :write_eval_json
+
+  # --- the shadow-to-on gate ------------------------------------------------
+
+  GATE_MIN_SPAN_S = 259_200 # 3 days
+  GATE_MIN_ACCEPTED = 35
+  DECISIONS_FILE = /\Adecisions-(\d{4}-\d{2})\.jsonl\z/.freeze
+
+  # The read-only gate. Never opens a file for writing. Returns {allowed:,
+  # code:, threshold_key:, enabled_labels:, accepted:, disagreed:, span_s:,
+  # first_routed_at:, lower_bound:, shortfall:, malformed:}. `code` is nil
+  # when allowed, else no_enabled_threshold or shadow_evidence_short (then
+  # `shortfall` names days, accepted and/or agreement_bound). The gate is
+  # advisory: nothing here stops a person from editing a site's mode.
+  def self.on_gate(config:, site:, question_set:, now: -> { Time.now.utc })
+    key = Typesafe.threshold_key(site: site, question_set: question_set, model: config.typesafe_model)
+    entry = gate_entry(config, key)
+    enabled = entry ? enabled_thresholds(entry) : {}
+    report = { allowed: false, code: "no_enabled_threshold", threshold_key: key,
+               enabled_labels: enabled.keys, accepted: 0, disagreed: 0, span_s: 0,
+               first_routed_at: nil, lower_bound: nil, shortfall: [], malformed: 0 }
+    return report if enabled.empty?
+
+    count_shadow(config, site, key, entry, enabled, now.call.utc, report)
+    report[:shortfall] = evidence_shortfall(report)
+    report[:code] = report[:shortfall].empty? ? nil : "shadow_evidence_short"
+    report[:allowed] = report[:shortfall].empty?
+    report
+  end
+
+  # The store entry for the key, or nil (no store, an invalid store, no
+  # entry, or an entry without a readable applied_at).
+  def self.gate_entry(config, key)
+    entry = read_store(config)["keys"][key]
+    entry.is_a?(Hash) && entry["labels"].is_a?(Hash) && parse_time(entry["applied_at"]) ? entry : nil
+  rescue Refusal
+    nil
+  end
+  private_class_method :gate_entry
+
+  # {label => threshold} for the labels of an entry that have a number.
+  def self.enabled_thresholds(entry)
+    entry["labels"].each_with_object({}) do |(label, result), out|
+      value = result.is_a?(Hash) ? result["threshold"] : nil
+      out[label] = value if value.is_a?(Numeric)
+    end
+  end
+  private_class_method :enabled_thresholds
+
+  def self.parse_time(value)
+    value.is_a?(String) ? Time.iso8601(value) : nil
+  rescue ArgumentError
+    nil
+  end
+  private_class_method :parse_time
+
+  def self.evidence_shortfall(report)
+    short = []
+    short << "days" if report[:span_s] < GATE_MIN_SPAN_S
+    short << "accepted" if report[:accepted] < GATE_MIN_ACCEPTED
+    bound = report[:lower_bound]
+    short << "agreement_bound" if bound.nil? || bound < MIN_LOWER_BOUND
+    short
+  end
+  private_class_method :evidence_shortfall
+
+  # Fills accepted, disagreed, span, first_routed_at, lower_bound and
+  # malformed from the decision files of the entry's month on.
+  def self.count_shadow(config, site, key, entry, enabled, now, report)
+    applied = parse_time(entry["applied_at"])
+    lines, report[:malformed] = read_decisions(config, applied.utc.strftime("%Y-%m"))
+    latest = latest_agreements(lines)
+    first = nil
+    lines.each do |l|
+      next unless routed_shadow?(l, site, key, entry, enabled, applied)
+
+      ts = parse_time(l["ts"])
+      first = ts if first.nil? || ts < first
+      case latest[l["call_id"]]
+      when "agree" then report[:accepted] += 1
+      when "disagree" then report[:disagreed] += 1
+      end
+    end
+    report[:first_routed_at] = first ? first.utc.iso8601(3) : nil
+    report[:span_s] = first ? [(now - first).floor, 0].max : 0
+    bound = wilson_lower_bound(report[:accepted], report[:accepted] + report[:disagreed])
+    report[:lower_bound] = bound
+  end
+  private_class_method :count_shadow
+
+  # A decision line that would have been routed at the stored bound, before
+  # its agreement is looked at.
+  def self.routed_shadow?(line, site, key, entry, enabled, applied)
+    return false unless line["kind"] == "decision" && line["site"] == site &&
+                        line["mode"] == "shadow" && line["threshold_key"] == key &&
+                        line["outcome"] == "ok"
+
+    ts = parse_time(line["ts"])
+    return false if ts.nil? || ts < applied
+
+    pair = interpret((line["answers"].is_a?(Hash) ? line["answers"] : {})[entry["question"]],
+                     labels: entry["labels"].keys)
+    !pair.nil? && enabled.key?(pair[0]) && pair[1] >= enabled[pair[0]]
+  end
+  private_class_method :routed_shadow?
+
+  # call_id => the agreement of its latest outcome line (by ts; the later
+  # line wins a tie).
+  def self.latest_agreements(lines)
+    best = {}
+    lines.each_with_index do |l, i|
+      next unless l["kind"] == "outcome" && l["call_id"].is_a?(String)
+
+      ts = parse_time(l["ts"])
+      next if ts.nil?
+
+      old = best[l["call_id"]]
+      best[l["call_id"]] = [ts, i, l["agreement"]] if old.nil? || ts >= old[0]
+    end
+    best.each_with_object({}) { |(id, v), out| out[id] = v[2] }
+  end
+  private_class_method :latest_agreements
+
+  # [objects, malformed_count] over every decisions-YYYY-MM.jsonl in the
+  # state dir whose month is >= from_month (nil: all of them).
+  def self.read_decisions(config, from_month)
+    lines = []
+    malformed = 0
+    Dir.glob(File.join(config.typesafe_state_dir, "decisions-*.jsonl")).sort.each do |file|
+      month = File.basename(file)[DECISIONS_FILE, 1]
+      next if month.nil? || (from_month && month < from_month)
+
+      File.foreach(file) do |raw|
+        next if raw.strip.empty?
+
+        parsed = parse_line(raw)
+        parsed.is_a?(Hash) ? lines << parsed : malformed += 1
+      end
+    end
+    [lines, malformed]
+  rescue SystemCallError, EncodingError
+    [lines, malformed + 1]
+  end
+  private_class_method :read_decisions
+
+  # --- fixtures -------------------------------------------------------------
+
+  FIXTURE_STATE_FORMAT = 1
+
+  # A fixture set, validated: {site:, question_set:, question:, questions:,
+  # labels:, set_key:, fixtures:}. Refusal question_set_invalid or
+  # fixtures_invalid (a field name only), and source_restricted for a
+  # restricted source (checked here, so before any call).
+  def self.load_fixture_set(config, path)
+    raw = read_json_file(path)
+    invalid = ->(field) { Refusal.new("fixtures_invalid", "the fixtures file is invalid (#{field})") }
+    raise invalid.call("file") unless raw.is_a?(Hash)
+
+    site = raw["site"]
+    raise invalid.call("site") unless site.is_a?(String) && site.match?(UserConfig::TYPESAFE_NAME)
+
+    qs = load_question_set(path, site: site)
+    labels = labels_for(qs["questions"][qs["question"]])
+    fixtures = validate_fixtures(raw["fixtures"], labels, invalid)
+    if fixtures.any? { |f| config.typesafe_restricted_sources.include?(f["source"]) }
+      raise Refusal.new("source_restricted",
+                        "a fixture source is listed in typesafe.restricted_sources; nothing was sent")
+    end
+    { site: site, question_set: qs["question_set"], question: qs["question"],
+      questions: qs["questions"], labels: labels, fixtures: fixtures,
+      set_key: "#{site}:#{qs['question_set']['id']}@#{qs['question_set']['version']}" }
+  end
+
+  def self.validate_fixtures(list, labels, invalid)
+    raise invalid.call("fixtures") unless list.is_a?(Array) && !list.empty?
+
+    list.each_with_index do |f, i|
+      raise invalid.call("fixtures.#{i}") unless f.is_a?(Hash) && f["id"].is_a?(String) &&
+                                                  [String, Hash, Array].any? { |k| f["state"].is_a?(k) } &&
+                                                  f["source"].is_a?(String) && !f["source"].strip.empty?
+
+      expect = f["expect"]
+      ok = expect.is_a?(Hash) && labels.include?(expect["label"]) &&
+           (!expect.key?("min_confidence") || unit_number?(expect["min_confidence"]))
+      raise invalid.call("fixtures.#{i}.expect") unless ok
+    end
+    raise invalid.call("fixtures.id") unless list.map { |f| f["id"] }.uniq.size == list.size
+
+    list
+  end
+  private_class_method :validate_fixtures
+
+  def self.fixture_state_path(config)
+    File.join(eval_dir(config), "fixtures-state.json")
+  end
+
+  def self.read_fixture_state(config)
+    path = fixture_state_path(config)
+    return { "format" => FIXTURE_STATE_FORMAT, "sets" => {} } unless File.exist?(path)
+
+    state = read_json_file(path)
+    unless state.is_a?(Hash) && state["format"] == FIXTURE_STATE_FORMAT && state["sets"].is_a?(Hash)
+      raise Refusal.new("store_invalid", "the fixture state file is not a format-1 file; it was left alone")
+    end
+
+    state
+  end
+  private_class_method :read_fixture_state
+
+  # Runs one fixture set through Typesafe.judge as probe calls (the client's
+  # budget, privacy, key and log rules apply). Every fixture runs; the
+  # result is recorded in fixtures-state.json whatever it is. A pre-call
+  # refusal is a Refusal (source_restricted, fixtures_invalid, store_invalid).
+  # dry_run sends and writes nothing.
+  def self.run_fixtures(config:, fixtures_path:, now: -> { Time.now.utc }, http_class: Net::HTTP,
+                        sleeper: ->(s) { sleep(s) }, dry_run: false)
+    set = load_fixture_set(config, fixtures_path)
+    state = read_fixture_state(config)
+    if dry_run
+      return { dry_run: true, set_key: set[:set_key], would_call: set[:fixtures].size, sent: 0 }
+    end
+
+    run = FixtureRun.new(config, set, now, http_class, sleeper)
+    result = run.execute
+    state["sets"][set[:set_key]] = { "model" => config.typesafe_model, "served_model" => result[:served_model],
+                                     "ran_at" => result[:ran_at], "passed" => result[:passed],
+                                     "failed_ids" => result[:failed_ids] }
+    write_eval_json(config, fixture_state_path(config), state)
+    result
+  end
+
+  # One pass over a fixture set: owns the counters.
+  class FixtureRun
+    def initialize(config, set, now, http_class, sleeper)
+      @config = config
+      @set = set
+      @now = now
+      @http_class = http_class
+      @sleeper = sleeper
+      @sent = 0
+      @cost = 0.0
+      @served = nil
+    end
+
+    def execute
+      results = @set[:fixtures].map { |f| judge_fixture(f) }
+      failed = results.reject { |r| r[:passed] }.map { |r| r[:id] }
+      { dry_run: false, set_key: @set[:set_key], model: @config.typesafe_model, served_model: @served,
+        ran_at: @now.call.utc.iso8601(3), passed: failed.empty?, failed_ids: failed,
+        results: results, sent: @sent, cost_usd: @cost.round(9) }
+    end
+
+    private
+
+    def judge_fixture(fixture)
+      waits = 0
+      loop do
+        result = Typesafe.judge(config: @config, input: input_for(fixture), site: nil,
+                                now: @now.call, http_class: @http_class)
+        @sent += 1 unless PRE_CALL.include?(result.outcome)
+        @cost += result.cost_usd.to_f
+        @served = result.served_model if result.served_model
+        if result.outcome == "rate_limited_local" && waits < MAX_RATE_WAITS
+          waits += 1
+          @sleeper.call(Typesafe::RATE_WINDOW_S)
+          next
+        end
+        return score(fixture, result)
+      end
+    end
+
+    def input_for(fixture)
+      qid = @set[:question]
+      { "state" => fixture["state"], "questions" => { qid => @set[:questions][qid] },
+        "question_set" => @set[:question_set], "source" => fixture["source"] }
+    end
+
+    # {id:, outcome:, predicted:, confidence:, passed:} - never state text.
+    def score(fixture, result)
+      outcome = result.outcome
+      pair = nil
+      if outcome == "ok"
+        pair = TypesafeEval.interpret((result.answers || {})[@set[:question]], labels: @set[:labels])
+        outcome = "unreadable_answer" if pair.nil?
+      end
+      expect = fixture["expect"]
+      passed = outcome == "ok" && pair[0] == expect["label"] &&
+               (!expect.key?("min_confidence") || pair[1] >= expect["min_confidence"])
+      { id: fixture["id"], outcome: outcome, predicted: pair && pair[0], confidence: pair && pair[1],
+        passed: passed }
+    end
+  end
+  private_constant :FixtureRun
+
+  # [changed, reason] for a fixture set key: no_baseline (no recorded run),
+  # pinned_model_changed (the pinned typesafe.model differs from the model
+  # the set last ran under), served_model_changed (a decision line after the
+  # recorded ran_at, from any site or probe, has a served model other than
+  # the recorded one or the outcome model_mismatch), else [false, nil].
+  def self.model_changed?(config:, set_key:)
+    recorded = begin
+      read_fixture_state(config)["sets"][set_key]
+    rescue Refusal
+      nil
+    end
+    ran_at = recorded.is_a?(Hash) ? parse_time(recorded["ran_at"]) : nil
+    return [true, "no_baseline"] if ran_at.nil? || !recorded["model"].is_a?(String)
+    return [true, "pinned_model_changed"] if recorded["model"] != config.typesafe_model
+
+    lines, = read_decisions(config, ran_at.utc.strftime("%Y-%m"))
+    moved = lines.any? do |l|
+      next false unless l["kind"] == "decision"
+
+      ts = parse_time(l["ts"])
+      next false if ts.nil? || ts <= ran_at
+
+      l["outcome"] == "model_mismatch" ||
+        (l["served_model"].is_a?(String) && l["served_model"] != recorded["model"])
+    end
+    moved ? [true, "served_model_changed"] : [false, nil]
+  end
+
+  # For each fixtures file: [{path:, set_key:, triggered:, reason:, run:}].
+  # A set runs only when model_changed? is true; an unchanged set makes zero
+  # calls. Every file is validated (and its sources checked) before the
+  # first call. dry_run reports what would run and sends nothing.
+  def self.check_fixtures(config:, fixtures_paths:, now: -> { Time.now.utc }, http_class: Net::HTTP,
+                          sleeper: ->(s) { sleep(s) }, dry_run: false)
+    sets = fixtures_paths.map { |path| [path, load_fixture_set(config, path)] }
+    read_fixture_state(config)
+    sets.map do |path, set|
+      changed, reason = model_changed?(config: config, set_key: set[:set_key])
+      run = nil
+      if changed
+        run = run_fixtures(config: config, fixtures_path: path, now: now, http_class: http_class,
+                           sleeper: sleeper, dry_run: dry_run)
+      end
+      { path: path, set_key: set[:set_key], triggered: changed, reason: reason, run: run }
+    end
+  end
 end

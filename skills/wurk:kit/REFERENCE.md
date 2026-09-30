@@ -1804,10 +1804,16 @@ makes goes through `Typesafe.judge`; it adds no HTTP path, no
 `user_config.rb` key, and no schedule, and it never writes a mode into any
 config. It SHIPS DARK: nothing here switches a site to `shadow` or `on`.
 Like `typesafe.rb` it reads no manifest, so it works from any directory. The
-pure math (Wilson bound, answer interpretation, the sweep) and the sections
-below on the run, the gate and the fixtures are described where they land;
-the parts below cover the corpus, redaction, the builder, the labeller, the
-run, the sweep and the threshold store.
+pure math (Wilson bound, answer interpretation, the sweep) is described
+with the sweep; the parts below cover the corpus, redaction, the builder,
+the labeller, the run, the sweep and the threshold store, the on-gate and
+its caller rule, and the fixture runner.
+
+A site bead author needs, in order: a question-set file, a corpus built and
+labelled (`corpus build`, `label`), a `run` and `sweep --apply` for a
+threshold, a period in `shadow` that `gate` then judges, the `on`-mode
+caller rule, and a fixture file that `fixtures check` re-runs when the
+model id changes.
 
 ### Usage and `data` keys
 
@@ -1818,6 +1824,9 @@ typesafe_eval.rb corpus build --site NAME --question-set FILE --out PATH
 typesafe_eval.rb label --corpus PATH [--relabel] [--dry-run]
 typesafe_eval.rb run   --corpus PATH [--dry-run]
 typesafe_eval.rb sweep --run PATH --corpus PATH [--apply] [--dry-run]
+typesafe_eval.rb gate  --site NAME --question-set ID@VERSION
+typesafe_eval.rb fixtures run   --fixtures PATH [--dry-run]
+typesafe_eval.rb fixtures check --fixtures PATH... [--dry-run]
 ```
 
 - `--help` exits 0 before touching any config. An unknown subcommand, a
@@ -2014,6 +2023,148 @@ stored number for that label or `nil` (no entry, an `n/a` label, an unknown
 label, an unreadable store). It is the read a site uses in `on` mode; it can
 only restrict, so every doubt is `nil`. A new question-set version or a new
 pinned model is a new key, so its thresholds start empty.
+
+### The on-gate
+
+`gate --site NAME --question-set ID@VERSION` answers one question: may this
+site's `shadow` evidence be trusted enough to consider `on`? It computes the
+site's current threshold key (`Typesafe.threshold_key` with the machine's
+pinned model), reads the threshold store and the decision logs, and exits 0
+only when both halves hold. It is READ-ONLY: it opens no file for writing,
+sends no request, and needs no `--dry-run` (it mutates nothing, like the
+other read-only scripts). It takes the question set as `ID@VERSION` (a
+positive integer version).
+
+**An enabled threshold** for key K: the threshold store holds an entry for K
+(only ever written from a complete run) with at least one label whose
+`threshold` is a number. Those labels are the enabled labels. No entry, an
+entry whose labels are all `n/a`, an entry under the OLD pinned model after
+the model changed (the key moved), or an unreadable store: block
+`no_enabled_threshold`.
+
+**An accepted judgment** for key K and site S: a `kind: "decision"` line in
+`<state_dir>/decisions-YYYY-MM.jsonl` with `site == S`, `mode == "shadow"`,
+`threshold_key == K`, `outcome == "ok"`, `ts >=` the store entry's
+`applied_at`, whose answer for the entry's question interprets as `[L, c]`
+with L an enabled label and `c >= threshold[L]` (it would have been routed at
+the stored bound), AND whose latest `kind: "outcome"` line (by `ts`; the
+later line wins a tie) for the same `call_id` has `agreement == "agree"`. A
+**disagreed judgment** is the same with `agreement == "disagree"`. A routed
+decision whose latest outcome line is `n/a`, null, or absent counts as
+neither. Decision lines with `mode: "on"` or `"probe"` never count (so eval
+and fixture calls, which are probes, never feed the gate). Files from the
+entry's `applied_at` month on are all read; a line that is not a JSON object
+is skipped and counted in a `decision_lines_malformed` warning.
+
+**The shadow span** runs from the `ts` of the earliest decision line that
+meets every accepted-judgment condition except agreement (the first routed
+shadow decision at the bound) to now.
+
+**The evidence bar**: span >= 259200 s (3 days), accepted >= 35, AND
+`wilson_lower_bound(accepted, accepted + disagreed) >= 0.90`. With no
+disagreements the bound is `a / (a + z^2)`, which first clears 0.90 at a = 35
+- the same arithmetic the eval uses - so 35 is the floor and every
+disagreement raises the number of agreements needed (35 agree + 1 disagree
+fails; 51 + 1 fails; 52 + 1 passes). Disagreements are therefore not
+advisory: they count against the bound. A short bar is block
+`shadow_evidence_short`, and `data.shortfall` names which of `days`,
+`accepted` and `agreement_bound` failed.
+
+`data`: `allowed`, `threshold_key`, `enabled_labels`, `accepted`,
+`disagreed`, `span_s`, `first_routed_at`, `lower_bound`, `shortfall`. Exit 0
+with `allowed: true`, or exit 1 with exactly one block. Both blocks carry
+`needs: "none"`: the move is to run the eval or keep collecting shadow
+evidence, not to fix a config. The message never suggests an edit command.
+
+**The gate is advisory.** Nothing in the kit can stop a person from editing a
+site's mode, and the client (`typesafe.rb`) treats `on` like `shadow`: both
+call. "The on-mode switch refuses" means exactly this: `gate` exits 1 for
+such a site, and the caller rule below restricts what an `on` site does.
+Nothing shipped writes a mode into `~/.claude/wurk.local.json`; the switch to
+`on` is a person's edit, made after a `gate` that exits 0.
+
+### The `on`-mode caller rule
+
+A site in `on` mode acts on a Jev answer only for an enabled label at or
+above its stored threshold: interpret the answer
+(`TypesafeEval.interpret(answer, labels:)` gives `[label, confidence]`), read
+`TypesafeEval.threshold_for(config:, threshold_key:, label:)` with the call's
+`threshold_key`, and act only when the threshold is a number and `confidence
+>= threshold`. When `threshold_for` returns `nil` (no entry, an `n/a` label,
+an unknown label, an unreadable store, a key moved by a new question-set
+version or pinned model) the site behaves exactly as it does in `shadow`: it
+records the call and its outcome line and takes its existing, non-Jev path.
+The rule can only restrict; every doubt is `nil`. A site keeps writing
+`record_outcome` lines with `agreement` while in `shadow` - that is the
+evidence `gate` counts.
+
+### Fixtures
+
+A small per-site set of synthetic cases that must keep producing the expected
+label, re-run on demand and whenever the model id changes. The site bead
+chooses where its fixture and question-set files live and passes the paths;
+this tool ships only synthetic examples. A fixture file is one JSON object:
+
+```json
+{"site": "<site>", "question_set": {"id": "...", "version": 1},
+ "question": "<qid>", "questions": {"<qid>": {"type": "choice", "instructions": "...", "criteria": {"a": "...", "b": "..."}}},
+ "fixtures": [{"id": "...", "state": "...", "source": "<label>",
+               "expect": {"label": "a", "min_confidence": 0.7}}]}
+```
+
+`question_set`, `question` and `questions` follow the question-set file
+rules; `expect.label` must be one of the question's labels; `min_confidence`
+is optional (a number in 0..1); ids are unique. Anything else is
+`fixtures_invalid` (a field name, never a value). The set's key is
+`<site>:<qset id>@<version>`. Fixture text is committed text: write synthetic
+cases only.
+
+`fixtures run --fixtures PATH` sends each fixture through `Typesafe.judge` as
+a probe call (the same client budget, rate, privacy, key and log rules as the
+eval; a `rate_limited_local` outcome waits and retries as `run` does). A
+fixture passes iff the outcome is `ok`, the answer interprets to the expected
+label, and its confidence is >= `min_confidence` when given. Every fixture
+runs, whatever an earlier one did. A fixture `source` listed in
+`typesafe.restricted_sources` refuses the whole set with `source_restricted`
+before any call. Whatever the result, the run is recorded in
+`<state_dir>/eval/fixtures-state.json` (`{format: 1, sets: {<set key> =>
+{model, served_model, ran_at, passed, failed_ids}}}`, mode 600, tmp file then
+rename); `ran_at` is stamped AFTER the last fixture call returns, so the
+run's own decision lines never re-trigger it.
+
+`run` `data`: `set_key`, `model`, `served_model`, `ran_at`, `passed`,
+`failed_ids`, `results` (per fixture `id`, `outcome`, `predicted`,
+`confidence`, `passed` - never state text), `cost_usd`, `dry_run`; `commands`
+holds one `POST` line per request sent. Exit 0 when every fixture passes;
+otherwise exit 1 with block `fixture_failed` (`needs: "human"`) listing each
+failed fixture as `id=outcome` (an `ok` outcome there means the label or
+confidence was wrong).
+
+**Model id change** for a fixture set whose last run is in the state file:
+(a) the machine's pinned `typesafe.model` differs from the recorded model -
+`pinned_model_changed`; or (b) any decision line with `ts` after the set's
+recorded `ran_at` has a non-null `served_model` different from the recorded
+model, or outcome `model_mismatch` - `served_model_changed`. Scan (b) is
+deliberately machine-wide - every site's and every probe's decision lines
+count - because the served model is a property of the provider and the
+machine's pinned id, not of one site. A set with no recorded run counts as
+changed - `no_baseline`.
+
+`fixtures check --fixtures PATH...` evaluates that rule for each file and
+runs only the sets that changed; an unchanged set makes zero calls. Every
+file is validated (and its sources checked) before the first call.
+`data.sets` has one entry per file: `path`, `set_key`, `triggered`, `reason`
+and, when triggered, `run` (the results above). Exit 1 with block
+`fixture_failed` if any triggered set failed, else 0. `--dry-run` on either
+command reports which sets would run and how many calls (`would_call`), sends
+nothing and writes nothing.
+
+**Nothing is scheduled.** There is no nightly run, no launchd or cron entry,
+no Monitor, and no notifier: failure is exit 1 and a block, and nothing else.
+An operator or a campaign runs `fixtures check` when it wants the trigger
+evaluated (for example at campaign start, or after changing `typesafe.model`).
+Fixture calls spend under the client's existing monthly cap and per-minute
+rate like every other call.
 
 ### How the tests prove it
 
