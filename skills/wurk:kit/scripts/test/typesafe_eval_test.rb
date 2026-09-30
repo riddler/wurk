@@ -8,6 +8,7 @@ require "tmpdir"
 require "fileutils"
 require_relative "../lib/typesafe_eval"
 require_relative "support/user_config_helper"
+require_relative "support/fake_http"
 
 # Phase 1: the pure math. Every expected Wilson value below is a literal
 # worked by hand (z = 1.96, z^2 = 3.8416), never computed by the library.
@@ -600,5 +601,534 @@ class TypesafeEvalCorpusTest < Minitest::Test
     assert_equal %w[high low], labels_on_disk
     summary, = label("s\nhigh\n", relabel: true)
     assert_equal({ labelled: 1, skipped: 1, remaining: 0, per_label: { "low" => 0, "high" => 2 } }, summary)
+  end
+end
+
+# Phase 3: the eval run through Typesafe.judge, the partial-run rules, the
+# threshold store. FakeHTTP is the only transport; every config names a tmp
+# state dir and a tmp key file holding a sentinel string, never a real key.
+class TypesafeEvalRunTest < Minitest::Test
+  include UserConfigHelper
+
+  MODEL = "jev-1.13.0"
+  SENTINEL_KEY = "sentinel-evalrun-#{SecureRandom.hex(12)}"
+  STATE_MARK = "statemark-#{SecureRandom.hex(6)}"
+  QUESTION_TEXT = "Decide how urgent the note is for its reader."
+  QSET = { "id" => "note-urgency", "version" => 1 }.freeze
+  QUESTION = { "type" => "choice", "instructions" => QUESTION_TEXT,
+               "criteria" => { "low" => "Nothing waits.", "high" => "Someone is blocked." } }.freeze
+  KEY = "review:note-urgency@1:#{MODEL}"
+
+  def setup
+    @saved_xdg = ENV.key?("XDG_STATE_HOME") ? ENV["XDG_STATE_HOME"] : :unset
+    @tmp = Dir.mktmpdir("wurk-eval-run-")
+    ENV["XDG_STATE_HOME"] = File.join(@tmp, "xdg")
+    @state_dir = File.join(@tmp, "state")
+    @key_path = File.join(@tmp, "key")
+    File.write(@key_path, "#{SENTINEL_KEY}\n")
+    File.chmod(0o600, @key_path)
+    @corpus_path = File.join(@tmp, "corpus.json")
+    @fake = FakeHTTP.new
+    @time = Time.utc(2026, 9, 15, 12, 0, 0)
+    @slept = []
+    @now = -> { @time }
+    @sleeper = ->(s) { @slept << s }
+  end
+
+  def teardown
+    Dir.glob(File.join(@tmp, "**", "*"), File::FNM_DOTMATCH).each do |path|
+      next unless File.file?(path)
+      next if path == @key_path
+
+      refute_includes File.read(path), SENTINEL_KEY, "sentinel key found in #{path}"
+    end
+  ensure
+    if @saved_xdg == :unset
+      ENV.delete("XDG_STATE_HOME")
+    else
+      ENV["XDG_STATE_HOME"] = @saved_xdg
+    end
+    FileUtils.remove_entry(@tmp)
+  end
+
+  # ---- helpers -------------------------------------------------------------
+
+  def config(model: nil, restricted: [], per_minute: nil, monthly: 1.0)
+    budget = { "monthly_usd" => monthly }
+    budget["per_minute"] = per_minute if per_minute
+    section = { "key_path" => @key_path, "state_dir" => @state_dir, "budget" => budget,
+                "restricted_sources" => restricted }
+    section["model"] = model if model
+    raw = { "typesafe" => section,
+            "metrics" => { "prices" => { (model || MODEL) => { "input" => 0.042, "output" => 0 } } } }
+    cfg = UserConfig.new(path: "(fixture)", raw: raw, exists: true)
+    assert_empty cfg.errors, "fixture config must be valid"
+    cfg
+  end
+
+  # Cases are (id, gold label or nil). All states have the same length so the
+  # no-usage cost bound is the same for every case.
+  def write_corpus(golds, site: "review", path: @corpus_path)
+    cases = golds.each_with_index.map do |gold, i|
+      { "id" => format("case-%02d", i), "source" => "notes", "state" => "#{STATE_MARK} #{format('%02d', i)}",
+        "redactions" => 0, "label" => gold }
+    end
+    corpus = { "format" => 1, "site" => site, "question_set" => QSET, "question" => "urgency",
+               "questions" => { "urgency" => QUESTION }, "labels" => %w[low high],
+               "redaction" => { "keys" => [], "labels" => %w[low high] }, "cases" => cases }
+    TypesafeEval.write_corpus(path, corpus)
+    corpus
+  end
+
+  def body(choice: "low", confidence: 0.9, model: MODEL, answer: nil)
+    answer ||= { "type" => "choice", "choice" => choice, "probabilities" => {}, "confidence" => confidence }
+    JSON.generate("model" => model, "answers" => { "urgency" => answer },
+                  "usage" => { "input_tokens" => 400, "output_tokens" => 0 })
+  end
+
+  def script(count, **opts)
+    count.times { @fake.respond(200, body: body(**opts)) }
+  end
+
+  def run_eval(cfg = config, **opts)
+    TypesafeEval.run(config: cfg, corpus_path: @corpus_path, now: @now, http_class: @fake,
+                     sleeper: @sleeper, **opts)
+  end
+
+  def run_lines(summary)
+    TypesafeEval.read_run(summary[:run_file])
+  end
+
+  def corpus
+    TypesafeEval.load_corpus(@corpus_path)
+  end
+
+  def store_path(cfg = config)
+    TypesafeEval.thresholds_path(cfg)
+  end
+
+  def apply(lines, cfg = config, **opts)
+    TypesafeEval.apply(config: cfg, run_lines: lines, corpus: corpus, now: @now, **opts)
+  end
+
+  def assert_apply_refused(lines, cfg = config)
+    error = assert_raises(TypesafeEval::Refusal) { apply(lines, cfg) }
+    assert_equal "partial_run", error.code
+    refute File.exist?(store_path(cfg)), "a partial run must not create thresholds.json"
+    error
+  end
+
+  def ledger_line(ts, cost: 0.0)
+    JSON.generate("ts" => ts.utc.iso8601(3), "month" => ts.utc.strftime("%Y-%m"), "call_id" => "seed",
+                  "site" => nil, "model" => MODEL, "outcome" => "ok", "cost_usd" => cost,
+                  "cost_estimated" => false, "input_tokens" => 1, "output_tokens" => 0)
+  end
+
+  def seed_ledger(lines)
+    FileUtils.mkdir_p(@state_dir)
+    File.write(File.join(@state_dir, "ledger-2026-09.jsonl"), lines.map { |l| "#{l}\n" }.join)
+  end
+
+  # The no-usage bound for one case, from the documented rule.
+  def bound_for_case
+    body = { "state" => "#{STATE_MARK} 00", "model" => MODEL, "questions" => { "urgency" => QUESTION } }
+    JSON.generate(body).bytesize * 0.042 / 1e6
+  end
+
+  def rewrite_run(summary)
+    lines = File.readlines(summary[:run_file]).map { |l| JSON.parse(l) }
+    yield lines
+    File.write(summary[:run_file], lines.map { |l| "#{JSON.generate(l)}\n" }.join)
+    TypesafeEval.read_run(summary[:run_file])
+  end
+
+  # ---- the run -------------------------------------------------------------
+
+  # sabotage: skip a case, or write the state or question text into the run file
+  def test_complete_run_records_one_judgment_per_case_and_no_text
+    write_corpus(%w[low high low high])
+    script(4)
+    summary = run_eval
+    assert_equal true, summary[:complete]
+    assert_nil summary[:stop_reason]
+    assert_equal 4, summary[:ok_count]
+    assert_equal 4, summary[:sent]
+    assert_equal 4, @fake.calls.size
+    assert_equal KEY, summary[:threshold_key]
+    assert_in_delta 4 * 400 * 0.042 / 1e6, summary[:cost_usd], 1e-9
+    lines = run_lines(summary)
+    assert_equal %w[run_start judgment judgment judgment judgment run_end], lines.map { |l| l["kind"] }
+    assert_equal true, lines.last["complete"]
+    assert_equal 4, lines.last["ok_count"]
+    assert_equal 4, lines.first["cases"]
+    j = lines[1]
+    assert_equal %w[case-00 low 0.9 low], [j["case_id"], j["predicted"], j["confidence"].to_s, j["gold"]]
+    assert_equal "ok", j["outcome"]
+    assert_equal MODEL, j["served_model"]
+    text = File.read(summary[:run_file])
+    refute_includes text, STATE_MARK
+    refute_includes text, QUESTION_TEXT
+    assert_equal 0o600, File.stat(summary[:run_file]).mode & 0o777
+    assert_equal 0o700, File.stat(File.dirname(summary[:run_file])).mode & 0o777
+    assert_match(/\A\d{8}T\d{6}Z-[0-9a-f]{4}\z/, summary[:run_id])
+    assert_empty TypesafeEval.partial_reasons(lines, corpus: corpus, config: config)
+  end
+
+  # sabotage: judge with a site instead of nil, or open a second HTTP path
+  def test_cases_are_probe_calls_carrying_the_question_set
+    write_corpus(%w[low])
+    script(1)
+    run_eval
+    req = JSON.parse(@fake.calls.first.request.body)
+    assert_equal MODEL, req["model"]
+    assert_equal({ "urgency" => QUESTION }, req["questions"])
+    decision = File.readlines(File.join(@state_dir, "decisions-2026-09.jsonl")).map { |l| JSON.parse(l) }.first
+    assert_equal "probe", decision["mode"]
+    assert_nil decision["site"]
+  end
+
+  # sabotage: send unlabelled cases too
+  def test_unlabelled_cases_are_never_sent
+    write_corpus(["low", nil, "high", nil])
+    script(2)
+    summary = run_eval
+    assert_equal 2, @fake.calls.size
+    assert_equal 2, summary[:cases]
+    ids = run_lines(summary).select { |l| l["kind"] == "judgment" }.map { |l| l["case_id"] }
+    assert_equal %w[case-00 case-02], ids
+    assert_empty TypesafeEval.partial_reasons(run_lines(summary), corpus: corpus, config: config)
+  end
+
+  # sabotage: let an empty labelled set run
+  def test_nothing_labelled_is_a_refusal_with_no_calls
+    write_corpus([nil, nil])
+    error = assert_raises(TypesafeEval::Refusal) { run_eval }
+    assert_equal "nothing_labelled", error.code
+    assert_empty @fake.calls
+    refute File.exist?(@state_dir)
+  end
+
+  # sabotage: check the source list per call instead of before the run
+  def test_restricted_corpus_source_refuses_with_zero_calls_and_no_run_file
+    write_corpus(%w[low high])
+    error = assert_raises(TypesafeEval::Refusal) { run_eval(config(restricted: ["notes"])) }
+    assert_equal "source_restricted", error.code
+    assert_empty @fake.calls
+    refute File.exist?(File.join(@state_dir, "eval"))
+    assert_raises(TypesafeEval::Refusal) { run_eval(config(restricted: ["notes"]), dry_run: true) }
+  end
+
+  # sabotage: send from a dry run, or write the run file
+  def test_dry_run_sends_and_writes_nothing
+    write_corpus(%w[low high low high])
+    summary = run_eval(dry_run: true)
+    assert_equal true, summary[:dry_run]
+    assert_equal 4, summary[:would_call]
+    assert_equal "ok", summary[:outcome]
+    assert_equal KEY, summary[:threshold_key]
+    assert_empty @fake.calls
+    refute File.exist?(@state_dir), "a dry run creates no files under the state dir"
+  end
+
+  # sabotage: dry run without judging the first case, so a budget refusal is hidden
+  def test_dry_run_surfaces_a_budget_refusal
+    write_corpus(%w[low high])
+    summary = run_eval(config(monthly: 0.0), dry_run: true)
+    assert_equal "budget_exhausted", summary[:outcome]
+    assert_equal "cap_reached", summary[:reason]
+    assert_empty @fake.calls
+  end
+
+  # ---- stopping and the partial-run rules ----------------------------------
+
+  # sabotage: keep going after a non-ok outcome, or report complete true
+  def test_budget_exhausted_mid_run_stops_and_is_never_applied
+    write_corpus(%w[low low low low])
+    actual = 400 * 0.042 / 1e6
+    seed = 0.001
+    # call 2 still fits (seed + actual + bound <= monthly), call 3 does not
+    monthly = seed + 1.5 * actual + bound_for_case
+    seed_ledger([ledger_line(@time - 3600, cost: seed)])
+    script(4)
+    cfg = config(monthly: monthly)
+    summary = run_eval(cfg)
+    assert_equal false, summary[:complete]
+    assert_equal "budget_exhausted", summary[:stop_reason]
+    assert_equal 2, @fake.calls.size
+    lines = run_lines(summary)
+    assert_equal false, lines.last["complete"]
+    assert_equal "budget_exhausted", lines.last["stop_reason"]
+    assert_equal "budget_exhausted", lines[-2]["outcome"]
+    reasons = TypesafeEval.partial_reasons(lines, corpus: corpus, config: cfg)
+    assert_includes reasons, "stopped_early"
+    assert_includes reasons, "case_not_ok"
+    assert_apply_refused(lines, cfg)
+  end
+
+  # sabotage: retry a timeout, or count it as a judged case
+  def test_timeout_stops_the_run_and_is_partial
+    write_corpus(%w[low high low])
+    script(1)
+    @fake.raise_error(Net::ReadTimeout)
+    summary = run_eval
+    assert_equal "timeout", summary[:stop_reason]
+    assert_equal 2, @fake.calls.size
+    assert_equal 1, summary[:ok_count]
+    lines = run_lines(summary)
+    assert_includes TypesafeEval.partial_reasons(lines, corpus: corpus, config: config), "case_not_ok"
+    assert_apply_refused(lines)
+  end
+
+  # sabotage: accept a served model that differs from the pinned one
+  def test_model_mismatch_stops_the_run_and_is_partial
+    write_corpus(%w[low high])
+    @fake.respond(200, body: body(model: "jev-9.9.9"))
+    summary = run_eval
+    assert_equal "model_mismatch", summary[:stop_reason]
+    lines = run_lines(summary)
+    assert_equal "model_mismatch", lines.find { |l| l["kind"] == "judgment" }["outcome"]
+    assert_apply_refused(lines)
+  end
+
+  # sabotage: treat a missing confidence as 0.0 and carry on
+  def test_unreadable_answer_stops_the_run_and_is_partial
+    write_corpus(%w[low high])
+    @fake.respond(200, body: body(answer: { "type" => "choice", "choice" => "low" }))
+    summary = run_eval
+    assert_equal "unreadable_answer", summary[:stop_reason]
+    assert_equal 1, @fake.calls.size
+    lines = run_lines(summary)
+    j = lines.find { |l| l["kind"] == "judgment" }
+    assert_equal "unreadable_answer", j["outcome"]
+    assert_nil j["predicted"]
+    assert_includes TypesafeEval.partial_reasons(lines, corpus: corpus, config: config), "case_not_ok"
+    assert_apply_refused(lines)
+  end
+
+  # sabotage: swallow the Interrupt, or skip the run_end line
+  def test_interrupt_closes_the_run_file_and_re_raises
+    write_corpus(%w[low high low])
+    script(1)
+    @fake.raise_error(Interrupt)
+    error = assert_raises(TypesafeEval::RunInterrupted) { run_eval }
+    summary = error.summary
+    assert_equal false, summary[:complete]
+    assert_equal "interrupted", summary[:stop_reason]
+    lines = run_lines(summary)
+    assert_equal "run_end", lines.last["kind"]
+    assert_equal "interrupted", lines.last["stop_reason"]
+    assert_equal false, lines.last["complete"]
+    assert_includes TypesafeEval.partial_reasons(lines, corpus: corpus, config: config), "stopped_early"
+    assert_apply_refused(lines)
+  end
+
+  # sabotage: let an exception escape without a run_end line
+  def test_an_exception_stops_the_run_recorded_by_class_name
+    write_corpus(%w[low high low])
+    script(3)
+    ticks = 0
+    @now = lambda do
+      ticks += 1
+      raise "boom-secret-text" if ticks == 3
+
+      @time
+    end
+    summary = run_eval
+    assert_equal false, summary[:complete]
+    assert_equal "RuntimeError", summary[:stop_reason]
+    text = File.read(summary[:run_file])
+    refute_includes text, "boom-secret-text"
+    assert_apply_refused(run_lines(summary))
+  end
+
+  # sabotage: write a judgment line for every attempt, or wait a different span
+  def test_rate_limited_local_waits_the_window_and_retries
+    write_corpus(%w[low high low high])
+    seed_ledger([ledger_line(@time), ledger_line(@time)])
+    @sleeper = lambda do |s|
+      @slept << s
+      @time += s
+    end
+    script(4)
+    summary = run_eval(config(per_minute: 2))
+    assert_equal true, summary[:complete]
+    assert_equal [60, 60], @slept
+    assert_equal 4, @fake.calls.size
+    assert_equal 4, run_lines(summary).count { |l| l["kind"] == "judgment" }
+  end
+
+  # sabotage: retry forever, or retry a non-rate outcome
+  def test_rate_limited_local_stops_after_three_waits
+    write_corpus(%w[low high])
+    seed_ledger([ledger_line(@time), ledger_line(@time)])
+    script(2)
+    summary = run_eval(config(per_minute: 2))
+    assert_equal [60, 60, 60], @slept
+    assert_equal "rate_limited_local", summary[:stop_reason]
+    assert_equal false, summary[:complete]
+    assert_empty @fake.calls
+    lines = run_lines(summary)
+    judgments = lines.select { |l| l["kind"] == "judgment" }
+    assert_equal 1, judgments.size, "only the final attempt writes a judgment line"
+    assert_equal "rate_limited_local", judgments.first["outcome"]
+    assert_apply_refused(lines)
+  end
+
+  # Each single reason on its own, from a complete run edited after the fact.
+
+  def complete_run(golds = %w[low high low high])
+    write_corpus(golds)
+    script(golds.size)
+    run_eval
+  end
+
+  # sabotage: treat a missing run_end line as complete
+  def test_partial_reason_no_run_end
+    lines = rewrite_run(complete_run) { |ls| ls.pop }
+    assert_equal ["no_run_end"], TypesafeEval.partial_reasons(lines, corpus: corpus, config: config)
+    assert_apply_refused(lines)
+  end
+
+  # sabotage: ignore run_end.complete
+  def test_partial_reason_stopped_early
+    lines = rewrite_run(complete_run) { |ls| ls.last["complete"] = false }
+    assert_equal ["stopped_early"], TypesafeEval.partial_reasons(lines, corpus: corpus, config: config)
+    assert_apply_refused(lines)
+  end
+
+  # sabotage: only check that some judgment exists
+  def test_partial_reason_case_missing
+    lines = rewrite_run(complete_run) { |ls| ls.delete_at(2) }
+    assert_equal ["case_missing"], TypesafeEval.partial_reasons(lines, corpus: corpus, config: config)
+    assert_apply_refused(lines)
+  end
+
+  # sabotage: accept any judgment outcome
+  def test_partial_reason_case_not_ok
+    lines = rewrite_run(complete_run) { |ls| ls[1]["outcome"] = "timeout" }
+    assert_equal ["case_not_ok"], TypesafeEval.partial_reasons(lines, corpus: corpus, config: config)
+    assert_apply_refused(lines)
+  end
+
+  # sabotage: skip the digest comparison
+  def test_partial_reason_corpus_changed
+    summary = complete_run
+    changed = corpus
+    changed["cases"][0]["label"] = "high"
+    TypesafeEval.write_corpus(@corpus_path, changed)
+    lines = run_lines(summary)
+    assert_equal ["corpus_changed"], TypesafeEval.partial_reasons(lines, corpus: corpus, config: config)
+    assert_apply_refused(lines)
+  end
+
+  # sabotage: compare the run's key with itself instead of the current one
+  def test_partial_reason_key_changed
+    lines = run_lines(complete_run)
+    moved = config(model: "jev-1.14.0")
+    assert_equal ["key_changed"], TypesafeEval.partial_reasons(lines, corpus: corpus, config: moved)
+    assert_apply_refused(lines, moved)
+  end
+
+  # sabotage: fall back to an empty run when the file is unreadable
+  def test_read_run_refuses_a_missing_file_and_skips_a_cut_line
+    error = assert_raises(TypesafeEval::Refusal) { TypesafeEval.read_run(File.join(@tmp, "absent.jsonl")) }
+    assert_equal "run_unreadable", error.code
+    path = File.join(@tmp, "cut.jsonl")
+    File.write(path, %({"kind":"run_start"}\n{"kind":"judgm))
+    assert_equal [{ "kind" => "run_start" }], TypesafeEval.read_run(path)
+  end
+
+  # ---- apply and the store -------------------------------------------------
+
+  # 36 low cases at 0.9 clear the bar (36/39.8416 = 0.9036); 10 high do not.
+  def enabled_run
+    write_corpus(Array.new(36, "low") + Array.new(10, "high"))
+    script(36, choice: "low")
+    script(10, choice: "high")
+    run_eval
+  end
+
+  # sabotage: key the entry by site alone, or store n/a labels as numbers
+  def test_apply_writes_one_entry_under_the_threshold_key
+    summary = enabled_run
+    assert summary[:complete]
+    result = apply(run_lines(summary))
+    assert_equal KEY, result[:threshold_key]
+    assert result[:written]
+    store = JSON.parse(File.read(store_path))
+    assert_equal 1, store["format"]
+    assert_equal [KEY], store["keys"].keys
+    entry = store["keys"][KEY]
+    assert_equal "review", entry["site"]
+    assert_equal summary[:run_id], entry["run_id"]
+    assert_equal "2026-09-15T12:00:00.000Z", entry["applied_at"]
+    assert_equal 0.05, entry["labels"]["low"]["threshold"]
+    assert_equal 36, entry["labels"]["low"]["routed"]
+    assert_nil entry["labels"]["high"]["threshold"]
+    assert_equal "below_bound", entry["labels"]["high"]["reason"]
+    assert_equal 0o600, File.stat(store_path).mode & 0o777
+  end
+
+  # sabotage: replace the whole store on apply
+  def test_a_second_apply_for_another_key_leaves_the_first_intact
+    first = apply(run_lines(enabled_run))
+    before = JSON.parse(File.read(store_path))["keys"][KEY]
+    @fake = FakeHTTP.new
+    @time += 120 # past the first run's per-minute window
+    @corpus_path = File.join(@tmp, "other.json")
+    write_corpus(Array.new(36, "low") + Array.new(10, "high"), site: "triage", path: @corpus_path)
+    script(36, choice: "low")
+    script(10, choice: "high")
+    apply(run_lines(run_eval))
+    keys = JSON.parse(File.read(store_path))["keys"]
+    assert_equal [first[:threshold_key], "triage:note-urgency@1:#{MODEL}"], keys.keys
+    assert_equal before, keys[KEY]
+  end
+
+  # sabotage: write under dry_run
+  def test_apply_dry_run_reports_the_entry_and_writes_nothing
+    result = apply(run_lines(enabled_run), dry_run: true)
+    assert_equal false, result[:written]
+    assert_equal 0.05, result[:entry]["labels"]["low"]["threshold"]
+    refute File.exist?(store_path)
+  end
+
+  # sabotage: return a threshold for an n/a label or another key
+  def test_threshold_for_reads_back_only_enabled_labels
+    apply(run_lines(enabled_run))
+    cfg = config
+    assert_equal 0.05, TypesafeEval.threshold_for(config: cfg, threshold_key: KEY, label: "low")
+    assert_nil TypesafeEval.threshold_for(config: cfg, threshold_key: KEY, label: "high")
+    assert_nil TypesafeEval.threshold_for(config: cfg, threshold_key: KEY, label: "nope")
+    assert_nil TypesafeEval.threshold_for(config: cfg, threshold_key: "review:note-urgency@1:jev-9", label: "low")
+    assert_nil TypesafeEval.threshold_for(config: config(model: "jev-1.14.0"),
+                                          threshold_key: "review:note-urgency@1:jev-1.14.0", label: "low")
+  end
+
+  # sabotage: clobber an unreadable store, or let threshold_for raise
+  def test_an_invalid_store_is_left_alone_and_reads_as_no_threshold
+    lines = run_lines(enabled_run)
+    FileUtils.mkdir_p(File.dirname(store_path))
+    File.write(store_path, "not json at all")
+    error = assert_raises(TypesafeEval::Refusal) { apply(lines) }
+    assert_equal "store_invalid", error.code
+    assert_equal "not json at all", File.read(store_path)
+    assert_nil TypesafeEval.threshold_for(config: config, threshold_key: KEY, label: "low")
+  end
+
+  # sabotage: sweep the run's own gold from a changed corpus
+  def test_sweep_run_scores_the_recorded_judgments
+    labels = TypesafeEval.sweep_run(run_lines(enabled_run), corpus: corpus)
+    assert_equal 0.05, labels["low"][:threshold]
+    assert_equal 36, labels["low"][:correct]
+    assert_nil labels["high"][:threshold]
+  end
+
+  # sabotage: open a second HTTP path in the eval code
+  def test_eval_code_opens_no_http_connection_of_its_own
+    dir = File.expand_path("..", __dir__)
+    [File.join(dir, "lib", "typesafe_eval.rb"), File.join(dir, "typesafe_eval.rb")].each do |file|
+      refute_match(/Net::HTTP\.(start|new)/, File.read(file), file)
+    end
   end
 end

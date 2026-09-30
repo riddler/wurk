@@ -3,6 +3,9 @@
 require "digest"
 require "fileutils"
 require "json"
+require "net/http"
+require "securerandom"
+require "time"
 require_relative "typesafe"
 
 # Jev eval library: what a call site must pass before it may move from
@@ -10,7 +13,9 @@ require_relative "typesafe"
 # lists, the threshold sweep) needs no IO. The corpus half (question-set
 # file, corpus file and digest, redaction, the builder, the terminal
 # labeller) reads and writes files only where the operator names them and
-# never touches the network; later phases add the run and the gate here.
+# never touches the network. The run half sends labelled cases through
+# Typesafe.judge (the only HTTP path), records the run, and stores a sweep's
+# thresholds only from a complete run; later phases add the gate here.
 # The library never prints and never exits: a refusal is a Refusal.
 module TypesafeEval
   # A refusal the CLI turns into one blocked entry. `code` is a fixed label;
@@ -486,4 +491,298 @@ module TypesafeEval
     labels.find { |l| l.casecmp(answer).zero? }
   end
   private_class_method :pick_label
+
+  # --- the eval run ---------------------------------------------------------
+
+  # Outcomes that end before any request is sent; every other outcome of a
+  # live call means a request went out.
+  PRE_CALL = %w[site_off source_restricted input_invalid key_missing
+                budget_exhausted rate_limited_local].freeze
+  MAX_RATE_WAITS = 3
+  THRESHOLD_FORMAT = 1
+
+  # Raised out of run on Ctrl-C after the run file got its run_end line. The
+  # summary is the run so far (complete false, stop_reason "interrupted").
+  class RunInterrupted < Interrupt
+    attr_reader :summary
+
+    def initialize(summary)
+      super("interrupted")
+      @summary = summary
+    end
+  end
+
+  def self.eval_dir(config)
+    File.join(config.typesafe_state_dir, "eval")
+  end
+
+  def self.thresholds_path(config)
+    File.join(eval_dir(config), "thresholds.json")
+  end
+
+  # The key this corpus's thresholds are stored under, from the corpus's site
+  # and question set and the machine's pinned model.
+  def self.corpus_threshold_key(config, corpus)
+    Typesafe.threshold_key(site: corpus["site"], question_set: corpus["question_set"],
+                           model: config.typesafe_model)
+  end
+
+  # Sends every labelled case through Typesafe.judge as a probe call (the
+  # client's own budget, rate, privacy, key and log rules apply) and records
+  # the run under <state_dir>/eval/runs. Returns a summary Hash; raises a
+  # Refusal before any call (nothing_labelled, source_restricted,
+  # corpus_invalid) and RunInterrupted on Ctrl-C. A run stops at the first
+  # case whose outcome is not ok: it is then partial and is never applied.
+  def self.run(config:, corpus_path:, now: -> { Time.now.utc }, http_class: Net::HTTP,
+               sleeper: ->(s) { sleep(s) }, dry_run: false)
+    corpus = load_corpus(corpus_path)
+    check_run_corpus(corpus)
+    judged = corpus["cases"].reject { |c| c["label"].nil? }
+    if judged.empty?
+      raise Refusal.new("nothing_labelled", "the corpus has no labelled case; run label first")
+    end
+
+    restricted = config.typesafe_restricted_sources
+    if judged.any? { |c| restricted.include?(c["source"]) }
+      raise Refusal.new("source_restricted",
+                        "a case source is listed in typesafe.restricted_sources; nothing was sent")
+    end
+    runner = Runner.new(config, corpus, judged, now, http_class, sleeper)
+    dry_run ? runner.dry_run : runner.execute
+  end
+
+  def self.check_run_corpus(corpus)
+    ok = corpus["site"].is_a?(String) && corpus["question_set"].is_a?(Hash) &&
+         corpus["questions"].is_a?(Hash) && corpus["questions"][corpus["question"]].is_a?(Hash)
+    raise Refusal.new("corpus_invalid", "the corpus lacks a site, question set or question") unless ok
+  end
+  private_class_method :check_run_corpus
+
+  # One run: owns the run file and the counters.
+  class Runner
+    def initialize(config, corpus, judged, now, http_class, sleeper)
+      @config = config
+      @corpus = corpus
+      @judged = judged
+      @now = now
+      @http_class = http_class
+      @sleeper = sleeper
+      @qid = corpus["question"]
+      @labels = corpus["labels"]
+      @key = TypesafeEval.corpus_threshold_key(config, corpus)
+      @ok = 0
+      @sent = 0
+      @cost = 0.0
+      @stop = nil
+    end
+
+    # First case only, dry_run: surfaces a budget, price, input or key
+    # refusal. Sends and writes nothing.
+    def dry_run
+      result = Typesafe.judge(config: @config, input: input_for(@judged.first), site: nil,
+                              now: @now.call, http_class: @http_class, dry_run: true)
+      { dry_run: true, threshold_key: @key, cases: @judged.size, would_call: @judged.size,
+        outcome: result.outcome, reason: result.reason }
+    end
+
+    def execute
+      @run_id = "#{@now.call.utc.strftime('%Y%m%dT%H%M%SZ')}-#{SecureRandom.hex(2)}"
+      dir = File.join(TypesafeEval.eval_dir(@config), "runs")
+      FileUtils.mkdir_p(dir, mode: 0o700)
+      @file = File.join(dir, "#{@run_id}.jsonl")
+      append("kind" => "run_start", "run_id" => @run_id, "site" => @corpus["site"],
+             "question_set" => @corpus["question_set"], "question" => @qid,
+             "threshold_key" => @key, "corpus_digest" => TypesafeEval.corpus_digest(@corpus),
+             "cases" => @judged.size)
+      interrupted = walk
+      append("kind" => "run_end", "complete" => @stop.nil?, "stop_reason" => @stop, "ok_count" => @ok)
+      raise RunInterrupted.new(summary) if interrupted
+
+      summary
+    end
+
+    private
+
+    # true when interrupted. Any StandardError also ends the walk, recorded
+    # by its class name.
+    def walk
+      @judged.each do |kase|
+        @stop = judge_case(kase)
+        break if @stop
+      end
+      false
+    rescue Interrupt
+      @stop = "interrupted"
+      true
+    rescue StandardError => e
+      @stop = e.class.name
+      false
+    end
+
+    def summary
+      { dry_run: false, run_id: @run_id, run_file: @file, threshold_key: @key,
+        cases: @judged.size, ok_count: @ok, complete: @stop.nil?, stop_reason: @stop,
+        sent: @sent, cost_usd: @cost.round(9) }
+    end
+
+    def input_for(kase)
+      { "state" => kase["state"], "questions" => { @qid => @corpus["questions"][@qid] },
+        "question_set" => @corpus["question_set"], "source" => kase["source"] }
+    end
+
+    # nil when the case judged cleanly, else the stop reason.
+    def judge_case(kase)
+      waits = 0
+      loop do
+        result = Typesafe.judge(config: @config, input: input_for(kase), site: nil,
+                                now: @now.call, http_class: @http_class)
+        @sent += 1 unless PRE_CALL.include?(result.outcome)
+        @cost += result.cost_usd.to_f
+        if result.outcome == "rate_limited_local" && waits < MAX_RATE_WAITS
+          waits += 1
+          @sleeper.call(Typesafe::RATE_WINDOW_S)
+          next
+        end
+        return record(kase, result)
+      end
+    end
+
+    def record(kase, result)
+      outcome = result.outcome
+      predicted = confidence = nil
+      if outcome == "ok"
+        pair = TypesafeEval.interpret((result.answers || {})[@qid], labels: @labels)
+        if pair
+          predicted, confidence = pair
+          @ok += 1
+        else
+          outcome = "unreadable_answer"
+        end
+      end
+      append("kind" => "judgment", "case_id" => kase["id"], "call_id" => result.call_id,
+             "outcome" => outcome, "served_model" => result.served_model,
+             "predicted" => predicted, "confidence" => confidence, "gold" => kase["label"])
+      outcome == "ok" ? nil : outcome
+    end
+
+    def append(hash)
+      File.open(@file, File::WRONLY | File::APPEND | File::CREAT, 0o600) do |f|
+        f.write("#{JSON.generate(hash)}\n")
+      end
+    end
+  end
+  private_constant :Runner
+
+  # The parsed lines of a run file (a line that is not a JSON object, such as
+  # one cut short by a kill, is skipped). Refusal run_unreadable when the file
+  # cannot be read.
+  def self.read_run(path)
+    File.readlines(path).map { |l| parse_line(l) }.select { |l| l.is_a?(Hash) }
+  rescue SystemCallError, EncodingError
+    raise Refusal.new("run_unreadable", "the run file is missing or unreadable")
+  end
+
+  # [] for a complete run, else the reasons it is partial (a partial run is
+  # never applied): no_run_end, stopped_early, case_missing, case_not_ok,
+  # corpus_changed, key_changed.
+  def self.partial_reasons(run_lines, corpus:, config:)
+    start = run_lines.find { |l| l["kind"] == "run_start" }
+    finish = run_lines.reverse.find { |l| l["kind"] == "run_end" }
+    reasons = []
+    reasons << "no_run_end" if finish.nil?
+    reasons << "stopped_early" if finish && finish["complete"] != true
+    judgments = judgments_by_case(run_lines)
+    labelled = corpus["cases"].reject { |c| c["label"].nil? }
+    reasons << "case_missing" if labelled.any? { |c| !judgments.key?(c["id"]) }
+    reasons << "case_not_ok" if judgments.values.any? { |j| !judgment_ok?(j) }
+    reasons << "corpus_changed" if start.nil? || start["corpus_digest"] != corpus_digest(corpus)
+    reasons << "key_changed" if start.nil? || start["threshold_key"] != corpus_threshold_key(config, corpus)
+    reasons
+  end
+
+  def self.judgments_by_case(run_lines)
+    run_lines.select { |l| l["kind"] == "judgment" }.each_with_object({}) { |l, h| h[l["case_id"]] = l }
+  end
+  private_class_method :judgments_by_case
+
+  def self.judgment_ok?(line)
+    line["outcome"] == "ok" && line["predicted"].is_a?(String) && line["confidence"].is_a?(Numeric)
+  end
+  private_class_method :judgment_ok?
+
+  # The Phase 1 sweep over a run's judged cases with the corpus's labels.
+  def self.sweep_run(run_lines, corpus:)
+    judged = judgments_by_case(run_lines).values.select { |j| judgment_ok?(j) }.map do |j|
+      { label: j["gold"], predicted: j["predicted"], confidence: j["confidence"] }
+    end
+    sweep(judged, labels: corpus["labels"])
+  end
+
+  # --- the threshold store --------------------------------------------------
+
+  # The store entry for the run's key, built from a complete run. Refusal
+  # partial_run (naming the reasons) when the run is partial; nothing is
+  # written then. Other keys' entries are untouched. dry_run builds the entry
+  # and writes nothing. Returns {threshold_key:, entry:, written:}.
+  def self.apply(config:, run_lines:, corpus:, now: -> { Time.now.utc }, dry_run: false)
+    reasons = partial_reasons(run_lines, corpus: corpus, config: config)
+    unless reasons.empty?
+      raise Refusal.new("partial_run", "the run is partial (#{reasons.join(', ')}); nothing was stored")
+    end
+
+    start = run_lines.find { |l| l["kind"] == "run_start" }
+    key = start["threshold_key"]
+    entry = { "site" => corpus["site"], "question_set" => corpus["question_set"],
+              "question" => corpus["question"],
+              "labels" => JSON.parse(JSON.generate(sweep_run(run_lines, corpus: corpus))),
+              "run_id" => start["run_id"], "corpus_digest" => start["corpus_digest"],
+              "applied_at" => now.call.utc.iso8601(3) }
+    unless dry_run
+      store = read_store(config)
+      store["keys"][key] = entry
+      write_store(config, store)
+    end
+    { threshold_key: key, entry: entry, written: !dry_run }
+  end
+
+  # The stored number for a label under a key, or nil (no entry, an n/a
+  # label, an unreadable store). This is the read a site uses in on mode: it
+  # can only restrict, so every doubt is nil.
+  def self.threshold_for(config:, threshold_key:, label:)
+    store = read_store(config)
+    entry = store["keys"][threshold_key]
+    result = entry.is_a?(Hash) && entry["labels"].is_a?(Hash) ? entry["labels"][label] : nil
+    value = result.is_a?(Hash) ? result["threshold"] : nil
+    value.is_a?(Numeric) ? value : nil
+  rescue Refusal
+    nil
+  end
+
+  def self.read_store(config)
+    path = thresholds_path(config)
+    return { "format" => THRESHOLD_FORMAT, "keys" => {} } unless File.exist?(path)
+
+    store = read_json_file(path)
+    unless store.is_a?(Hash) && store["format"] == THRESHOLD_FORMAT && store["keys"].is_a?(Hash)
+      raise Refusal.new("store_invalid", "the threshold store is not a format-1 store; it was left alone")
+    end
+
+    store
+  end
+
+  # tmp file then rename, mode 600, in a mode-700 dir.
+  def self.write_store(config, store)
+    dir = eval_dir(config)
+    FileUtils.mkdir_p(dir, mode: 0o700)
+    path = thresholds_path(config)
+    tmp = "#{path}.tmp#{Process.pid}"
+    File.open(tmp, File::WRONLY | File::CREAT | File::TRUNC, 0o600) do |f|
+      f.write(JSON.generate(store))
+      f.write("\n")
+    end
+    File.rename(tmp, path)
+  ensure
+    File.delete(tmp) if tmp && File.exist?(tmp)
+  end
+  private_class_method :write_store
 end
