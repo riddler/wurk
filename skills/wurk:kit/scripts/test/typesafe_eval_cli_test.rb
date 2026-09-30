@@ -305,4 +305,206 @@ class TypesafeEvalCliTest < Minitest::Test
       assert_equal 1, labels.compact.size
     end
   end
+
+  # ---- run and sweep (Phase 3) ---------------------------------------------
+
+  MODEL = "jev-1.13.0"
+
+  # A tmp HOME whose machine config also carries a budget and a price row, and
+  # a labelled 4-case corpus at @out. The key file holds the sentinel.
+  def with_eval_home(restricted: [], labels: %w[low high low high])
+    with_home(restricted: restricted) do |dir|
+      write_raw_user_config(dir, JSON.generate(
+        "typesafe" => { "key_path" => @key_path, "state_dir" => File.join(dir, "state"),
+                        "restricted_sources" => restricted, "budget" => { "monthly_usd" => 1.0 } },
+        "metrics" => { "prices" => { MODEL => { "input" => 0.042, "output" => 0 } } }
+      ))
+      cases = labels.each_with_index.map do |gold, i|
+        { "id" => "case-#{i}", "source" => "notes", "state" => "#{STATE_MARK} #{i}", "redactions" => 0,
+          "label" => gold }
+      end
+      spec = JSON.parse(File.read(QUESTION_SET))
+      TypesafeEval.write_corpus(@out, spec.merge("format" => 1, "site" => "review", "labels" => %w[low high],
+                                                 "redaction" => { "keys" => [], "labels" => %w[low high] },
+                                                 "cases" => cases))
+      @state = File.join(dir, "state")
+      yield dir
+    end
+  end
+
+  def answer_body(choice = "low", model: MODEL)
+    JSON.generate("model" => model,
+                  "answers" => { "urgency" => { "type" => "choice", "choice" => choice, "confidence" => 0.9 } },
+                  "usage" => { "input_tokens" => 400, "output_tokens" => 0 })
+  end
+
+  def script_ok(count)
+    count.times { @fake.respond(200, body: answer_body) }
+  end
+
+  def run_file_of(body)
+    body["data"]["run_file"]
+  end
+
+  # sabotage: send fewer or more requests than cases, or leak state text into data
+  def test_run_reports_the_run_and_records_one_command_per_sent_call
+    with_eval_home do
+      script_ok(4)
+      code, body, out, err = run_cli(["run", "--corpus", @out])
+      assert_equal 0, code, err
+      data = body["data"]
+      assert_equal 4, data["cases"]
+      assert_equal 4, data["ok_count"]
+      assert_equal true, data["complete"]
+      assert_nil data["stop_reason"]
+      assert_equal "review:note-urgency@1:#{MODEL}", data["threshold_key"]
+      assert_operator data["cost_usd"], :>, 0
+      assert File.file?(data["run_file"])
+      assert_equal 4, body["commands"].size
+      assert_equal 4, @fake.calls.size
+      refute_includes out, STATE_MARK
+      assert_empty body["blocked"]
+    end
+  end
+
+  # sabotage: exit 0 for a stopped run, or map a budget stop to needs none
+  def test_a_stopped_run_is_run_incomplete_with_needs_by_outcome
+    with_eval_home do
+      script_ok(1)
+      @fake.raise_error(Net::ReadTimeout)
+      code, body, = run_cli(["run", "--corpus", @out])
+      assert_equal 1, code
+      assert_equal false, body["data"]["complete"]
+      assert_equal "timeout", body["data"]["stop_reason"]
+      assert_equal ["run_incomplete"], body["blocked"].map { |b| b["code"] }
+      assert_equal "none", body["blocked"][0]["needs"]
+      assert_equal 2, body["commands"].size
+
+      # model_mismatch needs a person
+      @fake.respond(200, body: answer_body("low", model: "jev-9.9.9"))
+      code, body, = run_cli(["run", "--corpus", @out])
+      assert_equal 1, code
+      assert_equal "human", body["blocked"][0]["needs"]
+    end
+  end
+
+  # sabotage: let the Interrupt escape the CLI
+  def test_an_interrupt_is_run_interrupted_and_the_run_cannot_be_applied
+    with_eval_home do
+      script_ok(1)
+      @fake.raise_error(Interrupt)
+      code, body, = run_cli(["run", "--corpus", @out])
+      assert_equal 1, code
+      assert_equal ["run_interrupted"], body["blocked"].map { |b| b["code"] }
+      assert_equal "interrupted", body["data"]["stop_reason"]
+      file = run_file_of(body)
+      code, body, = run_cli(["sweep", "--run", file, "--corpus", @out, "--apply"])
+      assert_equal 1, code
+      assert_equal ["partial_run"], body["blocked"].map { |b| b["code"] }
+      refute File.exist?(File.join(@state, "eval", "thresholds.json"))
+    end
+  end
+
+  # sabotage: send under --dry-run, or create the state dir
+  def test_run_dry_run_sends_nothing_and_writes_nothing
+    with_eval_home do
+      code, body, = run_cli(["run", "--corpus", @out, "--dry-run"])
+      assert_equal 0, code
+      assert_equal true, body["data"]["dry_run"]
+      assert_equal 4, body["data"]["would_call"]
+      assert_empty body["commands"]
+      assert_empty @fake.calls
+      refute File.exist?(@state)
+    end
+  end
+
+  # sabotage: check the source list per call
+  def test_run_refuses_a_restricted_source_before_any_call
+    with_eval_home(restricted: ["notes"]) do
+      code, body, = run_cli(["run", "--corpus", @out])
+      assert_equal 1, code
+      assert_equal ["source_restricted"], body["blocked"].map { |b| b["code"] }
+      assert_empty @fake.calls
+      refute File.exist?(File.join(@state, "eval"))
+    end
+  end
+
+  # sabotage: run an unlabelled corpus
+  def test_run_with_nothing_labelled_is_blocked
+    with_eval_home(labels: [nil, nil]) do
+      code, body, = run_cli(["run", "--corpus", @out])
+      assert_equal 1, code
+      assert_equal ["nothing_labelled"], body["blocked"].map { |b| b["code"] }
+      assert_empty @fake.calls
+    end
+  end
+
+  # sabotage: apply from a partial run, or fail a report-only sweep
+  def test_sweep_reports_a_partial_run_but_only_apply_refuses
+    with_eval_home do
+      script_ok(1)
+      @fake.raise_error(Net::ReadTimeout)
+      _code, body, = run_cli(["run", "--corpus", @out])
+      file = run_file_of(body)
+      store = File.join(@state, "eval", "thresholds.json")
+
+      code, body, = run_cli(["sweep", "--run", file, "--corpus", @out])
+      assert_equal 0, code
+      assert_equal %w[stopped_early case_missing case_not_ok], body["data"]["partial_reasons"]
+      assert_equal ["partial_run"], body["warnings"].map { |w| w["code"] }
+      assert_equal false, body["data"]["applied"]
+      assert_equal %w[low high], body["data"]["labels"].keys
+
+      code, body, = run_cli(["sweep", "--run", file, "--corpus", @out, "--apply"])
+      assert_equal 1, code
+      assert_equal ["partial_run"], body["blocked"].map { |b| b["code"] }
+      refute File.exist?(store)
+    end
+  end
+
+  # sabotage: write the store under --dry-run, or skip it on a complete run
+  def test_sweep_apply_stores_the_entry_and_dry_run_does_not
+    with_eval_home do
+      script_ok(4)
+      _code, body, = run_cli(["run", "--corpus", @out])
+      file = run_file_of(body)
+      store = File.join(@state, "eval", "thresholds.json")
+
+      code, body, = run_cli(["sweep", "--run", file, "--corpus", @out, "--apply", "--dry-run"])
+      assert_equal 0, code
+      assert_equal false, body["data"]["applied"]
+      assert_equal true, body["data"]["dry_run"]
+      assert_equal [], body["data"]["partial_reasons"]
+      refute_nil body["data"]["entry"]
+      refute File.exist?(store)
+
+      code, body, = run_cli(["sweep", "--run", file, "--corpus", @out, "--apply"])
+      assert_equal 0, code
+      assert_equal true, body["data"]["applied"]
+      keys = JSON.parse(File.read(store))["keys"]
+      assert_equal ["review:note-urgency@1:#{MODEL}"], keys.keys
+      assert_nil keys.values.first["labels"]["low"]["threshold"], "4 cases are far below 10 routed: n/a"
+      assert_equal "too_few_routed", keys.values.first["labels"]["low"]["reason"]
+    end
+  end
+
+  # sabotage: fall through to a stack trace for a missing run file
+  def test_sweep_on_a_missing_run_is_a_blocked_entry
+    with_eval_home do
+      code, body, = run_cli(["sweep", "--run", File.join(@home, "nope.jsonl"), "--corpus", @out])
+      assert_equal 1, code
+      assert_equal ["run_unreadable"], body["blocked"].map { |b| b["code"] }
+    end
+  end
+
+  # sabotage: treat a missing flag as a blocked envelope
+  def test_run_and_sweep_usage_errors_exit_2
+    [["run"], ["sweep"], ["sweep", "--run", "x"], ["run", "--corpus", "x", "extra"]].each do |argv|
+      code, body, out, err = run_cli(argv)
+      assert_equal 2, code, argv.inspect
+      assert_nil body
+      assert_empty out
+      refute_empty err
+    end
+  end
 end

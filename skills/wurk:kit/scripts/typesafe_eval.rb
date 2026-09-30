@@ -26,6 +26,8 @@ module TypesafeEvalCli
                              --from-jsonl FILE --source LABEL)...
                             [--redact-key KEY]... [--dry-run]
            typesafe_eval.rb label --corpus PATH [--relabel] [--dry-run]
+           typesafe_eval.rb run --corpus PATH [--dry-run]
+           typesafe_eval.rb sweep --run PATH --corpus PATH [--apply] [--dry-run]
 
     corpus build  read-only sources -> one corpus file for a site and question
                   set. Every source needs a --source label, given after its
@@ -38,9 +40,20 @@ module TypesafeEvalCli
                   q or end of input stops.
     --dry-run     corpus build: report the counts, write nothing.
                   label: record nothing.
+                  run: check the first case up to the request; send nothing.
+                  sweep: with --apply, report the store entry; write nothing.
+    run           send every labelled case through the client (probe calls,
+                  the client's own budget) and write a run file under the
+                  state dir. The first case that is not ok stops the run,
+                  which is then partial.
+    sweep         per label, the smallest confidence threshold whose Wilson
+                  95% lower bound on precision is >= 0.90 with >= 10 routed
+                  cases, else n/a. --apply stores it under the run's
+                  threshold key; a partial run is refused.
   TEXT
   HELP_FLAGS = %w[--help -h].freeze
-  SUBCOMMANDS = %w[corpus label].freeze
+  REQUEST_COMMAND = "POST #{Typesafe::ENDPOINT}"
+  SUBCOMMANDS = %w[corpus label run sweep].freeze
 
   class << self
     def run(argv, io: $stdout, stdin: $stdin, prompt: $stderr, http_class: Net::HTTP, now: nil, sleeper: nil)
@@ -54,11 +67,21 @@ module TypesafeEvalCli
 
       case sub
       when "corpus" then run_corpus(argv, io)
-      else run_label(argv, io, stdin, prompt)
+      when "label" then run_label(argv, io, stdin, prompt)
+      when "run" then run_eval(argv, io, clock_args(http_class, now, sleeper))
+      else run_sweep(argv, io, now)
       end
     end
 
     private
+
+    # Only the injected pieces: the library supplies its own defaults.
+    def clock_args(http_class, now, sleeper)
+      args = { http_class: http_class }
+      args[:now] = now if now
+      args[:sleeper] = sleeper if sleeper
+      args
+    end
 
     def help(io)
       io.puts USAGE
@@ -215,6 +238,117 @@ module TypesafeEvalCli
       refuse(env, e, io)
     rescue SystemCallError, IOError => e
       io_error(env, e, io)
+    end
+
+    # --- run ----------------------------------------------------------------
+
+    def run_eval(argv, io, injected)
+      options, code = parse(argv, "run") do |opts, o|
+        opts.on("--corpus PATH", "the labelled corpus file") { |v| o[:corpus] = v }
+      end
+      return code if code
+      return usage_error("run needs --corpus") if options[:corpus].nil?
+
+      env = Envelope.new(script: "typesafe_eval")
+      config = UserConfig.require!(env)
+      return env.emit(io) unless config
+
+      summary = TypesafeEval.run(config: config, corpus_path: options[:corpus],
+                                 dry_run: options[:dry_run], **injected)
+      fill_run(env, summary)
+      env.emit(io)
+    rescue TypesafeEval::RunInterrupted => e
+      fill_run(env, e.summary, block: false)
+      env.block!(code: "run_interrupted",
+                 message: "the run was interrupted; the run file was closed as incomplete and " \
+                          "cannot be applied. Re-run the whole corpus.",
+                 needs: "human")
+      env.emit(io)
+    rescue TypesafeEval::Refusal => e
+      refuse(env, e, io)
+    rescue SystemCallError, IOError => e
+      io_error(env, e, io)
+    end
+
+    def fill_run(env, summary, block: true)
+      d = env.data
+      summary.each { |k, v| d[k] = v unless k == :sent }
+      summary[:sent].to_i.times { env.commands << REQUEST_COMMAND }
+      return fill_dry_run(env, summary) if summary[:dry_run]
+      return if summary[:complete] || !block
+
+      stop = summary[:stop_reason]
+      env.block!(code: "run_incomplete",
+                 message: "the run stopped at the first case that was not ok (#{stop}) and is " \
+                          "partial: it cannot be applied. Fix the cause and re-run the whole corpus.",
+                 needs: Typesafe::NEEDS_NONE.include?(stop) ? "none" : "human")
+    end
+
+    def fill_dry_run(env, summary)
+      return if summary[:outcome] == "ok"
+
+      env.block!(code: summary[:outcome],
+                 message: "the first case would be refused before any request " \
+                          "(#{summary[:outcome]}: #{summary[:reason]}); a live run would stop there.",
+                 needs: Typesafe::NEEDS_NONE.include?(summary[:outcome]) ? "none" : "human")
+    end
+
+    # --- sweep --------------------------------------------------------------
+
+    def run_sweep(argv, io, now)
+      options, code = parse(argv, "sweep") do |opts, o|
+        opts.on("--run PATH", "the run file") { |v| o[:run] = v }
+        opts.on("--corpus PATH", "the corpus file the run used") { |v| o[:corpus] = v }
+        opts.on("--apply", "store the thresholds under the run's key") { o[:apply] = true }
+      end
+      return code if code
+      return usage_error("sweep needs --run and --corpus") if options[:run].nil? || options[:corpus].nil?
+
+      env = Envelope.new(script: "typesafe_eval")
+      config = UserConfig.require!(env)
+      return env.emit(io) unless config
+
+      sweep(env, config, options, now)
+      env.emit(io)
+    rescue TypesafeEval::Refusal => e
+      refuse(env, e, io)
+    rescue SystemCallError, IOError => e
+      io_error(env, e, io)
+    end
+
+    def sweep(env, config, options, now)
+      corpus = TypesafeEval.load_corpus(options[:corpus])
+      lines = TypesafeEval.read_run(options[:run])
+      reasons = TypesafeEval.partial_reasons(lines, corpus: corpus, config: config)
+      d = env.data
+      d[:threshold_key] = TypesafeEval.corpus_threshold_key(config, corpus)
+      d[:labels] = TypesafeEval.sweep_run(lines, corpus: corpus)
+      d[:partial_reasons] = reasons
+      d[:applied] = false
+      d[:dry_run] = options[:dry_run] ? true : false
+      return sweep_report(env, reasons) unless options[:apply]
+      return partial_block(env, reasons) unless reasons.empty?
+
+      args = { config: config, run_lines: lines, corpus: corpus, dry_run: options[:dry_run] }
+      args[:now] = now if now
+      stored = TypesafeEval.apply(**args)
+      d[:applied] = stored[:written]
+      d[:entry] = stored[:entry]
+      d[:store] = TypesafeEval.thresholds_path(config)
+    end
+
+    def sweep_report(env, reasons)
+      return if reasons.empty?
+
+      env.warn(code: "partial_run",
+               message: "the run is partial (#{reasons.join(', ')}); this report is not applicable")
+    end
+
+    def partial_block(env, reasons)
+      env.block!(code: "partial_run",
+                 message: "the run is partial (#{reasons.join(', ')}); nothing was stored. " \
+                          "Re-run the whole corpus against the current corpus and pinned model.",
+                 needs: "human")
     end
   end
 end

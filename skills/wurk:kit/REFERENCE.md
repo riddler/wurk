@@ -1806,7 +1806,8 @@ config. It SHIPS DARK: nothing here switches a site to `shadow` or `on`.
 Like `typesafe.rb` it reads no manifest, so it works from any directory. The
 pure math (Wilson bound, answer interpretation, the sweep) and the sections
 below on the run, the gate and the fixtures are described where they land;
-this part covers the corpus, redaction, the builder and the labeller.
+the parts below cover the corpus, redaction, the builder, the labeller, the
+run, the sweep and the threshold store.
 
 ### Usage and `data` keys
 
@@ -1815,6 +1816,8 @@ typesafe_eval.rb corpus build --site NAME --question-set FILE --out PATH
                  (--from-dir DIR [--glob PAT] --source LABEL | --from-jsonl FILE --source LABEL)...
                  [--redact-key KEY]... [--dry-run]
 typesafe_eval.rb label --corpus PATH [--relabel] [--dry-run]
+typesafe_eval.rb run   --corpus PATH [--dry-run]
+typesafe_eval.rb sweep --run PATH --corpus PATH [--apply] [--dry-run]
 ```
 
 - `--help` exits 0 before touching any config. An unknown subcommand, a
@@ -1916,6 +1919,101 @@ re-prompts without recording. The corpus file is rewritten after each
 recorded label, so an interrupted session keeps every label given so far;
 `--dry-run` records nothing. It never shows a Jev answer (a corpus holds
 none), and its envelope carries counts only.
+
+### The run
+
+`run` sends every LABELLED case of a corpus (an unlabelled case is never
+sent) through `Typesafe.judge` as a probe call (`site: nil`), so a site that
+is still `off` can be evaluated while the client's own input, privacy,
+budget, local-rate, key and log rules all apply. Eval calls are therefore
+ordinary calls under the client's `typesafe.budget.monthly_usd` and
+`per_minute`: there is no separate eval share and no new config key, and a
+run that the budget stops is partial. The run records to
+`<typesafe.state_dir>/eval/runs/<run_id>.jsonl` (dir mode 700, file mode
+600; run id `YYYYMMDDTHHMMSSZ-<hex4>`), one JSON line per write:
+
+- `{kind: "run_start", run_id, site, question_set, question, threshold_key,
+  corpus_digest, cases}`
+- per case `{kind: "judgment", case_id, call_id, outcome, served_model,
+  predicted, confidence, gold}` - ids, labels, numbers and outcomes only,
+  never state or question text. `outcome` is the client's outcome, or
+  `unreadable_answer` when the call was `ok` but the answer did not
+  interpret (`predicted` and `confidence` are then null).
+- `{kind: "run_end", complete, stop_reason, ok_count}`
+
+The threshold key is `Typesafe.threshold_key` computed from the corpus's
+site and question set and the machine's pinned model
+(`<site>:<qset id>@<version>:<pinned model>`).
+
+Before any call: zero labelled cases is `nothing_labelled`; a case `source`
+listed in `typesafe.restricted_sources` is `source_restricted` (zero calls,
+no run file). A `rate_limited_local` outcome (nothing was sent) waits the
+client's 60 s window and retries that case, at most 3 waits per case, then
+the run stops with `stop_reason: "rate_limited_local"`; only the final
+attempt writes a judgment line. Nothing else is retried: the first non-`ok`
+outcome, or an `unreadable_answer`, writes its judgment line and stops the
+run with `complete: false`. `Ctrl-C` writes `run_end` with `stop_reason:
+"interrupted"`; any other exception writes it with the exception class
+name. A stopped run is never resumed: the whole corpus is re-run, so one run
+never mixes judgments from different times or served models.
+
+`run` `data`: `run_id`, `run_file`, `threshold_key`, `cases`, `ok_count`,
+`complete`, `stop_reason`, `sent`, `cost_usd` (the sum of the judged calls'
+`cost_usd`). `commands` holds one `POST` line per request actually sent. A
+stopped run exits 1 with block `run_incomplete` (`needs: "none"` when the
+stop outcome is in the client's no-action set, else `"human"`); Ctrl-C exits
+1 with `run_interrupted`. `--dry-run` judges the first case with the
+client's own dry run (so a budget, price or key refusal shows), sends and
+writes nothing, and reports `would_call`, `outcome` and `reason`; a refusal
+there is a block named for the outcome.
+
+### The sweep and the threshold store
+
+`sweep --run FILE --corpus FILE` computes, per label of the question, the
+smallest confidence threshold `t` in 0.05..0.95 (step 0.05) whose Wilson 95%
+lower bound on precision is >= 0.90 with >= 10 routed cases, else `n/a`
+(`threshold: null` with `reason` `too_few_routed` or `below_bound`). A case
+is routed to label L at `t` when the model's answer is L with confidence
+>= `t`; a `noul` answer `p` reads as `true` with confidence `max(p, 1 - p)`.
+`score` questions are out of scope. `data`: `threshold_key`, `labels`
+(per-label results), `partial_reasons`, `applied`, `dry_run`.
+
+Without `--apply`, `sweep` writes nothing and exits 0 even for a partial run
+(it adds a `partial_run` warning). With `--apply`, a partial run exits 1 with
+block `partial_run` and writes nothing; a complete run writes the store
+entry (`--dry-run` reports it in `data.entry` and writes nothing).
+
+**A partial run** is any run file for which one of these holds; a partial
+run is never applied:
+
+1. no `run_end` line (the process died or was killed) - `no_run_end`;
+2. `run_end.complete` is false, written when the runner stopped early for any
+   reason: `Interrupt` (Ctrl-C), an exception, or the first case whose
+   outcome was not `ok` - `stopped_early`;
+3. any labelled case in the corpus has no `judgment` line (`case_missing`),
+   or its judgment's `outcome` is not `ok` (a mid-run `budget_exhausted`,
+   `rate_limited`, `timeout`, `model_mismatch`, `source_restricted`, any
+   member of the closed set other than `ok`) or its answer is an
+   `unreadable_answer` (`case_not_ok`);
+4. the run's `corpus_digest` differs from the corpus file's current digest
+   (labels or cases changed after the run) - `corpus_changed`;
+5. the run's `threshold_key` differs from the key computed now from the
+   corpus's site and question set and the machine's pinned model -
+   `key_changed`.
+
+The threshold store is `<state_dir>/eval/thresholds.json` (written with a
+tmp file then a rename, mode 600): `{format: 1, keys: {<threshold_key> =>
+{site, question_set, question, labels: {<label> => <sweep result>}, run_id,
+corpus_digest, applied_at}}}`. Applying replaces the entry for that key and
+leaves every other key untouched. Entries are written only from complete
+runs, so a key with an entry always came from one. A store that is not a
+format-1 store is left alone (`store_invalid`).
+
+`TypesafeEval.threshold_for(config:, threshold_key:, label:)` returns the
+stored number for that label or `nil` (no entry, an `n/a` label, an unknown
+label, an unreadable store). It is the read a site uses in `on` mode; it can
+only restrict, so every doubt is `nil`. A new question-set version or a new
+pinned model is a new key, so its thresholds start empty.
 
 ### How the tests prove it
 
