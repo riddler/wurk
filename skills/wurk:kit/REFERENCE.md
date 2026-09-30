@@ -2020,8 +2020,9 @@ format-1 store is left alone (`store_invalid`).
 
 `TypesafeEval.threshold_for(config:, threshold_key:, label:)` returns the
 stored number for that label or `nil` (no entry, an `n/a` label, an unknown
-label, an unreadable store). It is the read a site uses in `on` mode; it can
-only restrict, so every doubt is `nil`. A new question-set version or a new
+label, an unreadable store). It is where the number a site acts on in `on`
+mode comes from (read by the site's caller for a `--threshold` flag, or by
+a library caller directly); it can only restrict, so every doubt is `nil`. A new question-set version or a new
 pinned model is a new key, so its thresholds start empty.
 
 ### The on-gate
@@ -2086,17 +2087,22 @@ Nothing shipped writes a mode into `~/.claude/wurk.local.json`; the switch to
 ### The `on`-mode caller rule
 
 A site in `on` mode acts on a Jev answer only for an enabled label at or
-above its stored threshold: interpret the answer
-(`TypesafeEval.interpret(answer, labels:)` gives `[label, confidence]`), read
-`TypesafeEval.threshold_for(config:, threshold_key:, label:)` with the call's
-`threshold_key`, and act only when the threshold is a number and `confidence
->= threshold`. When `threshold_for` returns `nil` (no entry, an `n/a` label,
-an unknown label, an unreadable store, a key moved by a new question-set
-version or pinned model) the site behaves exactly as it does in `shadow`: it
-records the call and its outcome line and takes its existing, non-Jev path.
-The rule can only restrict; every doubt is `nil`. A site keeps writing
-`record_outcome` lines with `agreement` while in `shadow` - that is the
-evidence `gate` counts.
+above its stored threshold. The number is always the store's entry for the
+call's `threshold_key`, never one the caller picks. The kit's sites
+(`report_triage.rb`, `bead_dedupe.rb`, `finding_severity.rb`) take it as
+`--threshold N` from their caller, who reads it from this store; a
+library caller can read it directly with
+`TypesafeEval.threshold_for(config:, threshold_key:, label:)`. Either way,
+interpret the answer (`TypesafeEval.interpret(answer, labels:)` gives
+`[label, confidence]`) and act only when there is a number and `confidence
+>= threshold`. With no threshold (no `--threshold`, or `threshold_for`
+returning `nil`: no entry, an `n/a` label, an unknown label, an unreadable
+store, a key moved by a new question-set version or pinned model) `on`
+mode changes nothing: the site behaves exactly as it does in `shadow`,
+records the call and its outcome line, and takes its existing, non-Jev
+path (the sites report this as `no_threshold`). The rule can only restrict;
+every doubt is no threshold. A site keeps writing `record_outcome` lines
+with `agreement` while in `shadow` - that is the evidence `gate` counts.
 
 ### Fixtures
 
