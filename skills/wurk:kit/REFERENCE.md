@@ -1372,6 +1372,158 @@ HOME guard is in force); `XDG_STATE_HOME` and the state dir are pinned to
 tmpdirs; and every Result, envelope, captured stdout and stderr, ledger
 and decision file is swept for the sentinel.
 
+## `report_triage.rb`: the report_triage Jev site
+
+The first call site built on the Jev client (previous section). After the
+conductor has read a worker's report file and classified it itself - done,
+blocked or stuck - this asks Jev the same question over the report's prose
+and returns one field a caller routes on. `lib/report_triage.rb` holds the
+question set, the state builder and the reading of the answer;
+`report_triage.rb` is the CLI the conductor's sweep runs. It SHIPS DARK:
+the site is `off` unless the machine config names `report_triage` under
+`typesafe.sites` with another mode, and switching it is an operator act.
+
+### Usage and `data` keys
+
+```
+report_triage.rb --report PATH --conductor done|blocked|stuck --source LABEL
+                 [--threshold N] [--dry-run]
+```
+
+`data`: `site`, `mode`, `outcome` (the client's closed-set outcome, or
+`site_off`, or null when no call was made), `reason`, `call_id`,
+`threshold_key`, `report` (the path passed), `report_digest` (the first 16
+hex of the file's SHA256, null when the file was not read), `conductor`,
+`jev_class`, `jev_confidence` (the probability Jev gives its chosen class),
+`urgency` (the score, or null), `agreement` (`agree`, `disagree`, or `n/a`
+when there is no answer), `action`, `add_needs_you`, `threshold`,
+`cost_usd`, `dry_run`, `outcome_line_written`, `journal_line` (a one-line
+`[probe]` entry for the conductor's journal naming the report basename and
+digest, both classes, Jev's confidence, urgency, mode and what changed;
+null when the site is off), and `request` on a dry run. No report text
+appears in the envelope except in a dry run's `request.body`, as with the
+client; the key never appears.
+
+`action` is one of `site_off`, `skipped` (reason `nothing_to_judge`),
+`dry_run`, `shadow_logged`, `needs_you_added`, `no_change` (reason
+`jev_done`, `conductor_flagged`, `no_threshold` or `below_threshold`) or
+`fallback` (reason: the client's outcome, `answer_malformed`,
+`report_unreadable` or `state_dir_error`). There is no action that clears,
+removes, downgrades or marks anything done.
+
+### Routing and exit codes
+
+**A caller routes on `data.add_needs_you` alone.** It is true only in `on`
+mode for an `ok` answer that meets the add rule below; everything else,
+every fallback included, changes nothing. Exit 0 on every success, skip,
+off and fallback (no `blocked` entry: a dark site is the ordinary state,
+unlike `typesafe.rb call`). Exit 1 only for an invalid machine config
+(`user_config_invalid`), which a caller treats like any fallback. Exit 2
+for usage: a missing `--report`, `--conductor` or `--source`, a conductor
+class outside the three, a source that is not a label, a threshold that is
+not a number in (0, 1], a stray argument or an unknown flag.
+
+### The question set
+
+`report_triage@1`, two questions over the same state:
+
+- **`state`** (choice): judging only from `report`, where does the task
+  stand - `done` (finished, nothing waits on anyone), `blocked` (the worker
+  needs something outside itself: a decision, a permission, another task,
+  a person) or `stuck` (not finished, and no outside dependency named that
+  would unblock it).
+- **`urgency`** (score, four levels): how soon the operator must act -
+  nothing to do; read at the next review; something waits on the
+  operator; act now. Urgency is recorded and journaled only; in this
+  version it never adds an item.
+
+Any change to either question's instructions or criteria is a new
+version, so it starts unthresholded. The test pins version 1's text by
+digest to make that a deliberate step.
+
+### What state is sent
+
+Only the report's prose, and only when present and non-blank:
+`openQuestions`, `judgementCalls`, `discoveredDeps` (each entry's `summary`
+only), `notesWritten` and `reviewRound.deferred`, under a `report` key. A
+report with none of them is skipped (`nothing_to_judge`) with no call.
+Excluded on purpose:
+
+- `status` - a self-stated label; sending it makes the judgment
+  label-reading.
+- `gate`, `committed` - facts code already has.
+- identity: `bead`, `repo`, `branch`, `sha`, `mr`, `repos_touched`,
+  `scopeAuthority`, and a dependency's `owningRepo` and `existingBead`.
+  Identity and counting stay out of Jev.
+- any field not listed, including a later optional report field, until a
+  new question-set version adds it.
+
+### The add rule, and the never-clears rule
+
+- **`shadow`**: call, journal both classifications (the client's decision
+  line holds Jev's answer, the outcome line holds the conductor's class and
+  the agreement), act on the conductor's own read only.
+  `add_needs_you` is always false.
+- **`on`**: `add_needs_you` is true ONLY when the conductor said `done`,
+  Jev says `blocked` or `stuck`, a threshold was passed, and Jev's
+  confidence is at or above it. A conductor that already said blocked or
+  stuck is already surfaced (`conductor_flagged`).
+- **Never clears.** Jev may add caution, never remove it. A Jev `done` is
+  `no_change` / `jev_done` whatever the conductor said and however
+  confident Jev is: it never marks a bead done, clears or downgrades an
+  item, or changes a journal entry or a bead's status.
+
+### The fallback rule
+
+Any client outcome other than `ok`, a malformed answer (a class outside the
+three, a missing or out-of-range probability for it), an unreadable or
+unparseable report, and a state-dir failure are all `action: fallback`
+with a warning (`jev_fallback`, `report_unreadable` or `state_dir_error`,
+naming labels and exception classes only), `add_needs_you` false and exit
+0. A fallback is never read as an answer; the sweep stays exactly as it
+was. Client warnings (`key_mode_open`, `ledger_malformed`) pass through as
+in `typesafe.rb`.
+
+### Source label and threshold
+
+- **Source.** The conductor passes `--source repo:<repo directory
+  basename>`. An operator keeps a repo's reports off the wire by listing
+  that label in `typesafe.restricted_sources`, which refuses in `shadow`
+  and `on` alike (`source_restricted`, a fallback, no request).
+- **Threshold.** `--threshold` is the eval tooling's enabled threshold for
+  `data.threshold_key` (`report_triage:report_triage@1:<pinned model>`),
+  never a number the conductor picks. Storing and sweeping thresholds
+  belongs to the eval tooling. Without one, `on` mode adds nothing
+  (`no_threshold`).
+
+### The site pattern
+
+The checklist the next site copies:
+
+- **A lib module** with `SITE`, a frozen `QUESTION_SET` (`{id, version}`),
+  `QUESTIONS`, a state builder and an `interpret`.
+  - The state builder is a whitelist of trusted-author fields. No
+    self-stated labels, no identity, dates, counting or arithmetic; unknown
+    fields stay out until a new version adds them.
+  - `interpret` can only add caution: a non-`ok` outcome or a malformed
+    answer is a fallback, shadow never acts, and no action removes,
+    clears or downgrades.
+- **A thin CLI** that:
+  - always passes its site name to `Typesafe.judge` (a call with no site
+    is a probe that bypasses `off`);
+  - returns at once on `off` without reading its input;
+  - always sets `source`;
+  - routes on one site-specific positive field (here `add_needs_you`);
+  - exits 0 on every fallback;
+  - writes the outcome line with `decision` = the caller's own decision
+    and the agreement.
+- **Tests** (FakeHTTP only, sentinel key, tmp HOME and state dir) that
+  cover: off by default (no read, no call, no file); shadow logs both
+  classifications; on only adds; never clears or downgrades; each failure
+  outcome falls back with exactly one attempt; a restricted source
+  refuses with no request; no input text in any log; and a sentinel sweep
+  of every output and file.
+
 ## Writing a new script
 
 First check that a script is the right home at all:
