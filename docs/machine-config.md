@@ -441,3 +441,109 @@ requirement for generic kit scripts. There is no precedence to state between
 it and the manifest, because the manifest no longer carries this field at
 all: `tmux.permission_mode` was retired from the manifest schema in wu-jhb.
 See `docs/manifest.md`'s "Retired keys" note.
+
+## typesafe
+
+Configures the TypeSafe Jev client (`lib/typesafe.rb`), which asks a hosted
+model for typed judgments (choice, score, noul) that a call site may add to
+its own decision. It SHIPS DARK: every site is `off` unless named under
+`typesafe.sites` with another mode, and there is no live call at all unless
+`budget.monthly_usd` is set. An absent section means Jev is never called.
+
+```jsonc
+{
+  "typesafe": {
+    "key_path": "~/.claude/typesafe-api-token", // default: HOME/.claude/typesafe-api-token
+    "model": "jev-1.13.0",                      // default; pinned, never a -latest alias
+    "budget": {
+      "monthly_usd": 10.0,                      // NO default; absent = no live calls
+      "per_minute": 60                          // default 60
+    },
+    "state_dir": "~/.local/state/wurk/typesafe", // default: see below
+    "log_state": false,                         // default false
+    "restricted_sources": [],                   // default []
+    "sites": {                                  // site name -> entry; default: every site off
+      "some-site": { "mode": "shadow", "deadline_ms": 1500 }
+    }
+  }
+}
+```
+
+Keys, defaults, and how a bad value is treated:
+
+- **`key_path`** - a path to the file holding the API key, `~` expanded. A
+  non-string or blank value blocks. Default is
+  `~/.claude/typesafe-api-token` under the current HOME, so overriding HOME
+  is how a campaign points a run at a different config and key.
+- **`model`** - the pinned model id, default `jev-1.13.0`. A non-string or
+  blank value blocks, and so does an id ending in `-latest`: a floating id
+  cannot key a threshold, so the model is always pinned.
+- **`budget.monthly_usd`** - the monthly dollar cap for this machine, a
+  non-negative number. No default: dollars must be explicit, and without it
+  every live call is refused with `budget_unset`. A negative or non-numeric
+  value blocks.
+- **`budget.per_minute`** - the local request cap per minute, a positive
+  integer, default 60. Zero, a fraction or a non-number blocks.
+- **`state_dir`** - where the ledger and decision log live, `~` expanded.
+  Default is `${XDG_STATE_HOME:-$HOME/.local/state}/wurk/typesafe`, the same
+  convention as `hooks/harness-event.sh`. A non-string or blank value blocks.
+- **`log_state`** - whether decision lines may carry the state and question
+  text, a boolean, default `false`. Any other type blocks.
+- **`restricted_sources`** - source labels a caller must refuse to send, an
+  array of non-blank strings, default `[]`. Anything else blocks.
+- **`sites`** - an object of site name to entry. A name outside
+  `[a-z0-9][a-z0-9_-]{0,63}` blocks, as does a non-object entry. An entry
+  takes `mode` (`off`, `shadow` or `on`, default `off`) and `deadline_ms`
+  (an integer from 1 to 60000, default 1500). An unrecognized `mode` BLOCKS:
+  it selects whether text leaves the machine, and guessing is worse than
+  stopping. An out-of-range `deadline_ms` blocks. An unknown key inside an
+  entry warns (`typesafe.sites.<name>.<key>`).
+- **Unknown keys** elsewhere in the section warn and never block. The keys
+  of `sites` are site names, which are data: a new site never warns as an
+  unknown key, and adding one needs no kit change.
+
+### The key file
+
+`key_path` names a file; the key itself is never in this config, never
+logged, and never appears in any envelope, decision line or ledger line.
+Keep the file at mode 600. It is read only when a call is actually about to
+be made: every refusal that needs no key (site off, budget, rate) happens
+first.
+
+### Pricing
+
+The spend cap needs a price. The pinned model's row in `metrics.prices` must
+quote BOTH `input` and `output` (write `output: 0` if output is free);
+otherwise a live call is refused with `budget_exhausted` and reason
+`price_unknown`. An unknown price counts as could-not-measure, never free.
+
+`spend_unmeasurable` means this month's ledger holds a line that cannot be
+read as a number: a malformed line, or one with `cost_usd: null`. It refuses
+every later live call, because an unreadable spend is could-not-measure,
+never free. To clear it, check the provider's bill for the month, then fix
+or remove the malformed or null ledger line.
+
+An attempt that reports no usage (a timeout, a transport failure, most
+non-200 answers) is charged a conservative upper bound, never zero and
+never null, because the provider may still have billed it. The bound is the
+request body's byte count times the input price, plus a fixed allowance of
+output tokens per question times the output price. It assumes the token
+count never exceeds the request's byte count, which is generous for ordinary
+text.
+
+### The state directory
+
+`state_dir` holds one ledger file and one decision log per UTC month:
+`ledger-YYYY-MM.jsonl` and `decisions-YYYY-MM.jsonl`. The directory is
+created mode 700 and each file mode 600, appended one JSON line at a time.
+Decision lines carry outcome, reason, model, answers, token counts, cost and
+latency, and no text unless `log_state` is true.
+
+### What `check` reports
+
+`user_config.rb check` reports `data.typesafe_declared` (whether the section
+is present) and `data.typesafe_site_modes` (site name to mode, configured
+sites only). It deliberately reports neither the key path, the state dir nor
+any budget number: a lint envelope has no reason to carry a pointer at the
+key or the operator's dollars. Errors and warnings follow the block-or-warn
+rules above.
