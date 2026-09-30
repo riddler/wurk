@@ -1121,6 +1121,253 @@ script contract.
   and the CLI on the four-case worked corpus under
   `test/fixtures/critic_eval/`, which scores 0.5 / 0.5 on purpose.
 
+## typesafe.rb: the Jev client and the call-site contract
+
+The kit's client for TypeSafe's System One API (the Jev model: typed
+judgments - `choice`, `noul`, `score` - with probabilities, never free
+text). `lib/typesafe.rb` is what a call site requires (`Typesafe.judge`,
+`Typesafe.record_outcome`, `Typesafe.site_mode`, `Typesafe.threshold_key`);
+`typesafe.rb` is the CLI over it for shell callers, operators and smoke
+tests. This section is the contract every call site builds to. Its
+configuration is the machine config's `typesafe` section, documented in
+`docs/machine-config.md` ("typesafe"); no manifest is read, so the script
+works from any directory. It SHIPS DARK: every site is `off` unless the
+machine config names it with another mode.
+
+### Usage and `data` keys
+
+```
+typesafe.rb call    [--site NAME] --input PATH|-  [--dry-run]
+typesafe.rb outcome --call-id ID --site NAME --action LABEL
+                    [--decision LABEL] [--agreement agree|disagree|n/a] [--dry-run]
+```
+
+- **`call`** reads one JSON input (a file, or stdin with `--input -`):
+  `{state, questions: {id: {type, instructions, criteria?}}, question_set:
+  {id, version}, source?}`. `state` is a string, object or array; question
+  ids and the question-set id match `[a-z0-9][a-z0-9_-]{0,63}`; `version`
+  is a positive integer. `question_set` is required with `--site` and
+  optional without it (no `--site` is an ad-hoc probe call, mode `probe`).
+  `data`: `outcome`, `reason`, `call_id`, `site`, `mode`, `model` (the
+  pinned id), `served_model`, `answers`, `usage` (`input_tokens`,
+  `output_tokens`), `cost_usd`, `cost_estimated`, `elapsed_ms`,
+  `http_status`, `retry_after`, `threshold_key`, `dry_run`, and `request`
+  on a dry run. **A caller routes on `data.outcome` alone.** `ok` exits 0
+  with no block; any other outcome exits 1 with exactly one `blocked` entry
+  whose `code` equals `data.outcome`. `commands` holds
+  `POST https://api.typesafe.ai/v1/systemone` when the request was sent
+  (or, on a dry run, would be) - never a header.
+- **`outcome`** appends the caller's outcome line (below) for a `call_id`
+  the `call` envelope returned. `data`: `line`, `written`, `dry_run`.
+- **Usage errors exit 2 with no envelope:** no or unknown subcommand, an
+  unknown flag, `call` without `--input`, `outcome` without `--call-id`,
+  `--site` or `--action`, and a `--call-id`, `--action`, `--decision` or
+  `--agreement` value that breaks the label rule. `--help` (first, or
+  after a subcommand) prints usage and exits 0.
+- **Also blocked, outside the outcome set:** an invalid machine config
+  (`user_config_invalid`, with `data` empty), and a failure reading or
+  writing the state dir (`state_dir_error`, `needs: "human"`,
+  `data.outcome` null). The latter's message names only the exception
+  class, never a path, and a live call's spend may be missing from the
+  ledger. A caller treats both like any other non-`ok` outcome.
+- **An input the CLI cannot read or parse** is `input_invalid` (reason
+  `input`) and its message carries the parser's line and column when it
+  has them, or the read error's class - never the parser's message, which
+  quotes the input.
+
+### Modes
+
+- **`off`** (the default for every site, configured or not) - refused
+  first, as `site_off`: no input read, no ledger read, no key touched, no
+  log line, no request. This is every dark site's hot path.
+- **`shadow`** - call Jev, log its answer beside the caller's own
+  decision, and act on the caller's decision only.
+- **`on`** - the caller may act on Jev's answer, subject to the caller
+  rules below.
+- A mode outside these three blocks at config load (`user_config_invalid`
+  on every kit script that loads the machine config): the mode decides
+  whether text leaves the machine, so guessing is worse than stopping.
+
+### The closed outcome set
+
+| code | when | request sent? | `needs` |
+|---|---|---|---|
+| `ok` | 200, decodable, served model == pinned model | yes | - (not blocked) |
+| `site_off` | the site's mode is `off` | no | `none` |
+| `source_restricted` | input `source` is in `typesafe.restricted_sources` | no | `none` |
+| `input_invalid` | input unreadable, not JSON, or wrong shape; `reason` names the field | no | `human` |
+| `key_missing` | key file `absent`, `unreadable` or `blank` (the `reason`) | no | `human` |
+| `budget_exhausted` | `reason` `budget_unset`, `price_unknown`, `spend_unmeasurable` or `cap_reached` | no | `human` |
+| `rate_limited_local` | `per_minute` attempts already in the trailing 60 s | no | `none` |
+| `unauthorized` | 401 or 403 | yes | `human` |
+| `rejected` | 422 | yes | `human` |
+| `rate_limited` | 429; `retry_after` passed through (trimmed, at most 64 chars) when sent | yes | `none` |
+| `overloaded` | 529 | yes | `none` |
+| `other_status` | any other non-200 status | yes | `none` |
+| `timeout` | open, read or write timeout, or the overall deadline | yes | `none` |
+| `transport` | socket, DNS, TLS, refused/reset connection, EOF, anything unforeseen | yes | `none` |
+| `undecodable` | 200 but the body is not a JSON object, or `answers` is missing or not an object | yes | `none` |
+| `model_mismatch` | 200 but the response `model` is not the pinned model (or absent); answers discarded | yes | `human` |
+
+`needs: "none"` marks a refusal with nothing for a person to fix right
+now; `needs: "human"` marks a configuration or input a person has to
+change. For `timeout` and `transport`, `reason` is the exception class
+name only, never its message. The pre-call refusals run in a fixed order -
+mode, input, privacy, budget, local rate, key - and every one of them
+before the key file is touched.
+
+### The fallback rule
+
+**Any outcome other than `ok` means: do exactly what the site did before
+Jev existed, and log it.** A non-`ok` outcome is never read as a "no", a
+low score, or any other answer. Every block message ends by saying so.
+
+### One attempt, a hard deadline
+
+Exactly one HTTP attempt per call, no retries and no backoff - a 429 or
+529 is returned, not retried; the caller falls back. The attempt runs in
+a fresh `Net::HTTP.start` block (a new connection, closed when the block
+exits, never pooled or reused after a timeout), with the site's
+`deadline_ms` (default 1500, at most 60000; a probe call uses the
+default) as the open, read and write timeouts and as an overall
+`Timeout.timeout` guard.
+
+### Budget and rate
+
+- **Refusal reasons**, checked before any request: `budget_unset` (no
+  `typesafe.budget.monthly_usd` - no default; dollars are explicit),
+  `price_unknown`, `spend_unmeasurable`, `cap_reached`; then
+  `rate_limited_local` against `typesafe.budget.per_minute` (default 60),
+  counting this month's ledger lines in the trailing 60 s (and last
+  month's file across a month boundary).
+- **The price rule.** The pinned model's row in the machine config's
+  `metrics.prices` must quote BOTH `input` and `output` in USD per
+  million tokens (write `output: 0` when output is free). A missing row,
+  or a row missing either, is `price_unknown`: an unknown price is
+  could-not-measure, never free. The kit ships no price.
+- **Cost.** With usage in the response (any outcome, a `model_mismatch`
+  included), and only when both token counts are integers:
+  `input_tokens * input + output_tokens * output`, per million,
+  `cost_estimated: false`. Without it (timeouts, transport failures, most
+  non-200s, a 200 with no usage) the provider may still have billed, so the
+  ledger records a conservative bound with `cost_estimated: true`: the
+  request body's byte size at the input price, plus 256 output tokens per
+  question at the output price. **Assumption:** a token count never
+  exceeds the request's byte count - true of common tokenizers, unverified
+  for Jev's. Every attempt therefore gets a number, so one slow response
+  never turns the month unmeasurable.
+- **`cap_reached`** fires when this month's summed `cost_usd` plus this
+  request's bound would exceed `monthly_usd`.
+- **Unmeasurable spend.** A ledger line whose `cost_usd` is not a number,
+  or a line that is not a JSON object (reported as a `ledger_malformed`
+  warning with the count, from the client's `ledger_malformed:<count>`),
+  makes every later call refuse `spend_unmeasurable` for that month. The
+  client never writes a null cost, so this means a hand edit or a damaged
+  file. To clear it, an operator checks the provider's bill, then fixes or
+  removes the offending line.
+- **Two accepted overshoots.** The ledger is not locked across processes,
+  so concurrent callers can each pass a check only one of them should
+  have, bounded by one call's cost per racer; and the no-usage bound is
+  itself an estimate whose error can put spend past the cap by that
+  error.
+
+### The logs
+
+Both files live in the state dir (`typesafe.state_dir`, default
+`${XDG_STATE_HOME:-$HOME/.local/state}/wurk/typesafe`, created mode 700;
+files mode 600, one JSON object per line, one write per line), named by
+UTC month:
+
+- **`ledger-YYYY-MM.jsonl`** - one line per live attempt, written even if
+  the attempt raised: `ts`, `month`, `call_id`, `site`, `model`,
+  `outcome`, `cost_usd`, `cost_estimated`, `input_tokens`,
+  `output_tokens` (plus `reason` on `transport`). Pre-call refusals and
+  dry runs write no ledger line.
+- **`decisions-YYYY-MM.jsonl`**, `kind: "decision"` - one line per `call`
+  for every outcome except `site_off`, refusals included: `ts`,
+  `call_id`, `site`, `mode`, `question_set` (`{id, version}` or null),
+  `threshold_key`, `model`, `served_model`, `outcome`, `reason`,
+  `http_status`, `retry_after`, `answers`, `input_tokens`,
+  `output_tokens`, `cost_usd`, `latency_ms`. No `state`, `questions` or
+  `source` text unless `typesafe.log_state` is true - and never, even
+  then, on a `source_restricted` or `input_invalid` line.
+- **The same file, `kind: "outcome"`** - the caller's second line, from
+  `outcome` / `Typesafe.record_outcome`: `ts`, `call_id`, `site`,
+  `action`, `decision`, `agreement`. `action` and `decision` are labels
+  (`[A-Za-z0-9_.:-]{1,64}`), never prose, so caller text cannot enter the
+  log this way; `agreement` is `agree`, `disagree`, `n/a` or absent. In
+  shadow mode this line is where agreement between Jev and the caller is
+  recorded.
+- A dry run writes neither file.
+
+### Question sets and thresholds
+
+A question set is `{id, version}` in the input, carried beside the
+question text it versions. **Any change to a question's instructions or
+criteria is a new version.** A threshold is keyed by
+`Typesafe.threshold_key`: `<site>:<question-set id>@<version>:<pinned
+model>`, reported as `data.threshold_key`; a threshold stored for one key
+never applies to another, so a new version or a new pinned model starts
+unthresholded. Storing thresholds and sweeping them against a labelled
+corpus belong to the eval tooling, not this client.
+
+### Restricted sources
+
+A caller that may pass text from a restricted origin labels it with
+`source`. A source listed in `typesafe.restricted_sources` refuses as
+`source_restricted` in every mode, `shadow` included, before any text
+leaves the machine, and its decision line carries no text even with
+`log_state` on. An absent `source` is unlabelled and allowed, so labelling
+is the caller's duty: a site that can carry restricted text always sets
+it.
+
+### Caller rules every site follows
+
+- Jev may ADD caution - a hold, an escalation - and never remove one. Held
+  topics and hard stops stay in code.
+- Keep arithmetic, dates, counting and identity out of Jev; compute them in
+  code.
+- Send only text from a trusted author, never adversarial text.
+- A judgment on content that is later edited or cleared is invalidated in
+  the same write that changes the content.
+- Never apply thresholds from a partial eval run.
+- Route on `data.outcome`; apply the fallback rule to everything but
+  `ok`; write the outcome line after acting.
+
+### The model and the key
+
+- **The model is pinned:** `typesafe.model`, default `jev-1.13.0`, never a
+  `-latest` id (one blocks at config load). The request always names the
+  pinned id, and a response from any other model is `model_mismatch`, its
+  answers discarded.
+- **The key is a path, never the key:** `typesafe.key_path` (default
+  `~/.claude/typesafe-api-token` under the current HOME, mode 600). It is
+  read only after every other check passes, and never appears in any
+  envelope, log line, exception reason, warning or test output. A key file
+  readable by group or others adds a `key_mode_open` warning, never a
+  refusal. `--dry-run` shows the request with `Authorization: Bearer
+  [REDACTED]` and only checks that the key file exists (it never opens it,
+  so an unreadable or blank key surfaces on the first live call); a dry
+  run reports the outcome a live call would reach up to the request -
+  `site_off` on a dark site - sends nothing and writes nothing. The dry
+  run's `data.request.body` does carry the caller's own input back to the
+  caller; that is its purpose.
+
+### How the tests prove it without a socket
+
+`test/typesafe_test.rb` (the library) and `test/typesafe_cli_test.rb`
+(the CLI, in-process) run every case against `test/support/fake_http.rb`:
+a stand-in for `Net::HTTP.start` that replays scripted real
+`Net::HTTPResponse` objects, raises on any unscripted start, and records
+each attempt so every case asserts exactly one. Loading it also prepends a
+lock onto the real `Net::HTTP.start` for the whole test process, so a test
+that forgets the seam gets a loud `transport` /
+`FakeHTTP::RealNetworkForbidden` instead of a connection. The key is a
+random sentinel string in a tmp key file under a tmp HOME (the suite's
+HOME guard is in force); `XDG_STATE_HOME` and the state dir are pinned to
+tmpdirs; and every Result, envelope, captured stdout and stderr, ledger
+and decision file is swept for the sentinel.
+
 ## Writing a new script
 
 First check that a script is the right home at all:
