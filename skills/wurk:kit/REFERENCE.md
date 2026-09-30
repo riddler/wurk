@@ -1793,6 +1793,141 @@ is never read as an answer. Client warnings (`key_mode_open`,
   model>`), never a number the caller picks. Without one, `on` mode raises
   nothing (`no_threshold`).
 
+## typesafe_eval.rb: Jev eval, thresholds and the on-gate
+
+The evaluation tooling a Jev call site must pass before it may move from
+`shadow` to `on`: a labelled corpus per site and question set, a terminal
+labeller, a Wilson-bound threshold sweep, a read-only shadow-to-on gate and
+a small per-site fixture set. `lib/typesafe_eval.rb` (`TypesafeEval`) is the
+library; `typesafe_eval.rb` is the CLI over it. Every model call this tool
+makes goes through `Typesafe.judge`; it adds no HTTP path, no
+`user_config.rb` key, and no schedule, and it never writes a mode into any
+config. It SHIPS DARK: nothing here switches a site to `shadow` or `on`.
+Like `typesafe.rb` it reads no manifest, so it works from any directory. The
+pure math (Wilson bound, answer interpretation, the sweep) and the sections
+below on the run, the gate and the fixtures are described where they land;
+this part covers the corpus, redaction, the builder and the labeller.
+
+### Usage and `data` keys
+
+```
+typesafe_eval.rb corpus build --site NAME --question-set FILE --out PATH
+                 (--from-dir DIR [--glob PAT] --source LABEL | --from-jsonl FILE --source LABEL)...
+                 [--redact-key KEY]... [--dry-run]
+typesafe_eval.rb label --corpus PATH [--relabel] [--dry-run]
+```
+
+- `--help` exits 0 before touching any config. An unknown subcommand, a
+  missing required flag, or a source without `--source` exits 2 with plain
+  text on stderr and no envelope. `--glob` and `--source` apply to the most
+  recent `--from-dir` / `--from-jsonl` before them.
+- **`corpus build`** `data`: `site`, `question_set`, `question`, `cases`,
+  `redactions` (total), `labels_kept`, `digest`, `out`, `dry_run`. Never any
+  case text. `--dry-run` writes nothing. A refusal is one `blocked` entry
+  with `needs: "human"`, exit 1, and nothing written: `source_restricted`,
+  `output_inside_source`, `duplicate_case_id`, `bad_source_line` (the line
+  number only, never the text), `question_set_invalid` (the field name
+  only), `source_unreadable` (a source dir or file that cannot be read) and
+  `io_error`.
+- **`label`** prompts on stderr, reads answers on stdin, and prints one
+  envelope on stdout whose `data` is `labelled`, `skipped`, `remaining`,
+  `per_label`, `corpus` and `dry_run` - counts only, never state text.
+  `corpus_invalid` blocks a missing or non-corpus file.
+
+### The question-set file
+
+```json
+{"question_set": {"id": "...", "version": 1}, "question": "<qid>",
+ "questions": {"<qid>": {"type": "choice", "instructions": "...", "criteria": {"a": "...", "b": "..."}}}}
+```
+
+`question` names the one question a corpus evaluates. The file is checked
+with the client's own input rules (`Typesafe.validate_input`, with a
+placeholder state), then the question must be a `choice` with a non-empty
+`criteria` object (its labels are the keys) or a `noul` (labels `true` and
+`false`). A `score` question is refused. Any failure is
+`question_set_invalid`, naming the field.
+
+### The corpus file
+
+One JSON object, written atomically (a tmp file, then a rename) with mode
+600 and a trailing newline:
+
+```json
+{"format": 1, "site": "<site>", "question_set": {"id": "...", "version": 1},
+ "question": "<qid>", "questions": {"<qid>": {}}, "labels": ["a", "b"],
+ "redaction": {"keys": ["priority"], "labels": ["a", "b"]},
+ "cases": [{"id": "...", "source": "<label>", "state": "...",
+            "redactions": 1, "label": null}]}
+```
+
+`TypesafeEval.corpus_digest(corpus)` is the SHA-256 of the JSON of
+`[question_set, question, questions, labels, cases as [id, source, state,
+label]]`: a label, case text or question text change is a new digest, and
+rewriting the file unchanged is not. A case's `label` is the gold label a
+person gave it; `null` means unlabelled.
+
+### Redaction
+
+A corpus must not carry the label a source states about itself, or the eval
+would score the model on reading the answer. Redaction is applied to every
+string inside a case's state (objects and arrays are walked), before the
+corpus is written:
+
+- **R1, key-value.** For each `--redact-key K` (repeatable, matched
+  literally and case-insensitively), `K: value` or `K=value` keeps the key
+  and replaces the value up to the next `,` `;` `|` or end of line:
+  `Priority: LOW` becomes `Priority: [redacted]`. In an object state, a
+  member whose key is a redact key has its whole value replaced.
+- **R2, tagged label.** For each label of the question, a whole tag is
+  replaced: `[L]`, `(L)`, `{L}` and `#L` become `[redacted]`; `label: L`
+  and `label=L` become `label: [redacted]`.
+- Each replacement counts once toward `redactions`. A bare prose occurrence
+  of a label word is content and is kept. A source whose self-stated labels
+  take another shape needs a new rule with a test; the label list comes from
+  the question set and the keys are recorded in the corpus's `redaction`.
+
+### The builder
+
+A source is a directory (one case per matching regular file, glob default
+`**/*`, id = the path relative to the directory, state = the file text) or a
+JSONL file (one case per line, `{"id": "...", "state": <string, object or
+array>}`, blank lines ignored). Rules:
+
+- Every source needs a `--source` label. A label listed in
+  `typesafe.restricted_sources` refuses the whole build with
+  `source_restricted` BEFORE any source is opened, and nothing is written.
+- Sources are only read. The output path may not be a source file or lie
+  inside a source directory (`output_inside_source`); nothing is written next
+  to a source.
+- Case ids are unique across the corpus (`duplicate_case_id`; the message
+  names the source, never the id).
+- Rebuilding over an existing corpus at `--out` keeps the label of a case
+  whose id and redacted state are unchanged, and drops the label of a case
+  whose text changed, so labelling work is not thrown away.
+
+### The labeller
+
+`label` walks the cases with no label (all of them with `--relabel`). For
+each it prints the case id, its source, its redacted state and a numbered
+label menu on the prompt stream, then reads one line: a menu number or a
+label name records it; `s` skips; `q` or end of input stops; anything else
+re-prompts without recording. The corpus file is rewritten after each
+recorded label, so an interrupted session keeps every label given so far;
+`--dry-run` records nothing. It never shows a Jev answer (a corpus holds
+none), and its envelope carries counts only.
+
+### How the tests prove it
+
+`test/typesafe_eval_test.rb` (the library) and `test/typesafe_eval_cli_test.rb`
+(the CLI, in-process) run against synthetic text under
+`test/fixtures/typesafe_eval/`, a tmp HOME, a sentinel key file that is
+never read, and `FakeHTTP` as the only transport. The restricted-source
+tests prove "nothing was read" without stubbing `File`: the restricted
+source points at a path that does not exist (or a mode-000 file), so a
+builder that read first would report a read error instead of
+`source_restricted`.
+
 ## Writing a new script
 
 First check that a script is the right home at all:

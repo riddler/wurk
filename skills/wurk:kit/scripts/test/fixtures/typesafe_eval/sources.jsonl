@@ -1,0 +1,3 @@
+{"id": "jsonl-1", "state": "Reminder: the printer toner order goes out next month. Priority: LOW"}
+{"id": "jsonl-2", "state": {"title": "Payment job is down", "body": "Customers cannot check out; the on-call is paging the owner.", "priority": "HIGH"}}
+{"id": "jsonl-3", "state": ["Agenda for the sync", "Nothing urgent this week (low)", "Tagged {low}"]}

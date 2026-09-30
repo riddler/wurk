@@ -1,0 +1,14 @@
+{
+  "question_set": {"id": "note-urgency", "version": 1},
+  "question": "urgency",
+  "questions": {
+    "urgency": {
+      "type": "choice",
+      "instructions": "Decide how urgent the note is for its reader.",
+      "criteria": {
+        "low": "Nothing is blocked and no one is waiting on the reader.",
+        "high": "Someone is blocked or a deadline is close, and the reader must act soon."
+      }
+    }
+  }
+}
