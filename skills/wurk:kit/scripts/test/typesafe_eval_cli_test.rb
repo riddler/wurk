@@ -635,6 +635,79 @@ class TypesafeEvalCliTest < Minitest::Test
     end
   end
 
+  # ---- threshold lookup ------------------------------------------------------
+
+  def threshold_argv(labels, *extra)
+    ["threshold", "--key", KEY_OF, "--labels", labels, *extra]
+  end
+
+  # sabotage: report the smallest, or block on success
+  def test_threshold_prints_the_largest_of_the_named_labels
+    with_eval_home do
+      write_store(labels: { "blocked" => { "threshold" => 0.6 }, "stuck" => { "threshold" => 0.85 } })
+      before = listing(@home)
+      code, body, = run_cli(threshold_argv("blocked,stuck"))
+      assert_equal 0, code
+      assert_empty body["blocked"]
+      assert_equal 0.85, body["data"]["threshold"]
+      assert_equal({ "blocked" => 0.6, "stuck" => 0.85 }, body["data"]["labels"])
+      assert_equal KEY_OF, body["data"]["threshold_key"]
+      assert_nil body["data"]["reason"]
+      assert_equal false, body["data"]["dry_run"]
+      assert_equal before, listing(@home)
+      assert_empty @fake.calls
+    end
+  end
+
+  # sabotage: exit 1 or block when a label is n/a, or answer the other number
+  def test_threshold_na_is_exit_0_with_a_reason
+    with_eval_home do
+      code, body, = run_cli(threshold_argv("blocked,stuck"))
+      assert_equal 0, code
+      assert_empty body["blocked"]
+      assert_nil body["data"]["threshold"]
+      assert_equal "no_entry", body["data"]["reason"]
+      write_store(labels: { "blocked" => { "threshold" => 0.6 }, "stuck" => { "threshold" => nil } })
+      code, body, = run_cli(threshold_argv("blocked,stuck"))
+      assert_equal 0, code
+      assert_nil body["data"]["threshold"]
+      assert_equal "label_na", body["data"]["reason"]
+      assert_equal ["stuck"], body["data"]["na_labels"]
+      assert_equal({ "blocked" => 0.6, "stuck" => nil }, body["data"]["labels"])
+    end
+  end
+
+  # sabotage: write the store or the config under --dry-run
+  def test_threshold_dry_run_writes_nothing
+    with_eval_home do
+      write_store
+      before = listing(@home)
+      config_bytes = File.read(config_file)
+      code, body, = run_cli(threshold_argv("low", "--dry-run"))
+      assert_equal 0, code
+      assert_equal 0.5, body["data"]["threshold"]
+      assert_equal true, body["data"]["dry_run"]
+      assert_equal before, listing(@home)
+      assert_equal config_bytes, File.read(config_file)
+    end
+  end
+
+  # sabotage: accept a missing key, an empty label list or a blank label
+  def test_threshold_usage_errors_exit_2
+    [
+      ["threshold"], ["threshold", "--key", KEY_OF], ["threshold", "--labels", "low"],
+      ["threshold", "--key", "", "--labels", "low"], ["threshold", "--key", KEY_OF, "--labels", ""],
+      ["threshold", "--key", KEY_OF, "--labels", "low,"], ["threshold", "--key", KEY_OF, "--labels", "low,,high"],
+      ["threshold", "--key", KEY_OF, "--labels", "low", "extra"]
+    ].each do |argv|
+      code, body, out, err = run_cli(argv)
+      assert_equal 2, code, argv.inspect
+      assert_nil body
+      assert_empty out
+      refute_empty err
+    end
+  end
+
   def write_fixtures(path, labels: %w[low high])
     fixtures = labels.each_with_index.map do |label, i|
       { "id" => "fx-#{i}", "state" => "#{STATE_MARK} #{i}", "source" => "synthetic",

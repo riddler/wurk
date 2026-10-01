@@ -29,6 +29,7 @@ module TypesafeEvalCli
            typesafe_eval.rb run --corpus PATH [--dry-run]
            typesafe_eval.rb sweep --run PATH --corpus PATH [--apply] [--dry-run]
            typesafe_eval.rb gate --site NAME --question-set ID@VERSION
+           typesafe_eval.rb threshold --key THRESHOLD_KEY --labels L1[,L2...] [--dry-run]
            typesafe_eval.rb fixtures run --fixtures PATH [--dry-run]
            typesafe_eval.rb fixtures check --fixtures PATH... [--dry-run]
 
@@ -45,6 +46,7 @@ module TypesafeEvalCli
                   label: record nothing.
                   run: check the first case up to the request; send nothing.
                   sweep: with --apply, report the store entry; write nothing.
+                  threshold: accepted; it writes nothing anyway.
     run           send every labelled case through the client (probe calls,
                   the client's own budget) and write a run file under the
                   state dir. The first case that is not ok stops the run,
@@ -57,6 +59,10 @@ module TypesafeEvalCli
                   has an enabled threshold AND the shadow evidence bar is met
                   (>= 3 days, >= 35 accepted judgments, Wilson lower bound
                   >= 0.90 on shadow agreement). Advisory: it changes nothing.
+    threshold     read-only: the number a site's --threshold takes for the
+                  labels it routes on - the LARGEST of those labels' stored
+                  thresholds under the key, or n/a (null, exit 0) when any of
+                  them has none. n/a means: pass no --threshold.
     fixtures      run a site's synthetic fixture set on demand (run), or run
                   each set only when the model id changed since its last
                   run (check). Failure is exit 1 and a block; nothing is
@@ -65,7 +71,7 @@ module TypesafeEvalCli
   TEXT
   HELP_FLAGS = %w[--help -h].freeze
   REQUEST_COMMAND = "POST #{Typesafe::ENDPOINT}"
-  SUBCOMMANDS = %w[corpus label run sweep gate fixtures].freeze
+  SUBCOMMANDS = %w[corpus label run sweep gate threshold fixtures].freeze
 
   class << self
     def run(argv, io: $stdout, stdin: $stdin, prompt: $stderr, http_class: Net::HTTP, now: nil, sleeper: nil)
@@ -83,6 +89,7 @@ module TypesafeEvalCli
       when "run" then run_eval(argv, io, clock_args(http_class, now, sleeper))
       when "sweep" then run_sweep(argv, io, now)
       when "gate" then run_gate(argv, io, now)
+      when "threshold" then run_threshold(argv, io)
       else run_fixtures(argv, io, clock_args(http_class, now, sleeper))
       end
     end
@@ -425,6 +432,46 @@ module TypesafeEvalCli
         "#{report[:accepted]} accepted, #{report[:disagreed]} disagreed, #{report[:span_s]} s of span. " \
         "Keep collecting shadow evidence."
       end
+    end
+
+    # --- threshold ----------------------------------------------------------
+
+    def run_threshold(argv, io)
+      options, code = parse(argv, "threshold") do |opts, o|
+        opts.on("--key THRESHOLD_KEY", "the site's data.threshold_key") { |v| o[:key] = v }
+        opts.on("--labels L1,L2", "the labels the site routes on") { |v| o[:labels] = v }
+      end
+      return code if code
+
+      labels = threshold_labels(options[:labels])
+      key = options[:key]
+      unless key.is_a?(String) && !key.strip.empty? && labels
+        return usage_error("threshold needs --key THRESHOLD_KEY and --labels L1[,L2...]")
+      end
+
+      env = Envelope.new(script: "typesafe_eval")
+      config = UserConfig.require!(env)
+      return env.emit(io) unless config
+
+      fill_threshold(env, TypesafeEval.threshold_lookup(config: config, threshold_key: key, labels: labels),
+                     options)
+      env.emit(io)
+    end
+
+    # The comma-separated labels, or nil when the list is empty or has a
+    # blank item.
+    def threshold_labels(arg)
+      return nil unless arg.is_a?(String)
+
+      labels = arg.split(",", -1).map(&:strip)
+      labels.empty? || labels.any?(&:empty?) ? nil : labels.uniq
+    end
+
+    # n/a is an answer, not a failure: no block, exit 0.
+    def fill_threshold(env, report, options)
+      d = env.data
+      %i[threshold_key labels threshold reason na_labels].each { |k| d[k] = report[k] }
+      d[:dry_run] = options[:dry_run] ? true : false
     end
 
     # --- fixtures -----------------------------------------------------------

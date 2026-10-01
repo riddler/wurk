@@ -1500,9 +1500,11 @@ in `typesafe.rb`.
   and `on` alike (`source_restricted`, a fallback, no request).
 - **Threshold.** `--threshold` is the eval tooling's enabled threshold for
   `data.threshold_key` (`report_triage:report_triage@1:<pinned model>`),
-  never a number the conductor picks. Storing and sweeping thresholds
-  belongs to the eval tooling. Without one, `on` mode adds nothing
-  (`no_threshold`).
+  never a number the conductor picks: `data.threshold` from
+  `typesafe_eval.rb threshold --key <data.threshold_key> --labels
+  blocked,stuck` (the site routes on both), and no `--threshold` when that
+  is n/a. Storing and sweeping thresholds belongs to the eval tooling.
+  Without one, `on` mode adds nothing (`no_threshold`).
 
 ### The site pattern
 
@@ -1633,7 +1635,10 @@ so it is trusted-author text in the call-site contract's sense.
 - **`on`**: flag a candidate only when `jev_yes` meets `--threshold`,
   which is the eval tooling's enabled threshold for `data.threshold_key`
   (`bead_dedupe:bead_dedupe@1:<pinned model>`), never a number the caller
-  picks. Without one, nothing is flagged (`no_threshold`).
+  picks: `data.threshold` from `typesafe_eval.rb threshold --key
+  <data.threshold_key> --labels true` (a flag is a `true` answer), and no
+  `--threshold` when that is n/a. Without one, nothing is flagged
+  (`no_threshold`).
 - **One failure stops the run.** The first non-`ok` outcome - a refusal,
   a timeout, any error - is a `fallback` for that pair, the remaining
   candidates are `not_judged`, and nothing is flagged by that pair. A
@@ -1825,6 +1830,7 @@ typesafe_eval.rb label --corpus PATH [--relabel] [--dry-run]
 typesafe_eval.rb run   --corpus PATH [--dry-run]
 typesafe_eval.rb sweep --run PATH --corpus PATH [--apply] [--dry-run]
 typesafe_eval.rb gate  --site NAME --question-set ID@VERSION
+typesafe_eval.rb threshold --key THRESHOLD_KEY --labels L1[,L2...] [--dry-run]
 typesafe_eval.rb fixtures run   --fixtures PATH [--dry-run]
 typesafe_eval.rb fixtures check --fixtures PATH... [--dry-run]
 ```
@@ -2023,7 +2029,26 @@ stored number for that label or `nil` (no entry, an `n/a` label, an unknown
 label, an unreadable store). It is where the number a site acts on in `on`
 mode comes from (read by the site's caller for a `--threshold` flag, or by
 a library caller directly); it can only restrict, so every doubt is `nil`. A new question-set version or a new
-pinned model is a new key, so its thresholds start empty.
+pinned model is a new key, so its thresholds start empty. A site's caller
+reads it with the `threshold` subcommand below rather than picking a number.
+
+**The `threshold` subcommand.** `threshold --key K --labels L1[,L2...]` prints
+the one number a site's `--threshold` takes for the labels it routes on.
+`TypesafeEval.threshold_lookup(config:, threshold_key:, labels:)` reads the
+store once (the same read and per-label rule as `threshold_for`) and answers
+the LARGEST of the named labels' stored thresholds - the strictest, because a
+site compares one number against whichever routed label Jev answered - or
+`n/a` when ANY named label has none. It computes nothing from runs and is
+READ-ONLY: it opens no file for writing, and `--dry-run` is accepted and
+changes nothing. `n/a` is an answer, not an error: exit 0, no block, and the
+caller passes no `--threshold`. `data`: `threshold_key`, `labels` (each named
+label's stored number or `null`), `threshold` (the number or `null`),
+`reason` (`null` with a number; else `store_invalid`, `no_entry`, or the
+first n/a label's `label_na` - a label the sweep left n/a - or
+`unknown_label` - one the entry does not have), `na_labels`, `dry_run`.
+Exit 2 for a missing `--key`, an empty `--labels` or a blank label in it.
+Each site's section names its routed labels: `report_triage` routes on
+`blocked,stuck`, `bead_dedupe` on `true`.
 
 ### The on-gate
 
@@ -2090,7 +2115,8 @@ A site in `on` mode acts on a Jev answer only for an enabled label at or
 above its stored threshold. The number is always the store's entry for the
 call's `threshold_key`, never one the caller picks. The kit's sites
 (`report_triage.rb`, `bead_dedupe.rb`, `finding_severity.rb`) take it as
-`--threshold N` from their caller, who reads it from this store; a
+`--threshold N` from their caller, who reads it from this store with
+`typesafe_eval.rb threshold --key K --labels <the site's routed labels>`; a
 library caller can read it directly with
 `TypesafeEval.threshold_for(config:, threshold_key:, label:)`. Either way,
 interpret the answer (`TypesafeEval.interpret(answer, labels:)` gives

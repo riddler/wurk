@@ -6,6 +6,7 @@ require "securerandom"
 require "stringio"
 require "tmpdir"
 require "fileutils"
+require "minitest/mock"
 require_relative "../lib/typesafe_eval"
 require_relative "support/user_config_helper"
 require_relative "support/fake_http"
@@ -1266,6 +1267,121 @@ class TypesafeEvalGateTest < Minitest::Test
     File.write(File.join(@state_dir, "eval", "thresholds.json"), "garbage")
     assert_equal "no_enabled_threshold", gate(START)[:code]
     assert_equal "garbage", File.read(File.join(@state_dir, "eval", "thresholds.json"))
+  end
+
+  # ---- threshold lookup (the --threshold a site takes) -----------------------
+
+  LOOKUP_LABELS = { "low" => { "threshold" => 0.5 }, "mid" => { "threshold" => 0.7 },
+                    "high" => { "threshold" => nil, "reason" => "below_bound" } }.freeze
+
+  def lookup(labels, key: KEY, cfg: config)
+    TypesafeEval.threshold_lookup(config: cfg, threshold_key: key, labels: labels)
+  end
+
+  # sabotage: answer a number for a key the store has no entry for
+  def test_lookup_with_no_entry_for_the_key_is_na
+    report = lookup(%w[low])
+    assert_nil report[:threshold]
+    assert_equal "no_entry", report[:reason]
+    assert_equal({ "low" => nil }, report[:labels])
+    assert_equal %w[low], report[:na_labels]
+    write_store(labels: LOOKUP_LABELS, key: "review:note-urgency@1:jev-9")
+    assert_equal "no_entry", lookup(%w[low])[:reason]
+  end
+
+  # sabotage: read an n/a label as 0, or skip it
+  def test_lookup_of_an_na_label_is_na
+    write_store(labels: LOOKUP_LABELS)
+    report = lookup(%w[high])
+    assert_nil report[:threshold]
+    assert_equal "label_na", report[:reason]
+    assert_equal({ "high" => nil }, report[:labels])
+  end
+
+  # sabotage: treat a label the entry does not have as enabled
+  def test_lookup_of_an_unknown_label_is_na
+    write_store(labels: LOOKUP_LABELS)
+    report = lookup(%w[nope])
+    assert_nil report[:threshold]
+    assert_equal "unknown_label", report[:reason]
+    assert_equal %w[nope], report[:na_labels]
+  end
+
+  # sabotage: raise on an invalid store, or rewrite it
+  def test_lookup_of_an_invalid_store_is_na_and_leaves_it_alone
+    FileUtils.mkdir_p(File.join(@state_dir, "eval"))
+    path = File.join(@state_dir, "eval", "thresholds.json")
+    ["garbage", JSON.generate("format" => 2, "keys" => {})].each do |bytes|
+      File.write(path, bytes)
+      report = lookup(%w[low stuck])
+      assert_nil report[:threshold]
+      assert_equal "store_invalid", report[:reason]
+      assert_equal({ "low" => nil, "stuck" => nil }, report[:labels])
+      assert_equal bytes, File.read(path)
+    end
+  end
+
+  # sabotage: return the label map without the threshold, or a rounded one
+  def test_lookup_of_one_enabled_label_is_its_number
+    write_store(labels: LOOKUP_LABELS)
+    report = lookup(%w[low])
+    assert_equal 0.5, report[:threshold]
+    assert_nil report[:reason]
+    assert_empty report[:na_labels]
+    assert_equal({ "low" => 0.5 }, report[:labels])
+  end
+
+  # sabotage: pick the smallest (the most permissive) or the first label's
+  def test_lookup_of_two_enabled_labels_is_the_largest
+    write_store(labels: LOOKUP_LABELS)
+    [%w[low mid], %w[mid low]].each do |labels|
+      report = lookup(labels)
+      assert_equal 0.7, report[:threshold], labels.inspect
+      assert_equal({ "low" => 0.5, "mid" => 0.7 }, report[:labels])
+    end
+  end
+
+  # sabotage: ignore an n/a label and answer the other one's number
+  def test_lookup_with_one_of_two_labels_na_is_na
+    write_store(labels: LOOKUP_LABELS)
+    [%w[low high], %w[high low], %w[mid nope]].each do |labels|
+      report = lookup(labels)
+      assert_nil report[:threshold], labels.inspect
+      refute_nil report[:reason]
+    end
+    report = lookup(%w[low high])
+    assert_equal({ "low" => 0.5, "high" => nil }, report[:labels])
+    assert_equal %w[high], report[:na_labels]
+    assert_equal "label_na", report[:reason]
+  end
+
+  # sabotage: write the store, or create the eval dir, while looking up
+  def test_lookup_opens_nothing_for_writing
+    write_store(labels: LOOKUP_LABELS)
+    writes = []
+    trap = ->(*args, **_kw) { writes << args.first.to_s; raise "opened for writing" }
+    guarded_open = File.method(:open)
+    open_guard = lambda do |*args, **kw, &blk|
+      mode = args[1]
+      writing = mode.is_a?(Integer) ? (mode & (File::WRONLY | File::RDWR)).positive? : mode.to_s =~ /[wa+]/
+      if writing
+        writes << args.first.to_s
+        raise "opened for writing"
+      end
+      kw.empty? ? guarded_open.call(*args, &blk) : guarded_open.call(*args, **kw, &blk)
+    end
+    File.stub(:open, open_guard) do
+      File.stub(:write, trap) do
+        File.stub(:rename, trap) do
+          FileUtils.stub(:mkdir_p, trap) do
+            assert_equal 0.7, lookup(%w[low mid])[:threshold]
+            assert_nil lookup(%w[low high])[:threshold]
+            assert_nil lookup(%w[low], key: "other:x@1:m")[:threshold]
+          end
+        end
+      end
+    end
+    assert_empty writes
   end
 
   # ---- evidence counting ---------------------------------------------------
