@@ -319,9 +319,10 @@ change:
 
        ruby ~/.claude/skills/wurk:kit/scripts/finding_severity.rb --findings <file> --source repo:<repo dir basename>
 
-   adding `--threshold <n>` only when the eval tooling has an enabled
-   threshold for the site's `data.threshold_key`; never pick a number
-   yourself. `data.findings_by_level` is the count, by level, that a worker
+   with no `--threshold`: finding_severity has no eval-able threshold yet
+   (the eval tooling does not handle its score question), so `on` mode
+   raises nothing (`no_threshold`); never pick a number yourself.
+   `data.findings_by_level` is the count, by level, that a worker
    copies verbatim into its report as `reviewRound.findingsByLevel`. The
    site is off unless the operator's machine config says otherwise, and off
    still counts - from the agents' own ranks, in code, with nothing sent -
