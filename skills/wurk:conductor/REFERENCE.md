@@ -820,7 +820,10 @@ classification (`--conductor done|blocked|stuck`), the source label
 `repo:<repo directory basename>` (an operator restricts a repo by
 listing that label in `typesafe.restricted_sources`), and a
 `--threshold` only when the eval tooling has one enabled for the site's
-threshold key. The one output field the conductor routes on is
+threshold key: `data.threshold` from `typesafe_eval.rb threshold --key
+<data.threshold_key> --labels blocked,stuck`, never a number the
+conductor picks, and no `--threshold` when that is n/a (null). The one
+output field the conductor routes on is
 `data.add_needs_you`; everything else is journaled, and every fallback
 changes nothing.
 

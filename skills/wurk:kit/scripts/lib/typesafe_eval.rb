@@ -749,14 +749,57 @@ module TypesafeEval
   # label, an unreadable store). This is the read a site uses in on mode: it
   # can only restrict, so every doubt is nil.
   def self.threshold_for(config:, threshold_key:, label:)
-    store = read_store(config)
-    entry = store["keys"][threshold_key]
-    result = entry.is_a?(Hash) && entry["labels"].is_a?(Hash) ? entry["labels"][label] : nil
-    value = result.is_a?(Hash) ? result["threshold"] : nil
-    value.is_a?(Numeric) ? value : nil
+    entry = store_entry(read_store(config), threshold_key)
+    entry ? label_threshold(entry, label) : nil
   rescue Refusal
     nil
   end
+
+  # The one number a site's `--threshold` takes for the labels it routes on:
+  # the LARGEST of the named labels' stored thresholds (the strictest), or
+  # nil when ANY named label has none. Read-only: it reads the store and
+  # computes nothing from runs. Returns {threshold_key:, labels: {label =>
+  # number or nil}, threshold:, reason:, na_labels:}; `reason` is nil when
+  # there is a threshold, else store_invalid, no_entry, or the first n/a
+  # label's reason (label_na for a label the sweep left n/a, unknown_label
+  # for one the entry does not have). Every doubt is nil, never an error.
+  def self.threshold_lookup(config:, threshold_key:, labels:)
+    report = { threshold_key: threshold_key, labels: labels.to_h { |l| [l, nil] },
+               threshold: nil, reason: nil, na_labels: labels.dup }
+    begin
+      entry = store_entry(read_store(config), threshold_key)
+    rescue Refusal
+      return report.merge(reason: "store_invalid")
+    end
+    return report.merge(reason: "no_entry") unless entry
+
+    reasons = {}
+    labels.each do |label|
+      value = label_threshold(entry, label)
+      report[:labels][label] = value
+      reasons[label] = entry["labels"].key?(label) ? "label_na" : "unknown_label" if value.nil?
+    end
+    report[:na_labels] = reasons.keys
+    return report.merge(reason: reasons.values.first) unless reasons.empty?
+
+    report.merge(threshold: report[:labels].values.max)
+  end
+
+  # The store's entry for a key when it is readable (a Hash with a labels
+  # Hash), else nil.
+  def self.store_entry(store, threshold_key)
+    entry = store["keys"][threshold_key]
+    entry.is_a?(Hash) && entry["labels"].is_a?(Hash) ? entry : nil
+  end
+  private_class_method :store_entry
+
+  # One label's stored number in an entry, or nil (n/a or absent).
+  def self.label_threshold(entry, label)
+    result = entry["labels"][label]
+    value = result.is_a?(Hash) ? result["threshold"] : nil
+    value.is_a?(Numeric) ? value : nil
+  end
+  private_class_method :label_threshold
 
   def self.read_store(config)
     path = thresholds_path(config)

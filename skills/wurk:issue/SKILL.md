@@ -75,7 +75,10 @@ ruby ~/.claude/skills/wurk:kit/scripts/bead_dedupe.rb --title "Title here" \
 ```
 
 Add `--threshold <n>` only when the eval tooling has an enabled threshold
-for the site's `data.threshold_key`; never pick a number yourself. The site
+for the site's `data.threshold_key`; never pick a number yourself. The number
+is `data.threshold` from `ruby ~/.claude/skills/wurk:kit/scripts/typesafe_eval.rb
+threshold --key <data.threshold_key> --labels true` (the site flags only on a
+`true` answer); when it is n/a (null), pass no `--threshold`. The site
 is off unless the operator's machine config says otherwise, and off returns
 at once and reads nothing. Switching it is an operator act; never edit the
 machine config to turn it on.

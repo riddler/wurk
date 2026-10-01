@@ -1111,7 +1111,11 @@ stuck otherwise - run the kit's Jev site over it:
 
 adding `--threshold <n>` only when the eval tooling has an enabled
 threshold for the site's `data.threshold_key`; never pick a number
-yourself. The site is off unless the operator's machine config says
+yourself. The number is `data.threshold` from `ruby
+~/.claude/skills/wurk:kit/scripts/typesafe_eval.rb threshold --key
+<data.threshold_key> --labels blocked,stuck` (the two labels the site
+routes on); when it is n/a (null), pass no `--threshold`. The site is
+off unless the operator's machine config says
 otherwise, and off returns at once and changes nothing. Turning it to
 shadow or on is an operator act, never your judgement: never edit the
 machine config to switch it. Your own read of the report is
