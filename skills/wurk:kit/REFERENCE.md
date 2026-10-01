@@ -1793,9 +1793,11 @@ is never read as an answer. Client warnings (`key_mode_open`,
   findings off the wire by listing that label in
   `typesafe.restricted_sources`, which refuses in `shadow` and `on` alike
   (`source_restricted`, a fallback, no request).
-- **Threshold.** `--threshold` is the eval tooling's enabled threshold for
-  `data.threshold_key` (`finding_severity:finding_severity@1:<pinned
-  model>`), never a number the caller picks. Without one, `on` mode raises
+- **Threshold.** finding_severity has no eval-able threshold yet: its
+  question is a `score` question, which the eval tooling does not handle,
+  so nothing is ever stored under `data.threshold_key`
+  (`finding_severity:finding_severity@1:<pinned model>`). Callers pass no
+  `--threshold` and never pick a number themselves; `on` mode then raises
   nothing (`no_threshold`).
 
 ## typesafe_eval.rb: Jev eval, thresholds and the on-gate
@@ -2048,7 +2050,8 @@ first n/a label's `label_na` - a label the sweep left n/a - or
 `unknown_label` - one the entry does not have), `na_labels`, `dry_run`.
 Exit 2 for a missing `--key`, an empty `--labels` or a blank label in it.
 Each site's section names its routed labels: `report_triage` routes on
-`blocked,stuck`, `bead_dedupe` on `true`.
+`blocked,stuck`, `bead_dedupe` on `true`; `finding_severity` has no eval-able
+threshold yet (a `score` question), so it takes no `--threshold`.
 
 ### The on-gate
 
