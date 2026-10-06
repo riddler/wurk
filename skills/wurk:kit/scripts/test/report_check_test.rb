@@ -252,3 +252,144 @@ class ReportCheckTest < Minitest::Test
     end
   end
 end
+
+# --notes-dir: the caller writes each bead's notes to DIR/<bead-id>.txt and
+# the script cross-checks a complete report against the bead's last note.
+# The notes text below is the shape bd note stores and `bd show <id> --json`
+# returns: one note per line, verbatim, no stamp added by bd.
+class ReportCheckNotesTest < Minitest::Test
+  include ReportFixtures
+
+  def report(dir, id, status)
+    bare(dir, id, { "bead" => id, "status" => status, "gate" => "green" })
+  end
+
+  def notes(notes_dir, id, text)
+    FileUtils.mkdir_p(notes_dir)
+    File.write(File.join(notes_dir, "#{id}.txt"), text)
+  end
+
+  CLAIM = "2026-10-06 14:52Z claimed by conductor session c-1; dispatching a worker."
+
+  # sabotage (targeted run only): make ReportCheck.partial? match any note
+  # (return !note.nil?) -> the no-marker test below goes red; this one
+  # stays green, which is why both exist
+  def test_a_complete_report_with_a_partial_last_note_warns_naming_the_bead
+    Dir.mktmpdir do |dir|
+      notes_dir = File.join(dir, "notes")
+      path = report(dir, "zz-p1", "complete")
+      notes(notes_dir, "zz-p1", "#{CLAIM}\n[partial] worker: all but the sabotage test landed\n")
+      envelope, code = run_check("--notes-dir", notes_dir, dir)
+
+      assert_equal 0, code
+      assert envelope["ok"]
+      assert_empty envelope["blocked"]
+      assert_equal ["status_contradicts_notes"], codes(envelope, "warnings")
+      message = envelope["warnings"].first["message"]
+      assert_includes message, "zz-p1"
+      assert_includes message, path
+      assert_includes message, "\"complete\""
+      assert_includes message, "[partial] worker: all but the sabotage test landed"
+      assert_equal notes_dir, envelope["data"]["notes_dir"]
+    end
+  end
+
+  # sabotage (targeted run only): ReportCheck.partial? returning true for any
+  # note -> red (this complete report warns status_contradicts_notes)
+  def test_a_complete_report_with_no_marker_in_its_notes_does_not_warn
+    Dir.mktmpdir do |dir|
+      notes_dir = File.join(dir, "notes")
+      report(dir, "zz-c1", "complete")
+      notes(notes_dir, "zz-c1", "#{CLAIM}\nworker: implemented, gate green, verify pass run.\n" \
+                                "Request: https://forge.example/r/1\n")
+      envelope, code = run_check("--notes-dir", notes_dir, dir)
+
+      assert_equal 0, code
+      assert_empty envelope["warnings"]
+    end
+  end
+
+  # sabotage: cross-check every parsed report regardless of status -> red
+  # (the blocked report with a [partial] note warns)
+  def test_a_blocked_report_with_a_partial_note_does_not_warn
+    Dir.mktmpdir do |dir|
+      notes_dir = File.join(dir, "notes")
+      report(dir, "zz-b1", "blocked")
+      notes(notes_dir, "zz-b1", "#{CLAIM}\n[partial] stopped at the contract question\n")
+      envelope, code = run_check("--notes-dir", notes_dir, dir)
+
+      assert_equal 0, code
+      assert_empty envelope["warnings"]
+    end
+  end
+
+  # sabotage: scan every note instead of the last one -> red (an earlier
+  # [partial] note that a later note superseded warns)
+  def test_only_the_last_note_counts
+    Dir.mktmpdir do |dir|
+      notes_dir = File.join(dir, "notes")
+      report(dir, "zz-l1", "complete")
+      notes(notes_dir, "zz-l1", "[partial] first PR, one test left\nworker: last test landed, whole scope done\n\n")
+      envelope, = run_check("--notes-dir", notes_dir, dir)
+
+      assert_empty envelope["warnings"]
+    end
+  end
+
+  # The indented, right-padded `bd show <id>` rendering reads the same as
+  # the raw field. sabotage: drop the strip in ReportCheck.last_note -> red
+  # (the warning's quoted note carries the padding)
+  def test_the_indented_bd_show_rendering_reads_the_same
+    Dir.mktmpdir do |dir|
+      notes_dir = File.join(dir, "notes")
+      report(dir, "zz-r1", "complete")
+      notes(notes_dir, "zz-r1", "  first note    \n  [partial] one test left    \n")
+      envelope, = run_check("--notes-dir", notes_dir, dir)
+
+      assert_equal ["status_contradicts_notes"], codes(envelope, "warnings")
+      assert_includes envelope["warnings"].first["message"], "\"[partial] one test left\"."
+    end
+  end
+
+  # sabotage: block! instead of warn on a missing notes file -> red (exit 1)
+  def test_a_missing_notes_file_warns_notes_missing_and_never_blocks
+    Dir.mktmpdir do |dir|
+      notes_dir = File.join(dir, "notes")
+      FileUtils.mkdir_p(notes_dir)
+      report(dir, "zz-m1", "complete")
+      envelope, code = run_check("--notes-dir", notes_dir, dir)
+
+      assert_equal 0, code
+      assert envelope["ok"]
+      assert_empty envelope["blocked"]
+      assert_equal ["notes_missing"], codes(envelope, "warnings")
+      assert_includes envelope["warnings"].first["message"], "zz-m1"
+      assert_includes envelope["warnings"].first["message"], File.join(notes_dir, "zz-m1.txt")
+    end
+  end
+
+  # The envelope this script emitted before --notes-dir existed, captured
+  # from the unchanged script over these same fixtures, with the tmpdir
+  # replaced by __DIR__. sabotage: always set data.notes_dir, or add a key to
+  # each report entry -> red (the bytes differ)
+  BEFORE = '{"ok":true,"script":"report_check","data":{"paths":["__DIR__","__DIR__/zz-later-report.json"],' \
+           '"reports":[{"path":"__DIR__/zz-blk-report.json","exists":true,"parsed":true,"shape":"bare",' \
+           '"error":null,"findings_by_level":null},{"path":"__DIR__/zz-done-report.json","exists":true,' \
+           '"parsed":true,"shape":"bare","error":null,"findings_by_level":null},' \
+           '{"path":"__DIR__/zz-later-report.json","exists":false,"parsed":false,"shape":null,"error":null}],' \
+           '"checked":2,"unparseable":[]},"warnings":[{"code":"report_missing",' \
+           '"message":"no report file at __DIR__/zz-later-report.json yet"}],"blocked":[],"commands":[]}' \
+           "\n"
+
+  def test_without_the_flag_the_envelope_is_byte_identical
+    Dir.mktmpdir do |dir|
+      report(dir, "zz-done", "complete")
+      bare(dir, "zz-blk", { "bead" => "zz-blk", "status" => "blocked", "gate" => "red" })
+      notes(File.join(dir, "notes"), "zz-done", "[partial] would contradict if checked\n")
+      io = StringIO.new
+      ReportCheckCli.run([dir, File.join(dir, "zz-later-report.json")], io: io)
+
+      assert_equal BEFORE, io.string.gsub(dir, "__DIR__")
+    end
+  end
+end

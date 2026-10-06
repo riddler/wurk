@@ -907,6 +907,26 @@ The field is optional ("`finding_severity.rb`: the finding_severity Jev
 site"), so a report without it passes; each entry in `data.reports`
 carries `findings_by_level` as null (absent), `ok` or `malformed`.
 
+**`--notes-dir DIR`** adds one cross-check: worker status against the
+bead's notes. The script still runs no bd. The caller writes each
+bead's notes field (as `bd show <id> --json` returns it) to
+`DIR/<bead-id>.txt`. The bead id comes from the report's file name.
+`bd note` stores each note verbatim, one per line, with no stamp of its
+own. So the last non-blank line is the bead's last note, and
+surrounding whitespace is stripped so the indented `bd show` rendering
+reads the same. A parsed report with status `complete` whose last note
+contains the literal `[partial]` gets the `status_contradicts_notes`
+warning. It names the bead and the report path and quotes the status
+and the note. A complete report with no notes file gets
+`notes_missing`. Both are warnings, never blocks: the report is the
+worker's statement, and the conductor decides which of the two to
+record. Blocked and failed reports are not cross-checked, since a
+`[partial]` note agrees with them. An earlier `[partial]` note that a
+later note supersedes does not warn. With the flag, `data.notes_dir`
+echoes DIR. Without it, the envelope is byte-identical to the one this
+script emitted before the flag existed. The conductor's sweep passes
+the flag ("Sweep on every wake, and a heartbeat so wakes happen").
+
 ## `ready_idle.rb`: open requests that are green and idle
 
 ```sh
