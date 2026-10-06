@@ -555,6 +555,55 @@ class ManifestValidationTest < Minitest::Test
                  m.warnings.join("\n"))
   end
 
+  # --- repo.daemon_written_paths (wu-bjfq) -----------------------------------
+
+  # sabotage: drop the "repo.daemon_written_paths" DEFAULTS entry and the
+  # Array() in the accessor -> red (nil, not []). Absent must read as the
+  # empty list every reader treats as "behave as before the key existed".
+  def test_daemon_written_paths_defaults_to_empty
+    m = ManifestFixtures.load("valid")
+    assert_nil m.dig_raw("repo.daemon_written_paths")
+    assert_equal [], m.daemon_written_paths
+  end
+
+  def test_daemon_written_paths_reads_the_list_and_validates
+    m = ManifestFixtures.load_with("valid", "repo" => { "daemon_written_paths" => ["log/", "ledger.md"] })
+    assert m.valid?, m.errors.inspect
+    assert_equal ["log/", "ledger.md"], m.daemon_written_paths
+  end
+
+  # sabotage: forget to add "daemon_written_paths" to KNOWN["repo"] -> red
+  def test_daemon_written_paths_is_not_an_unknown_key
+    m = ManifestFixtures.load_with("valid", "repo" => { "daemon_written_paths" => ["ledger.md"] })
+    refute_match(/unknown key repo\.daemon_written_paths/, m.warnings.join("\n"))
+  end
+
+  # sabotage: drop validate_daemon_written_paths -> red (all four)
+  def test_daemon_written_paths_must_be_a_list
+    m = ManifestFixtures.load_with("valid", "repo" => { "daemon_written_paths" => "ledger.md" })
+    refute m.valid?
+    assert_match(/repo\.daemon_written_paths must be a list of non-empty strings/, m.errors.join("\n"))
+  end
+
+  def test_daemon_written_paths_entries_must_be_non_empty_strings
+    ["", 3, nil].each do |bad|
+      m = ManifestFixtures.load_with("valid", "repo" => { "daemon_written_paths" => ["ledger.md", bad] })
+      refute m.valid?, "#{bad.inspect} should not validate"
+      assert_match(/repo\.daemon_written_paths entries must be non-empty strings/, m.errors.join("\n"))
+    end
+  end
+
+  # An entry matching the whole repo would make every dirty file a
+  # daemon's: the preflight's dirty-tree refusal switched off by another
+  # name.
+  def test_daemon_written_paths_rejects_a_whole_repo_entry
+    ["/", "."].each do |whole|
+      m = ManifestFixtures.load_with("valid", "repo" => { "daemon_written_paths" => [whole] })
+      refute m.valid?, "#{whole.inspect} should not validate"
+      assert_match(/matches the whole repo/, m.errors.join("\n"))
+    end
+  end
+
   # --- parallelism.preflight (wu-yi7.3) --------------------------------------
 
   # sabotage: drop "parallelism.preflight" from DEFAULTS -> red. Absent must

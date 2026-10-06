@@ -5,6 +5,7 @@ require "json"
 require "stringio"
 require "tmpdir"
 require "fileutils"
+require "open3"
 require_relative "../worktree_create"
 require_relative "support/manifest_helper"
 require_relative "support/fake_sh"
@@ -1332,6 +1333,235 @@ class WorktreeCreateTest < Minitest::Test
 
       assert_equal 1, code
       assert_equal "preflight_refused", env["blocked"].first["code"]
+    end
+  end
+
+  # --- repo.daemon_written_paths: a daemon's in-flight edit (wu-bjfq) -------
+  #
+  # A self-committing daemon in the main checkout appends to a tracked file
+  # and commits it itself. Its uncommitted edit is not an operator's to
+  # judge, so the preflight reports it (data.preflight.ignored_dirty),
+  # never stashes it - not even under --stash-dirty - and, when it is what
+  # blocks the fast-forward, refuses with "wait for the daemon" instead of
+  # offering a stash.
+  #
+  # These run against REAL git in throwaway repos under a tmpdir, never the
+  # checkout the suite runs from: what is under test is whether git leaves
+  # the daemon's bytes alone, and a FakeSh answer would only assert what
+  # the test author believes git does. The FakeSh tests above are the
+  # key-absent half: every one of them registers the exact command
+  # sequence, so a key-absent run that issued even one extra git command
+  # would raise UnexpectedCommand there.
+
+  DAEMON_APPEND = "daemon line, not yet committed\n"
+
+  def git!(dir, *args)
+    out, status = Open3.capture2e("git", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                                  "-c", "commit.gpgsign=false", *args, chdir: dir)
+    raise "git #{args.join(' ')} failed in #{dir}: #{out}" unless status.success?
+
+    out
+  end
+
+  # An origin with three tracked files and a clone of it acting as the main
+  # checkout, with a manifest whose gate is `true` and that has no trust or
+  # warm steps, so the only commands the script runs are git's.
+  #
+  # The script's own git children inherit ENV, so for the block ENV is
+  # scrubbed: no GIT_DIR or friends from whatever runs this suite (a hook
+  # that runs the gate exports them, and they would point every command
+  # here at the real checkout), no operator git config, no CLAUDE_CODE_*
+  # variables, and a fixed identity for the stash commit.
+  GIT_SCRUB = { "GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_COMMON_DIR" => nil, "GIT_INDEX_FILE" => nil,
+                "GIT_CONFIG_NOSYSTEM" => "1", "GIT_CONFIG_GLOBAL" => File::NULL,
+                "GIT_AUTHOR_NAME" => "t", "GIT_AUTHOR_EMAIL" => "t@example.invalid",
+                "GIT_COMMITTER_NAME" => "t", "GIT_COMMITTER_EMAIL" => "t@example.invalid" }.freeze
+
+  def with_scrubbed_git_env
+    scrub = GIT_SCRUB.merge(ENV.keys.grep(/\ACLAUDE_CODE_/).to_h { |k| [k, nil] })
+    saved = scrub.keys.to_h { |k| [k, ENV[k]] }
+    scrub.each { |k, v| ENV[k] = v }
+    yield
+  ensure
+    saved&.each { |k, v| ENV[k] = v }
+  end
+
+  def with_daemon_repos(daemon_written: nil, &block)
+    with_scrubbed_git_env { build_daemon_repos(daemon_written, &block) }
+  end
+
+  def build_daemon_repos(daemon_written)
+    Sh.runner = nil
+    Dir.mktmpdir do |tmp|
+      origin = File.join(tmp, "origin")
+      FileUtils.mkdir_p(File.join(origin, "log"))
+      git!(origin, "init", "-q", "-b", "main")
+      File.write(File.join(origin, "log", "decisions.md"), "first decision\n")
+      File.write(File.join(origin, "ledger.md"), "ledger\n")
+      File.write(File.join(origin, "notes.md"), "notes\n")
+      git!(origin, "add", ".")
+      git!(origin, "commit", "-q", "-m", "init")
+      clone = File.join(tmp, "myrepo")
+      git!(tmp, "clone", "-q", origin, clone)
+
+      raw = JSON.parse(File.read(fixture_path(FIXTURE)))
+      raw["gate"] = { "full" => ["true"], "loop" => ["true"] }
+      raw["parallelism"] = { "model" => "worktree-per-issue", "worktrees_dir" => "../zz-worktrees" }
+      raw["repo"] = { "daemon_written_paths" => daemon_written } if daemon_written
+      manifest = Manifest.new(path: File.join(clone, ".claude", "wurk.json"), raw: raw)
+
+      with_manifest(manifest) do
+        Dir.chdir(clone) { yield origin, clone, File.join(tmp, "zz-worktrees") }
+      end
+    end
+  end
+
+  # Moves origin's main by one commit that rewrites each named file.
+  def advance_origin(origin, *files)
+    files.each { |f| File.write(File.join(origin, f), "#{File.read(File.join(origin, f))}upstream change\n") }
+    git!(origin, "commit", "-q", "-am", "upstream")
+    git!(origin, "rev-parse", "HEAD").strip
+  end
+
+  def append(clone, file, text = DAEMON_APPEND)
+    path = File.join(clone, file)
+    File.write(path, File.read(path) + text)
+    File.read(path)
+  end
+
+  def local_main(clone)
+    git!(clone, "rev-parse", "refs/heads/main").strip
+  end
+
+  # The case the key exists for: the daemon's append sits uncommitted while
+  # the remote moves on elsewhere. The fast-forward goes through, the path
+  # is named under ignored_dirty (a directory-prefix entry matching it), and
+  # the daemon's bytes are exactly what they were.
+  #
+  # sabotage: drop the pre-fast-forward daemon read -> red (ignored_dirty
+  # missing). sabotage: stash daemon-owned paths along with the rest ->
+  # red in test_stash_dirty_never_stashes_a_daemon_written_path.
+  def test_daemon_written_dirty_path_is_reported_and_left_untouched_by_the_fast_forward
+    with_daemon_repos(daemon_written: ["log/"]) do |origin, clone, worktrees_root|
+      remote_sha = advance_origin(origin, "notes.md")
+      before = append(clone, "log/decisions.md")
+
+      code, env = run_create(["zz-abc-new-thing"])
+
+      assert_equal 0, code, env.inspect
+      assert_equal "fast_forwarded", env["data"]["preflight"]["status"]
+      assert_equal ["log/decisions.md"], env["data"]["preflight"]["ignored_dirty"]
+      assert_equal remote_sha, local_main(clone)
+      assert_equal before, File.read(File.join(clone, "log", "decisions.md"))
+      assert_equal "", git!(clone, "stash", "list")
+      assert Dir.exist?(File.join(worktrees_root, "zz-abc-new-thing"))
+    end
+  end
+
+  # The same tree with the key absent. Plain `git merge --ff-only` already
+  # leaves a dirty path the incoming commits do not touch alone, so this
+  # fast-forwards too - the key adds the report and the stash exclusion,
+  # not a pass the preflight did not already give. What must not change is
+  # the envelope: no ignored_dirty when nothing is declared.
+  def test_without_the_key_the_same_tree_fast_forwards_and_reports_no_ignored_dirty
+    with_daemon_repos do |origin, clone, _worktrees_root|
+      remote_sha = advance_origin(origin, "notes.md")
+      append(clone, "log/decisions.md")
+
+      code, env = run_create(["zz-abc-new-thing"])
+
+      assert_equal 0, code, env.inspect
+      assert_equal "fast_forwarded", env["data"]["preflight"]["status"]
+      refute env["data"]["preflight"].key?("ignored_dirty")
+      assert_equal remote_sha, local_main(clone)
+    end
+  end
+
+  # The remote changed the very file the daemon has dirty: git refuses the
+  # fast-forward on its own and the key does not argue with it. The
+  # refusal names the path as daemon-written and offers no stash.
+  def test_a_daemon_written_path_the_remote_also_changed_refuses_and_names_it
+    with_daemon_repos(daemon_written: ["ledger.md"]) do |origin, clone, worktrees_root|
+      old_main = local_main(clone)
+      advance_origin(origin, "ledger.md")
+      before = append(clone, "ledger.md")
+
+      code, env = run_create(["zz-abc-new-thing"])
+
+      assert_equal 1, code
+      assert_equal "preflight_refused", env["blocked"].first["code"]
+      assert_equal "fast_forward_failed", env["data"]["preflight"]["reason"]
+      assert_equal ["ledger.md"], env["data"]["preflight"]["ignored_dirty"]
+      refute env["data"]["preflight"].key?("dirty_paths")
+      refute env["data"]["preflight"].key?("repair")
+      assert_match(/ledger\.md is daemon-written \(repo\.daemon_written_paths\)/, env["blocked"].first["message"])
+      assert_equal old_main, local_main(clone)
+      assert_equal before, File.read(File.join(clone, "ledger.md"))
+      refute Dir.exist?(File.join(worktrees_root, "zz-abc-new-thing"))
+    end
+  end
+
+  # A listed path does not cover for an unlisted one: the operator's edit
+  # in the way refuses exactly as it would with no key, and the stash the
+  # refusal offers names only the operator's path.
+  #
+  # sabotage: treat every dirty path as daemon-owned (daemon_owned returns
+  # `paths`) -> red (dirty_paths empty, notes.md under ignored_dirty).
+  def test_a_dirty_path_off_the_list_refuses_even_with_another_listed
+    with_daemon_repos(daemon_written: ["ledger.md"]) do |origin, clone, _worktrees_root|
+      old_main = local_main(clone)
+      advance_origin(origin, "notes.md")
+      append(clone, "notes.md", "operator edit\n")
+      append(clone, "ledger.md")
+
+      code, env = run_create(["zz-abc-new-thing"])
+
+      assert_equal 1, code
+      assert_equal "fast_forward_failed", env["data"]["preflight"]["reason"]
+      assert_equal ["notes.md"], env["data"]["preflight"]["dirty_paths"]
+      assert_equal ["ledger.md"], env["data"]["preflight"]["ignored_dirty"]
+      repair = env["data"]["preflight"]["repair"]
+      assert_includes repair, "-- notes.md"
+      refute_includes repair, "ledger.md"
+      assert_equal old_main, local_main(clone)
+    end
+  end
+
+  # --stash-dirty stashes the operator's edit and never the daemon's: the
+  # retry fast-forwards, the stash holds notes.md alone, and the daemon's
+  # append is still in the working tree, byte for byte.
+  def test_stash_dirty_never_stashes_a_daemon_written_path
+    with_daemon_repos(daemon_written: ["ledger.md"]) do |origin, clone, _worktrees_root|
+      remote_sha = advance_origin(origin, "notes.md")
+      append(clone, "notes.md", "operator edit\n")
+      before = append(clone, "ledger.md")
+
+      code, env = run_create(["zz-abc-new-thing", "--stash-dirty"])
+
+      assert_equal 0, code, env.inspect
+      assert_equal "fast_forwarded", env["data"]["preflight"]["status"]
+      assert_equal ["notes.md"], env["data"]["preflight"]["stash"]["paths"]
+      assert_equal ["ledger.md"], env["data"]["preflight"]["ignored_dirty"]
+      assert_equal "notes.md", git!(clone, "stash", "show", "--name-only", "stash@{0}").strip
+      assert_equal before, File.read(File.join(clone, "ledger.md"))
+      assert_equal remote_sha, local_main(clone)
+    end
+  end
+
+  # With only daemon-written paths in the way, --stash-dirty has nothing it
+  # may stash: no stash is made and the refusal stands.
+  def test_stash_dirty_with_only_a_daemon_written_path_in_the_way_stashes_nothing
+    with_daemon_repos(daemon_written: ["ledger.md"]) do |origin, clone, _worktrees_root|
+      advance_origin(origin, "ledger.md")
+      before = append(clone, "ledger.md")
+
+      code, env = run_create(["zz-abc-new-thing", "--stash-dirty"])
+
+      assert_equal 1, code
+      assert_equal "fast_forward_failed", env["data"]["preflight"]["reason"]
+      refute env["data"]["preflight"].key?("stash")
+      assert_equal "", git!(clone, "stash", "list")
+      assert_equal before, File.read(File.join(clone, "ledger.md"))
     end
   end
 
