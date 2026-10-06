@@ -2155,6 +2155,17 @@ word-split comes back blocked `argv_unsplit`).
 NON-CONTENDING GATES: the explicit negative - "NO semaphore, no lock
 dir, no slots - gate measured at Ns; run it foreground and build no
 coordination around it.">
+<Current-main slot - per dispatch, fill exactly one, never leave it
+empty, never copy it from the file. "CURRENT MAIN: <sha>, suite <N>
+runs / <F> failures / <S> skips (<who measured it>, <time>)", taken
+from the last gate run on main after the latest landing (Repeat the
+gate after landing): the suite's own summary line, or data.tests from
+gate.rb once the envelope carries it. Any count the invariant block
+holds is the Phase 0 number and is labelled "Phase 0" there; it is
+history, not a baseline. If nothing has landed since Phase 0, say so
+and give the Phase 0 count under that name. A worker whose own count
+differs from this slot reports the delta against this slot, not against
+Phase 0 - a moved baseline is not a mystery to explain.>
 <Known-flake slot.> Never truncate a failing gate.
 
 MECHANICS: Append-only bead notes (bd note). Absolute paths. Branch
@@ -2200,7 +2211,9 @@ carry three things:
   binding.** Absolute, so the worker reads it without guessing, and
   "binding" said plainly, so it is not taken for background reading.
 - **Every PER-DISPATCH slot, filled inline**: bead id, repo dir,
-  ground-truth delta, the moved-files slot or its explicit negative,
+  ground-truth delta, the current-main slot (sha and test count as of
+  the last post-landing gate), the moved-files slot or its explicit
+  negative,
   the per-repo hazard slot, the model tier and its one-line reason,
   the stacking base, the mode/MR authorization, and the report file
   path.
@@ -2218,6 +2231,15 @@ stop. Read the list above as the boundary, and when a slot's value
 turns out to be the same for every bead in a campaign, that is a
 coincidence of that campaign and not a reason to move it into the
 file.
+
+**The test count is per dispatch, never carried.** The file may keep the
+count measured at Phase 0, labelled as Phase 0, because that run sized
+the gate budget. Main's count moves with every landing, so the file
+never states a current one: the current-main slot does, re-read from
+the last post-landing gate for each dispatch. A worker that carried the
+file's number past a landing once chased a gap that was only the moved
+baseline; the slot, and the rule that a differing count is reported as
+a delta against the slot, are what prevent it.
 
 **The SCOPE slot is derived, never carried.** A campaign's block once
 carried its predecessor's "<path> untouched" fence forward unchanged,
