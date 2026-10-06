@@ -5,6 +5,7 @@ require_relative "lib/envelope"
 require_relative "lib/sh"
 require_relative "lib/cli"
 require_relative "lib/manifest"
+require_relative "lib/gate_paths"
 
 # WorktreeCreate replaces /new-worktree Steps 1-4 (Guard, create the worktree
 # and branch, trust it with mise, warm the build caches, verify green) - see
@@ -29,7 +30,7 @@ module WorktreeCreate
         opts.on("--base REF", "cut the branch from REF instead of the default branch (stacked work: the parent branch)") do |v|
           options[:base] = v
         end
-        opts.on("--stash-dirty", "preflight: when uncommitted edits to tracked files block the fast-forward, stash them (named, reported) and retry") do
+        opts.on("--stash-dirty", "preflight: when uncommitted edits to tracked files block the fast-forward, stash them (named, reported; never a repo.daemon_written_paths path) and retry") do
           options[:stash_dirty] = true
         end
       end
@@ -238,8 +239,9 @@ module WorktreeCreate
     # whole campaign on a stray edit outside its footprint - a measured
     # incident cost two campaigns one night. It is off by default because a
     # human at the keyboard should decide about their own edits. It never
-    # stashes untracked files, and a fast-forward that still fails after
-    # the stash refuses exactly as before.
+    # stashes untracked files or a repo.daemon_written_paths path, and a
+    # fast-forward that still fails after the stash refuses exactly as
+    # before.
     def preflight(env, manifest, root:, dry_run:, fetched:, stash_dirty: false)
       default = manifest.default_branch
       remote = manifest.remote_default_branch
@@ -304,13 +306,38 @@ module WorktreeCreate
         return true
       end
 
+      # repo.daemon_written_paths (wu-bjfq): a dirty path on that list is a
+      # daemon's in-flight edit, which the daemon commits itself. It is
+      # reported, never stashed and never offered for stashing. With the key
+      # empty (the default) none of this runs and the preflight issues
+      # exactly the commands it did before the key existed.
+      #
+      # Note what the key does NOT do: `git merge --ff-only` already leaves
+      # a dirty path the incoming commits do not touch alone and succeeds,
+      # and refuses on its own when they do touch it. Nothing here weakens
+      # that refusal - a daemon's edit to a file the remote also changed
+      # waits for the daemon to commit it, as it always had to.
+      daemon = manifest.daemon_written_paths
+      if checkout && !daemon.empty?
+        ignored = daemon_owned(dirty_tracked_paths(env, root), daemon)
+        report["ignored_dirty"] = ignored unless ignored.empty?
+      end
+
       ff_res = Sh.run(ff, chdir: root, envelope: env)
       unless ff_res.success?
         # Only a checked-out default can be blocked by a dirty tree
         # (update-ref touches no working tree), and only tracked edits are
         # ever stashed: an untracked file in the way stays a refusal.
-        dirty = checkout ? dirty_tracked_paths(env, root) : []
+        all_dirty = checkout ? dirty_tracked_paths(env, root) : []
+        ignored = daemon_owned(all_dirty, daemon)
+        dirty = all_dirty - ignored
         report["dirty_paths"] = dirty unless dirty.empty?
+        if ignored.empty?
+          report.delete("ignored_dirty")
+        else
+          report["ignored_dirty"] = ignored
+        end
+        daemon_note = daemon_wait_note(ignored)
 
         if dirty.empty? || !stash_dirty
           unless dirty.empty?
@@ -318,7 +345,7 @@ module WorktreeCreate
           end
           return refuse_preflight(
             env, report, "fast_forward_failed",
-            err_or(ff_res, "#{Sh.render(ff)} failed") + "; local #{default} is still behind #{remote}"
+            err_or(ff_res, "#{Sh.render(ff)} failed") + "; local #{default} is still behind #{remote}" + daemon_note
           )
         end
 
@@ -349,7 +376,7 @@ module WorktreeCreate
           return refuse_preflight(
             env, report, "fast_forward_failed",
             err_or(retry_res, "#{Sh.render(ff)} failed") + " after stashing #{dirty.join(', ')} (#{report['stash']['restore']}); " \
-            "local #{default} is still behind #{remote}"
+            "local #{default} is still behind #{remote}" + daemon_note
           )
         end
       end
@@ -365,6 +392,23 @@ module WorktreeCreate
       return [] unless res.success?
 
       res.out.to_s.each_line.map { |line| line.chomp[3..].to_s.split(" -> ").last.to_s.strip }.reject(&:empty?)
+    end
+
+    # The subset of `paths` that repo.daemon_written_paths claims, in the
+    # order git listed them.
+    def daemon_owned(paths, entries)
+      return [] if entries.empty?
+
+      paths.select { |path| entries.any? { |entry| GatePaths.match_one?(path, entry) } }
+    end
+
+    # The refusal's tail when a daemon-written path is among the dirty ones:
+    # the remedy is the daemon's commit, never a stash, so say so.
+    def daemon_wait_note(paths)
+      return "" if paths.empty?
+
+      "; #{paths.join(', ')} #{paths.length == 1 ? 'is' : 'are'} daemon-written (repo.daemon_written_paths) " \
+        "and never stashed: wait for the daemon to commit, then retry"
     end
 
     def stash_command(default, paths)

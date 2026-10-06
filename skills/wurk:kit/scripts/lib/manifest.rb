@@ -95,7 +95,7 @@ class Manifest
   KNOWN = {
     nil => %w[wurk repo beads forge gate parallelism tmux models artifacts commits changelog release judge rebase
              mr external_tracker],
-    "repo" => %w[default_branch],
+    "repo" => %w[default_branch daemon_written_paths],
     "beads" => %w[prefix topology sync scan_refusal areas],
     "beads.areas" => %w[labels lands_alone always_batchable],
     "forge" => %w[kind host labels ready_idle_hours],
@@ -126,6 +126,7 @@ class Manifest
 
   DEFAULTS = {
     "repo.default_branch" => "main",
+    "repo.daemon_written_paths" => [].freeze,
     "beads.topology" => "beads",
     # Deliberately NOT the most common value. See validate_beads_sync and
     # docs/manifest.md: an absent key must never be able to cause a push.
@@ -272,6 +273,19 @@ class Manifest
   # rather than spelled into each script's argv.
   def default_branch
     fetch("repo.default_branch")
+  end
+
+  # Tracked paths a daemon running in the main checkout writes and commits
+  # on its own (wu-bjfq): an uncommitted edit to one of them is that
+  # daemon's in-flight work, not an operator's edit to judge or stash. This
+  # is the ONE key for that fact - worktree_create.rb's preflight reads it
+  # today, and a gate-side tree-write check reads the same key rather than
+  # growing a second one. Entries use the gate path-list matching rule
+  # (GatePaths.match_one?: a trailing "/" is a directory prefix, anything
+  # else an exact path; no globbing). Defaults to [], under which every
+  # reader behaves exactly as it did before the key existed.
+  def daemon_written_paths
+    Array(fetch("repo.daemon_written_paths"))
   end
 
   # The same branch on the shared remote. The remote name is not configurable
@@ -920,6 +934,7 @@ class Manifest
     validate_commands
     validate_regex_lists
     validate_default_branch
+    validate_daemon_written_paths
     validate_beads_sync
     validate_forge_host
     validate_ready_idle_hours
@@ -954,6 +969,28 @@ class Manifest
 
     errors << "#{path}: repo.default_branch must be a git branch name " \
               "(letters, digits, '.', '_', '/', '-'; no leading '-'), got #{value.inspect}"
+  end
+
+  # A list of non-empty path strings, and never the whole repo: an entry
+  # matching every path would make every dirty file a daemon's, which is
+  # the preflight's dirty-tree refusal switched off under another name.
+  def validate_daemon_written_paths
+    entries = dig_raw("repo.daemon_written_paths")
+    return if entries.nil?
+
+    unless entries.is_a?(Array)
+      errors << "#{path}: repo.daemon_written_paths must be a list of non-empty strings, got #{entries.inspect}"
+      return
+    end
+
+    entries.each do |entry|
+      if !entry.is_a?(String) || entry.empty?
+        errors << "#{path}: repo.daemon_written_paths entries must be non-empty strings, got #{entry.inspect}"
+      elsif REBASE_WHOLE_REPO_ENTRIES.include?(entry)
+        errors << "#{path}: repo.daemon_written_paths entry #{entry.inspect} matches the whole repo, " \
+                  "which is not a list of daemon-written paths"
+      end
+    end
   end
 
   # An unset beads.sync warns rather than blocking, and defaults to `local`.

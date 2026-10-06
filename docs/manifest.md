@@ -14,9 +14,12 @@ defaults are listed under "Defaults" below.
   "wurk": 1,                          // schema version, required
 
   "repo": {                           // (opt)
-    "default_branch": "main"          // (opt) default "main"; the branch every
+    "default_branch": "main",         // (opt) default "main"; the branch every
                                       // "what did this branch change" diff is
                                       // taken against
+    "daemon_written_paths": []        // (opt) default []; tracked paths a
+                                      // daemon writes and commits on its own.
+                                      // See ## `repo.daemon_written_paths`.
   },
 
   "beads": {
@@ -779,7 +782,9 @@ When on, after its `git fetch origin` and before any mutation, the script:
     its way); the local default is where it was. When the cause is
     uncommitted edits to tracked files, `data.preflight.dirty_paths`
     lists them and `data.preflight.repair` renders the stash the script
-    did not run.
+    did not run. A dirty path declared in `repo.daemon_written_paths` is
+    reported under `data.preflight.ignored_dirty` instead and is never
+    stashed (see "`repo.daemon_written_paths`" below).
 
 `worktree_create.rb --stash-dirty` is the one sanctioned way past that
 last refusal, for an unattended caller: with the flag, uncommitted edits
@@ -810,6 +815,53 @@ concern (`/wurk:refresh` and `/wurk:mr`'s rebase handle that). It does not
 run on the adopt path, where nothing is cut. With `"preflight": false` the
 script reports `data.preflight.status: "disabled"` and behaves as before
 the field existed.
+
+## `repo.daemon_written_paths`
+
+Tracked paths that a daemon running in the main checkout writes **and
+commits on its own** - a decision ledger it appends to, a log it rotates
+into the tree. While such a daemon is mid-write, its file is dirty in the
+main checkout, and that uncommitted edit belongs to the daemon: it is not
+an operator's edit for a human to rule on, and it is never the kit's to
+stash. This key is how a consumer says which paths those are.
+
+It is the **one** key for that fact. `worktree_create.rb`'s base preflight
+reads it (below); a gate-side check for a stage that wrote to the tree
+reads the same key rather than declaring a second list, so a consumer
+names its daemon's paths once.
+
+Shape: a list of strings, default `[]`. Same matching rule as the gate
+path lists (see "Two path lists, not one" below): an entry ending in `/` is
+a directory prefix, anything else an exact path; no globbing.
+
+```jsonc
+"repo": { "daemon_written_paths": ["log/decisions.md", "state/"] }
+```
+
+What the preflight does with it (see "`parallelism.preflight`" above):
+
+- A dirty tracked path on the list is reported under
+  `data.preflight.ignored_dirty` (in git's status order) whether the
+  preflight fast-forwards or refuses.
+- It is **never stashed**. `--stash-dirty` stashes only the dirty paths off
+  the list, and the `data.preflight.repair` command a refusal renders names
+  only those; `data.preflight.dirty_paths` likewise lists only paths off
+  the list.
+- It does not weaken a refusal. `git merge --ff-only` already succeeds past
+  a dirty file the incoming commits do not touch, and refuses on its own
+  when they do. A daemon's edit to a file the remote also changed still
+  refuses `fast_forward_failed`; the message names the path as
+  daemon-written and says to wait for the daemon's commit and retry - the
+  remedy is the daemon's commit, never a stash.
+- A dirty path off the list refuses exactly as it would with no key, even
+  when a listed path is dirty beside it.
+
+With the key absent or empty, the preflight runs exactly the commands it
+ran before the key existed.
+
+Validation: the value must be a list of non-empty strings, and no entry may
+match the whole repo (`/` or `.`) - an entry that claimed every path would
+make every dirty file a daemon's.
 
 ## Two path lists, not one
 
@@ -1132,6 +1184,7 @@ common one), `beads.scan_refusal` = `all` (the widest refusal set, see
 `gate.long_timeout_seconds` = `3600`,
 `parallelism.timeout_seconds` = `600`, `parallelism.preflight` = `true`
 (see "`parallelism.preflight`" above for why on is the safe default),
+`repo.daemon_written_paths` = `[]`,
 `tmux.layout` = `window-per-issue`, `forge.ready_idle_hours` = `2.0`.
 
 One default is not in that list because it cannot be: `forge.host` defaults to
@@ -1225,6 +1278,10 @@ gated.
   means `true`. The string `"false"`, a number, and anything else block:
   `"false"` is truthy in Ruby, and a consumer who wrote it to opt out would
   otherwise get the preflight anyway and read its refusal as a kit bug.
+- **`repo.daemon_written_paths` must be a list of non-empty strings.** A
+  non-list, an empty string, a non-string entry, and an entry matching the
+  whole repo (`/` or `.`) all block; see "`repo.daemon_written_paths`"
+  above.
 - **`gate.cwd` must be a relative subdirectory path.** An absolute path,
   `.`, `""`, a non-string, or any `..` segment blocks. Existence is
   deliberately not checked; see "`gate.cwd`" above. A `gate.cwd` that does
