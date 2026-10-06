@@ -287,7 +287,7 @@ Fix the manifest, not the script.
   root, per ADR-0014. Consistent with a pilot's footprint, since hooks are
   untracked.
 - **Session hooks.** `ruby install.rb --with hooks` from the wurk checkout
-  links three Claude Code hooks into `~/.claude/hooks/`; it is opt-in and
+  links four Claude Code hooks into `~/.claude/hooks/`; it is opt-in and
   the default install is unchanged. `wurk-main-session-policy.sh`
   (SessionStart) tells the top-level session that it coordinates and
   delegates rather than codes, and suppresses itself inside subagents by
@@ -297,6 +297,12 @@ Fix the manifest, not the script.
   with no sleep, a backgrounded loop with no trap, `pgrep -f` in a loop
   that does not exclude `$$` - and names the fix in the denial; it is
   fail-open, so a malformed input lets the call through.
+  `wurk-git-stash-guard.sh` (PreToolUse on Bash) protects the one stash
+  list every worktree of a repository shares: from a linked worktree it
+  denies `git stash` with any verb but `list` and `show`, and from
+  anywhere it denies `git -C <dir> stash pop|drop|clear`, naming a wip
+  commit on the branch as the fix. The main checkout's own stash is
+  untouched, and it is fail-open like the wait guard.
   `wurk-harness-event.sh` (PostToolUse on every tool) appends one JSON
   line per tool call - `{"timestamp", "ts", "tool", "ok", "level",
   "is_error"}` - to this machine's telemetry sink, so tool calls are
@@ -328,6 +334,10 @@ Fix the manifest, not the script.
                     "timeout": 10}]}
       ],
       "PreToolUse": [
+        {"matcher": "Bash",
+         "hooks": [{"type": "command",
+                    "command": "<home>/.claude/hooks/wurk-git-stash-guard.sh",
+                    "timeout": 10}]},
         {"matcher": "Bash",
          "hooks": [{"type": "command",
                     "command": "<home>/.claude/hooks/wurk-safe-wait-guard.sh",

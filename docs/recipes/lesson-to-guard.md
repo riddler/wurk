@@ -154,6 +154,27 @@ Whatever the form, a guard is not finished until it carries all of these.
   only home a rule has - state the rule in its prose home as well, and
   let the hook hold it for the people who opted in.
 
+  Concretely, a new PreToolUse hook gets a row in `install.rb`'s
+  `HOOK_EVENTS` (event and matcher, so the printed snippet can place
+  it), its basename in `install_test.rb`'s shipped-hooks list, and an
+  entry in the documented snippet. The kit never edits a settings file;
+  the person opting in merges an entry like this one, `<home>` being
+  their real home directory:
+
+  ```json
+  {"hooks": {"PreToolUse": [
+    {"matcher": "Bash",
+     "hooks": [{"type": "command",
+                "command": "<home>/.claude/hooks/wurk-git-stash-guard.sh",
+                "timeout": 10}]}
+  ]}}
+  ```
+
+  `hooks/git-stash-guard.sh` is the worked example of a guard whose
+  self-test needs real state: it builds a throwaway repository with one
+  linked worktree in a temp dir, with git's global and system config
+  ignored, and never runs the command it guards.
+
 Last, write the guard's path and its test name back into the bead that
 filed the lesson. That line is what turns the next retro's grep of the
 same class into a pointer rather than a duplicate.

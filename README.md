@@ -52,6 +52,32 @@ directory, a real file, a symlink pointing somewhere else - is refused by name
 and left untouched; the run exits 1 and you move it aside by hand. Skills and
 agents are linked, not copied, so an edit in this clone is live immediately.
 
+Hooks are opt-in. `ruby install.rb --with hooks` also links each
+`hooks/*.sh` into `~/.claude/hooks/` as `wurk-<name>.sh` and prints the
+`settings.json` snippet that wires them; it never edits a settings file, so a
+hook runs only once you merge its entry yourself. The two guards both wire
+under `PreToolUse` with matcher `Bash`, `<home>` being your real home
+directory:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {"matcher": "Bash",
+       "hooks": [{"type": "command",
+                  "command": "<home>/.claude/hooks/wurk-git-stash-guard.sh",
+                  "timeout": 10}]},
+      {"matcher": "Bash",
+       "hooks": [{"type": "command",
+                  "command": "<home>/.claude/hooks/wurk-safe-wait-guard.sh",
+                  "timeout": 10}]}
+    ]
+  }
+}
+```
+
+`docs/adoption.md` describes every shipped hook and the full snippet.
+
 ## Adopting wurk in a repo
 
 Once per machine, clone wurk and link it (macOS has the Ruby this needs;
