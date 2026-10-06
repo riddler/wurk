@@ -713,6 +713,39 @@ class ManifestValidationTest < Minitest::Test
     assert_empty m.warnings
   end
 
+  # --- forge.ready_idle_hours (wu-a72e) ------------------------------------
+
+  def test_ready_idle_hours_absent_defaults_to_two
+    m = ManifestFixtures.load("valid")
+    assert m.valid?, "expected an absent forge.ready_idle_hours to validate: #{m.errors.inspect}"
+    assert_equal 2.0, m.ready_idle_hours
+  end
+
+  def test_ready_idle_hours_integer_and_float_validate
+    [3, 0.5].each do |hours|
+      m = ManifestFixtures.load_with("valid", "forge" => { "ready_idle_hours" => hours })
+      assert m.valid?, "expected #{hours.inspect} to validate: #{m.errors.inspect}"
+      assert_equal hours, m.ready_idle_hours
+      assert_empty m.warnings
+    end
+  end
+
+  # sabotage: drop the positive? check -> zero and negative validate -> red
+  def test_ready_idle_hours_zero_or_negative_blocks
+    [0, -1.5].each do |hours|
+      m = ManifestFixtures.load_with("valid", "forge" => { "ready_idle_hours" => hours })
+      refute m.valid?, "expected #{hours.inspect} to block"
+      assert_match(/forge\.ready_idle_hours must be a positive number of hours/, m.errors.join("\n"))
+    end
+  end
+
+  # sabotage: drop the Integer/Float type check -> "2" raises or validates -> red
+  def test_ready_idle_hours_non_numeric_blocks
+    m = ManifestFixtures.load_with("valid", "forge" => { "ready_idle_hours" => "2" })
+    refute m.valid?
+    assert_match(/forge\.ready_idle_hours must be a positive number of hours.*got "2"/, m.errors.join("\n"))
+  end
+
   def test_gate_cwd_absent_validates
     m = ManifestFixtures.load("valid")
     assert m.valid?, "expected an absent gate.cwd to validate: #{m.errors.inspect}"
