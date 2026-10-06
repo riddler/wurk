@@ -2095,3 +2095,89 @@ class ManifestMrReviewAgentsLintTest < Minitest::Test
     end
   end
 end
+
+# --- parallelism.control_check (wu-g49a) ------------------------------------
+#
+# The pre-spawn control command a conductor runs before every worker spawn.
+# Optional with no default: absent means no check. Present, it is an argv
+# array like every other command field - an empty list would make the
+# conductor run nothing and read the missing exit as a refusal (or worse, as
+# a pass), and a shell string is never split on whitespace.
+class ManifestControlCheckTest < Minitest::Test
+  def run_cli(argv)
+    io = StringIO.new
+    code = ManifestCli.run(argv, io: io)
+    [code, JSON.parse(io.string)]
+  end
+
+  def test_absent_validates_and_reads_as_nil
+    m = ManifestFixtures.load("valid")
+    assert m.valid?, m.errors.inspect
+    assert_nil m.dig_raw("parallelism.control_check")
+    assert_nil m.control_check_argv
+  end
+
+  # sabotage: forget to add "control_check" to KNOWN["parallelism"] -> red
+  def test_non_empty_argv_validates_and_is_not_an_unknown_key
+    m = ManifestFixtures.load_with("valid", "parallelism" => { "control_check" => %w[bin/ctl control check] })
+    assert m.valid?, m.errors.inspect
+    refute_match(/unknown key parallelism\.control_check/, m.warnings.join("\n"))
+    assert_equal %w[bin/ctl control check], m.control_check_argv
+  end
+
+  # sabotage: let argv? accept an empty array -> red
+  def test_empty_list_blocks_naming_the_key
+    m = ManifestFixtures.load_with("valid", "parallelism" => { "control_check" => [] })
+    refute m.valid?
+    assert_match(/parallelism\.control_check must be an argv array of strings, got \[\]/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop parallelism.control_check from COMMAND_FIELDS -> red
+  def test_shell_string_blocks_naming_the_key
+    m = ManifestFixtures.load_with("valid", "parallelism" => { "control_check" => "bin/ctl control check" })
+    refute m.valid?
+    assert_match(/parallelism\.control_check must be an argv array of strings, got "bin\/ctl control check"/,
+                 m.errors.join("\n"))
+  end
+
+  def test_non_string_entry_blocks_naming_the_key
+    m = ManifestFixtures.load_with("valid", "parallelism" => { "control_check" => ["bin/ctl", 3] })
+    refute m.valid?
+    assert_match(/parallelism\.control_check must be an argv array of strings/, m.errors.join("\n"))
+  end
+
+  def test_check_reports_null_when_absent
+    code, env = run_cli(["check", "--file", ManifestFixtures.path("valid")])
+    assert_equal 0, code
+    assert env["data"].key?("control_check"), "data.control_check must be present, null when absent"
+    assert_nil env["data"]["control_check"]
+  end
+
+  # sabotage: stop emitting data.control_check in the check envelope -> red
+  def test_check_reports_the_declared_argv
+    Dir.mktmpdir do |dir|
+      raw = JSON.parse(File.read(ManifestFixtures.path("valid")))
+      raw["parallelism"]["control_check"] = %w[bin/ctl control check]
+      manifest = File.join(dir, "wurk.json")
+      File.write(manifest, JSON.generate(raw))
+
+      code, env = run_cli(["check", "--file", manifest])
+      assert_equal 0, code, env.inspect
+      assert_equal %w[bin/ctl control check], env["data"]["control_check"]
+    end
+  end
+
+  def test_check_blocks_and_reports_null_for_an_invalid_value
+    Dir.mktmpdir do |dir|
+      raw = JSON.parse(File.read(ManifestFixtures.path("valid")))
+      raw["parallelism"]["control_check"] = "bin/ctl control check"
+      manifest = File.join(dir, "wurk.json")
+      File.write(manifest, JSON.generate(raw))
+
+      code, env = run_cli(["check", "--file", manifest])
+      assert_equal 1, code
+      assert_nil env["data"]["control_check"]
+      assert_match(/parallelism\.control_check/, env["blocked"].map { |b| b["message"] }.join("\n"))
+    end
+  end
+end

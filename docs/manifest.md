@@ -114,10 +114,13 @@ defaults are listed under "Defaults" below.
                                       // step that builds container images or fetches
                                       // deps. The post-warm verify runs gate.loop and
                                       // uses gate.timeout_seconds instead.
-    "preflight": true                 // (opt) default true; assert local default ==
+    "preflight": true,                // (opt) default true; assert local default ==
                                       // origin/default before cutting a worktree,
                                       // fast-forward a stale one, refuse a diverged
                                       // one. See ## `parallelism.preflight`.
+    "control_check": ["bin/ctl", "control", "check"]  // (opt) no default; run before
+                                      // every worker spawn, exit 0 = spawn. See
+                                      // ## `parallelism.control_check`.
   },
 
   "tmux": {                           // (opt) omit = no tmux integration
@@ -844,6 +847,43 @@ run on the adopt path, where nothing is cut. With `"preflight": false` the
 script reports `data.preflight.status: "disabled"` and behaves as before
 the field existed.
 
+## `parallelism.control_check`
+
+An optional argv array naming the consumer's own **pre-spawn control
+command**. When it is present, `/wurk:conductor` runs it, from the root of
+the repo's main checkout, immediately before every worker spawn - a
+Phase 3 dispatch, a stall-ladder redispatch, a takeover - and spawns
+only on exit 0. Any other exit, or a command that cannot run at all, is
+a refusal: the conductor journals it `[refusal]` with the command's exit
+status and stdout, stops dispatching, and reports. It never retries the
+spawn, never does the worker's job inline, and never widens or
+substitutes the command.
+
+Why a command and not a file the kit reads: a pause or a disarm that a
+consumer's own tooling records (from another machine or from a daemon)
+otherwise reaches a running conductor only when it re-reads campaign
+state - at arm time and on resume, not between two dispatches. The kit
+cannot know where a given consumer keeps that state, so it runs a
+command the consumer names and reads one bit from its exit status.
+The command owns the policy; the kit only honors the answer.
+
+- **Absent means no check**, silently, and there is no default: the kit
+  never invents a command for a consumer.
+- **Present, it is a command field** like `gate.full` and
+  `parallelism.trust`: a non-empty argv array of strings. An empty list
+  blocks, because a check that runs nothing has no exit status to honor;
+  a shell string blocks rather than being split on whitespace.
+- The contract the command is held to is only its exit status: `0` means
+  spawn, anything else means stop. Exit codes beyond that (one for
+  "paused", another for "state unreadable") and the text on stdout are the
+  consumer's vocabulary, carried into the journal verbatim and never
+  interpreted by the kit. An unreadable control state is therefore a stop,
+  not a pass - which is the direction a pause check has to fail in.
+
+`manifest.rb check` reports the argv as `data.control_check`, null when
+the key is absent (or the manifest is invalid), which is how the conductor
+reads it without parsing the manifest itself.
+
 ## `repo.daemon_written_paths`
 
 Tracked paths that a daemon running in the main checkout writes **and
@@ -1246,7 +1286,8 @@ off - see "`rebase.auto_resolve_paths`" above, no `mr` section means
 `external_tracker` section means the kit reads no external ref and the
 lifecycle is empty, and
 no `artifacts.adr` means the docs agents locate decision records by
-convention and say so, and
+convention and say so, no `parallelism.control_check` means the conductor
+spawns workers without a pre-spawn check, and
 no `gate.cwd` means the gate commands run at the root of the checkout being
 gated.
 
@@ -1320,6 +1361,10 @@ gated.
   means `true`. The string `"false"`, a number, and anything else block:
   `"false"` is truthy in Ruby, and a consumer who wrote it to opt out would
   otherwise get the preflight anyway and read its refusal as a kit bug.
+- **`parallelism.control_check` must be a non-empty argv array of
+  strings** when present. An empty list, a shell string, and a list with a
+  non-string entry all block, naming the field; absent is legal and means
+  no check. See "`parallelism.control_check`" above.
 - **`repo.daemon_written_paths` must be a list of non-empty strings.** A
   non-list, an empty string, a non-string entry, and an entry matching the
   whole repo (`/` or `.`) all block; see "`repo.daemon_written_paths`"

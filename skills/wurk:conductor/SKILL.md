@@ -653,6 +653,23 @@ worktree isolation when parallel workers share directories.
   fails, and never accept a clean probe as proof that nobody else is
   working the bead; it is proof only that nobody had left a trace when
   you looked.
+- **Run the control check immediately before every spawn.** When the
+  repo's manifest names a pre-spawn control command
+  (`parallelism.control_check`, read as `data.control_check` from
+  `manifest.rb check`; docs/manifest.md), run it from the root of that
+  repo's main checkout as the last thing before each worker spawn -
+  this dispatch loop, and every redispatch the stall ladder and a
+  resume make. Exit 0 spawns. Any other exit, or a command that cannot
+  run at all, is a refusal: journal it `[refusal]` with the command's
+  exit status and stdout verbatim, stop dispatching, and report. Never
+  retry the spawn, never do the worker's job inline, and never widen
+  the command - no extra arguments, no substitute command, no other
+  config to get a pass. The command is how a consumer's pause or
+  disarm reaches a running campaign between two dispatches; read at
+  arm time and on resume only, it arrives a whole wave late. It gates
+  spawns only: a worker already running is not stood down by it.
+  When the manifest names no command, there is no check and nothing
+  to journal.
 - **Tell the worker which files moved under its bead.** Ground-truth
   delta (Phase 1) is about BEAD state - open, blocked, claimed, still in
   scope. It says nothing about the TEXT a bead quotes, and the two
@@ -1043,6 +1060,14 @@ loss this step exists to prevent. A `status_changed_during_salvage`
 warning means a writer is still live in the worktree - stand it down
 first, per the brief's own rule.
 
+**The control check runs before every redispatch, too.** Rung 3, rung
+4, and an infrastructure kill routed to rung 4 all spawn a worker, so
+each passes Phase 3's pre-spawn control check ("Run the control check
+immediately before every spawn") as its last step before the spawn,
+after the salvage. A refusal there stops the redispatch like any other
+spawn - journaled `[refusal]`, never retried, and the takeover's work
+never done inline by you.
+
 **An infrastructure kill is not a stall, and it enters the ladder at
 rung 4.** A worker terminated by something outside the campaign - an
 API spend limit or a 429 on the model it was dispatched at, a harness
@@ -1281,8 +1306,10 @@ for an hour.
    was a `sonnet` dispatch), never a fresh Phase 3 dispatch that
    ignores the worktree's uncommitted edits. It is salvaged first
    ("Salvage before rung 3 or rung 4", above), and its brief carries
-   the sha and the salvage root. Everything else keeps its worker and
-   waits for the next sweep.
+   the sha and the salvage root, and like every spawn it passes the
+   pre-spawn control check (Phase 3) first - a refusal is a stop, not a
+   redispatch. Everything else keeps its worker and waits for the next
+   sweep.
 4. A harness status string is not a ruling. A worker or task listed as
    "was stopped" or "stopped by the user" is a fact about the process,
    not an operator decision about the bead or its worktree; only an
@@ -2240,6 +2267,12 @@ MECHANICS: Append-only bead notes (bd note). Absolute paths. Branch
 names from git branch --show-current. Empty output is unconfirmed -
 re-run. Prefix scratchpad files with your bead id. Never wait on
 detached background work. Halt if foreign commits appear on your branch.
+If you spawn subagents and the repo's manifest names a pre-spawn
+control command (data.control_check from `manifest.rb check`), run it
+immediately before each spawn: exit 0 spawns; any other exit, or a
+command that cannot run, is a stop - report it with the command's
+stdout, never retry the spawn, never do the subagent's work inline,
+never widen the command.
 
 TIER: <the model tier this dispatch runs at, `sonnet` or `opus`, and the
 one-line reason - the same pair the [dispatch] journal line carries. On
