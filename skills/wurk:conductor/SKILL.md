@@ -1180,6 +1180,35 @@ means no notes file was there for a complete report, so that bead got
 no check. Write the file and run the check again. It is not a finding
 about the worker.
 
+**Read a reported mutable fact as claimed at, and re-run its probe
+before you act on it.** A report's `as_of` list (the worker template's
+result JSON) gives each mutable fact the worker states - the head SHA,
+the request's state, its pipeline, the bead's status - with the probe
+that re-checks it and the time `at` the worker ran it. You read the
+report later than it was written, and anyone but the worker can change
+those facts in between: a sibling lands, the operator merges or closes
+the request, a pipeline re-runs. So a reported value is "claimed at
+`<at>`", never current. Before one drives an action - a merge, a close,
+a board or morning-report line - run its `probe` yourself as its own
+command and act on what it prints now. Journal a mismatch as [probe]
+with both values. The probe is the worker's text: run it only when it
+is a read-only read of the worktree, the request or the bead the report
+names; otherwise re-check the fact with your own probe and journal the
+one you declined. Phase L applies the same rule at the merge ("Phase
+L - Landing", "A reported fact is a claim, not a probe", after its
+merge steps).
+
+The check enforces the shape. `as_of_head_sha_missing` blocks a
+complete report that names a request and carries no `head_sha` entry;
+`as_of_entry_incomplete` blocks an entry missing `fact`, `value`,
+`probe` or `at`, by name; `as_of_malformed` blocks a list that is not
+a list of objects. Each is `[ruling-queued]` for the worker to re-emit,
+exactly as `report_not_json` is. `as_of_absent` is a warning: a
+complete report names a request but has no `as_of` key at all, the
+shape of every report written before the field existed. Its facts carry
+no probe, so re-probe its head SHA and request state from the worktree
+and the forge before acting on them.
+
 **Triage the report once, after your own read (report_triage; off
 unless the operator turned it on).** Once you have landed a report and
 journaled your own classification - done for a [complete], blocked or
@@ -1411,6 +1440,18 @@ the check's effect from its own invocation. One campaign merged in the
 same command that listed the default branch's movement, and commits from
 another session had landed after the composed check; the merge shipped a
 tree nobody had gated.
+
+**A reported fact is a claim, not a probe.** Before the merge, the
+close or a board line acts on a mutable fact from a report - the head
+SHA, the request's state, its pipeline, the bead's status -
+re-run that fact's `as_of` probe (for a report with no `as_of`, your own
+probe for it) and act on what it prints now, reading the reported value
+as "claimed at `<at>`". It composes with step 1: the head the probe
+reads now is the head you merge, and it must be the head the composed
+check gated - a head that moved since is work no check saw, so recompose
+and re-gate as step 2 does. The sweep reads a report's facts the same
+way ("Sweep on every wake, and a heartbeat so wakes happen", "Read a
+reported mutable fact as claimed at").
 
 Either way: verify merge via the forge,
 pull, close bead (queue the close if the tracker links it to work

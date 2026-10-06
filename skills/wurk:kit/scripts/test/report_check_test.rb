@@ -393,3 +393,181 @@ class ReportCheckNotesTest < Minitest::Test
     end
   end
 end
+
+# as_of: the worker's list of mutable facts, each with the probe that
+# re-checks it and the time it was true. Old-shape reports carry no as_of
+# key at all; the key's presence is what marks a report as written on the
+# template that asks for it.
+class ReportCheckAsOfTest < Minitest::Test
+  include ReportFixtures
+
+  REQUEST = "https://forge.example/r/7"
+  HEAD = { "fact" => "head_sha", "value" => "abc1234",
+           "probe" => "git -C /wt rev-parse HEAD", "at" => "2026-10-06T17:00:00Z" }.freeze
+  PR_STATE = { "fact" => "request_state", "value" => "open",
+               "probe" => "gh pr view 7 --json state", "at" => "2026-10-06T17:01:00Z" }.freeze
+
+  def complete(as_of = :absent, mr: REQUEST)
+    payload = GOOD.merge("mr" => mr)
+    payload["as_of"] = as_of unless as_of == :absent
+    payload
+  end
+
+  # sabotage (targeted run only): skip the head-SHA requirement in
+  # ReportCheck.as_of_problems -> red (nothing blocks, exit 0)
+  def test_a_complete_report_with_a_request_and_no_head_sha_entry_blocks_with_the_fix
+    Dir.mktmpdir do |dir|
+      path = bare(dir, "zz-h1", complete([PR_STATE]))
+      envelope, code = run_check(dir)
+
+      assert_equal 1, code
+      refute envelope["ok"]
+      assert_equal ["as_of_head_sha_missing"], codes(envelope, "blocked")
+      message = envelope["blocked"].first["message"]
+      assert_includes message, path
+      assert_includes message, REQUEST
+      assert_includes message, "Fix: have the worker re-emit the report"
+      assert_includes message, "\"head_sha\""
+      assert_equal "human", envelope["blocked"].first["needs"]
+    end
+  end
+
+  # The same requirement holds for an empty list: it is still the new shape.
+  def test_an_empty_as_of_with_a_request_blocks
+    Dir.mktmpdir do |dir|
+      bare(dir, "zz-h2", complete([]))
+      envelope, code = run_check(dir)
+
+      assert_equal 1, code
+      assert_equal ["as_of_head_sha_missing"], codes(envelope, "blocked")
+    end
+  end
+
+  # sabotage: block or warn on a well-formed list, or drop entries when
+  # reading -> red
+  def test_a_well_formed_as_of_round_trips
+    Dir.mktmpdir do |dir|
+      path = bare(dir, "zz-ok", complete([HEAD, PR_STATE]))
+      envelope, code = run_check(dir)
+
+      assert_equal 0, code
+      assert envelope["ok"]
+      assert_empty envelope["blocked"]
+      assert_empty envelope["warnings"]
+      assert_equal [HEAD, PR_STATE], JSON.parse(File.read(path))["as_of"]
+      assert_empty ReportCheck.as_of_problems(JSON.parse(File.read(path)))
+    end
+  end
+
+  # sabotage (targeted run only): accept an entry with no probe (drop
+  # "probe" from ReportCheck::AS_OF_FIELDS) -> red (the no-probe report
+  # passes)
+  def test_an_entry_missing_probe_is_blocked_by_name
+    Dir.mktmpdir do |dir|
+      path = bare(dir, "zz-p1", complete([HEAD, PR_STATE.reject { |k, _| k == "probe" }]))
+      envelope, code = run_check(dir)
+
+      assert_equal 1, code
+      assert_equal ["as_of_entry_incomplete"], codes(envelope, "blocked")
+      message = envelope["blocked"].first["message"]
+      assert_includes message, path
+      assert_includes message, "\"request_state\""
+      assert_includes message, "missing probe"
+      assert_includes message, "Fix:"
+    end
+  end
+
+  # sabotage: drop "at" from ReportCheck::AS_OF_FIELDS, or treat a blank
+  # string as present -> red
+  def test_an_entry_missing_at_or_with_a_blank_at_is_blocked_by_name
+    [HEAD.reject { |k, _| k == "at" }, HEAD.merge("at" => "  ")].each do |entry|
+      Dir.mktmpdir do |dir|
+        bare(dir, "zz-a1", complete([entry]))
+        envelope, code = run_check(dir)
+
+        assert_equal 1, code, entry.inspect
+        assert_equal ["as_of_entry_incomplete"], codes(envelope, "blocked"), entry.inspect
+        assert_includes envelope["blocked"].first["message"], "missing at", entry.inspect
+        assert_includes envelope["blocked"].first["message"], "\"head_sha\"", entry.inspect
+      end
+    end
+  end
+
+  # An entry missing both is named once, with both fields.
+  def test_an_entry_missing_probe_and_at_names_both
+    Dir.mktmpdir do |dir|
+      bare(dir, "zz-a2", complete([HEAD.reject { |k, _| %w[probe at].include?(k) }]))
+      envelope, = run_check(dir)
+
+      assert_equal ["as_of_entry_incomplete"], codes(envelope, "blocked")
+      assert_includes envelope["blocked"].first["message"], "missing probe, at"
+    end
+  end
+
+  # sabotage: iterate a non-array as_of, or skip the non-object entry ->
+  # red (an error raised, or nothing blocks)
+  def test_a_malformed_as_of_blocks
+    ["head_sha abc1234", nil, { "head_sha" => "abc" }, [HEAD, "abc1234"]].each do |as_of|
+      Dir.mktmpdir do |dir|
+        bare(dir, "zz-m1", complete(as_of))
+        envelope, code = run_check(dir)
+
+        assert_equal 1, code, as_of.inspect
+        assert_equal ["as_of_malformed"], codes(envelope, "blocked"), as_of.inspect
+        assert_includes envelope["blocked"].first["message"], "Fix:", as_of.inspect
+      end
+    end
+  end
+
+  # Reports written before as_of existed still read. sabotage: require
+  # as_of on every report -> red (exit 1 for the old shape)
+  def test_a_pre_change_report_with_no_as_of_and_no_request_parses_ok
+    Dir.mktmpdir do |dir|
+      bare(dir, "zz-old1", GOOD)
+      bare(dir, "zz-old2", GOOD.merge("mr" => nil))
+      envelope, code = run_check(dir)
+
+      assert_equal 0, code
+      assert envelope["ok"]
+      assert_empty envelope["blocked"]
+      assert_empty envelope["warnings"]
+    end
+  end
+
+  # A report with a request and no as_of key at all cannot be told from an
+  # old-template report, so it warns naming the fix instead of blocking.
+  # sabotage: block on the absent key -> red (every pre-change request
+  # report would block the sweep); or stay silent -> red
+  def test_a_request_report_with_no_as_of_key_warns_and_never_blocks
+    Dir.mktmpdir do |dir|
+      path = bare(dir, "zz-old3", complete)
+      envelope, code = run_check(dir)
+
+      assert_equal 0, code
+      assert envelope["ok"]
+      assert_empty envelope["blocked"]
+      assert_equal ["as_of_absent"], codes(envelope, "warnings")
+      assert_includes envelope["warnings"].first["message"], path
+      assert_includes envelope["warnings"].first["message"], "head_sha"
+    end
+  end
+
+  # The head-SHA requirement is for a complete report that names a request;
+  # entries are still checked on every report that carries the list.
+  # sabotage: require head_sha regardless of status -> red
+  def test_the_head_sha_requirement_is_only_for_complete_reports_with_a_request
+    Dir.mktmpdir do |dir|
+      bare(dir, "zz-b1", GOOD.merge("status" => "blocked", "mr" => REQUEST, "as_of" => [PR_STATE]))
+      bare(dir, "zz-l1", complete([PR_STATE], mr: nil))
+      envelope, code = run_check(dir)
+
+      assert_equal 0, code
+      assert_empty envelope["blocked"]
+
+      bare(dir, "zz-b2", GOOD.merge("status" => "blocked", "as_of" => [{ "fact" => "bead_status" }]))
+      envelope, code = run_check(dir)
+      assert_equal 1, code
+      assert_equal ["as_of_entry_incomplete"], codes(envelope, "blocked")
+    end
+  end
+end

@@ -155,6 +155,10 @@ Process:
    carries (below), written in full, in one write - write to a
    bead-prefixed temp name in the same directory, then `mv` it into
    place, so a half-written file never reads as a finished report.
+   That includes the `as_of` list (below): every mutable fact the
+   report states, each with the probe that re-checks it and when you
+   ran it, because the conductor reads the file later than you wrote
+   it and re-runs each probe before it acts on the fact.
 
    Ordering rule: this is the literal LAST action you take. After the
    commit, after the MR (when authorized), after the bead notes, after
@@ -422,6 +426,11 @@ exactly:
   "gate": "green | red | not-run",
   "committed": true,
   "mr": "url or null",
+  "as_of": [
+    {"fact": "head_sha", "value": "...", "probe": "git -C <worktree> rev-parse HEAD", "at": "<UTC ISO-8601>"},
+    {"fact": "request_state", "value": "open", "probe": "<forge CLI command>", "at": "..."},
+    {"fact": "bead_status", "value": "in_progress", "probe": "bd show <id> --json", "at": "..."}
+  ],
   "reviewRound": {
     "agents": ["..."], "findings": 0, "mustFix": 0, "addressed": 0,
     "deferred": ["..."],
@@ -446,6 +455,27 @@ verbatim, never counted by hand. Leave it out when the script gave no
 count (a non-zero exit or a null field) and say why in `judgementCalls`.
 A report without it is still a valid report; the retro reads it, where
 present, as the round's rework counter.
+
+`as_of` is mandatory: one `{fact, value, probe, at}` entry for every
+mutable fact the report states - the head SHA (`head_sha`), the request's
+state (`request_state`), its pipeline (`pipeline_state`), the bead's
+status (`bead_status`), and any other. Two rules decide what goes in. **A
+fact is mutable if anyone but you can change it**: a sibling's landing
+moves main, the operator merges or closes your request, a pipeline
+re-runs, the conductor closes the bead - so your branch's head SHA is
+mutable once it is pushed, and the bead id is not. **Include the probe,
+not just the fact**: `probe` is the exact read-only command that
+re-checks the value, and `at` is the UTC time you ran it, so the
+conductor reads each fact as "claimed at `at`" and re-runs the probe
+before a merge, a close or a status line acts on it. A report is read
+later than it is written, and a fact with no probe behind it is a fact
+nobody can re-check except by redoing your work. Run the probes
+yourself just before writing the report, and copy their output into
+`value`; never state a value you did not probe. A result that is
+complete and names a request MUST carry a `head_sha` entry: the sweep's
+`report_check.rb` blocks it otherwise, and blocks any entry missing
+one of the four fields, and the fix is always you re-emitting the
+report. `as_of` is `[]` only when the report states no mutable fact.
 
 `repos_touched` is mandatory and audited: the conductor diffs it against
 your dispatch scope. Writing anywhere not in your dispatch - even

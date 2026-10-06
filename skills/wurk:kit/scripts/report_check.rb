@@ -41,6 +41,20 @@ require_relative "lib/finding_severity"
 # report is the worker's statement, and the conductor decides which of the
 # two to believe. Without the flag the envelope is byte-identical to the
 # envelope before the flag existed.
+#
+# The as_of list is checked whenever a report carries the key. Each entry
+# states one mutable fact - one anyone but the worker can change, such as
+# the head SHA, the request's state, a pipeline, the bead's status - with
+# the probe that re-checks it and the time it was true, because a report is
+# read later than it is written and the conductor re-runs the probe before
+# acting on the fact. An entry missing a field, or a list that is not a
+# list of objects, blocks in the same terms as the parse check: the worker
+# re-emits. A complete report that names a request and carries the list
+# with no head_sha entry blocks too, since that is the fact a merge acts
+# on. A report with no as_of key at all is read as written before the
+# field existed and only warns when it names a request: the key's presence
+# is the only in-file sign of which template wrote it, and blocking the
+# absent key would fail every pre-change report directory a sweep reads.
 module ReportCheck
   # The per-bead file name the contract fixes: <bead-id>-report.json. A
   # directory is swept for exactly this, so a campaign's morning report
@@ -64,6 +78,11 @@ module ReportCheck
 
   # The suffix the contract's per-bead file name carries after the bead id.
   REPORT_SUFFIX = "-report.json"
+
+  # The four fields every as_of entry carries, as the worker template
+  # spells them, and the fact name the head-SHA requirement looks for.
+  AS_OF_FIELDS = %w[fact value probe at].freeze
+  HEAD_SHA_FACT = "head_sha"
 
   class << self
     # Every *-report.json directly under dir, sorted. A dir that does not
@@ -160,6 +179,58 @@ module ReportCheck
       status.is_a?(String) ? status : nil
     rescue JSON::ParserError, SystemCallError
       nil
+    end
+
+    # The parsed report, or nil when the file does not parse or is not an
+    # object. Only called on a report already known to parse.
+    def load(path)
+      report = JSON.parse(read_utf8(path))
+      report.is_a?(Hash) ? report : nil
+    rescue JSON::ParserError, SystemCallError
+      nil
+    end
+
+    # Does the report name a request? The template's field is "mr": a
+    # request URL, or null when no request was opened.
+    def request(report)
+      mr = report["mr"]
+      mr.is_a?(String) && !mr.strip.empty? ? mr : nil
+    end
+
+    # [{code:, detail:}] for one parsed report's as_of list; empty when the
+    # list is well formed or the report carries no as_of key. The codes are
+    # as_of_malformed, as_of_entry_incomplete and as_of_head_sha_missing;
+    # the CLI turns each into a blocked[] entry with the fix.
+    def as_of_problems(report)
+      return [] unless report.is_a?(Hash) && report.key?("as_of")
+
+      list = report["as_of"]
+      unless list.is_a?(Array) && list.all? { |e| e.is_a?(Hash) }
+        return [{ code: "as_of_malformed",
+                  detail: "as_of is #{list.inspect[0, 80]}, not a list of {fact, value, probe, at} objects" }]
+      end
+
+      problems = []
+      list.each_with_index do |entry, i|
+        missing = AS_OF_FIELDS.select { |f| blank?(entry[f]) }
+        next if missing.empty?
+
+        name = blank?(entry["fact"]) ? "##{i}" : entry["fact"].to_s.inspect
+        problems << { code: "as_of_entry_incomplete",
+                      detail: "as_of entry #{name} is missing #{missing.join(', ')}" }
+      end
+
+      req = request(report)
+      if report["status"] == "complete" && req && list.none? { |e| e["fact"] == HEAD_SHA_FACT }
+        problems << { code: "as_of_head_sha_missing",
+                      detail: "the report is complete and names the request #{req}, " \
+                              "but as_of has no #{HEAD_SHA_FACT.inspect} entry" }
+      end
+      problems
+    end
+
+    def blank?(value)
+      value.nil? || (value.is_a?(String) && value.strip.empty?)
     end
 
     # The last note in a notes file. bd note appends each note to the
@@ -264,6 +335,7 @@ class ReportCheckCli
       end
       if report[:parsed]
         findings_by_level_warning(env, report)
+        as_of_check(env, report)
         return
       end
 
@@ -306,6 +378,39 @@ class ReportCheckCli
                message: "#{bead}: report #{report[:path]} says status \"#{status}\", but the bead's " \
                         "last note carries #{ReportCheck::PARTIAL_MARKER}: #{note.inspect}. " \
                         "The report is not rewritten; the conductor decides which to record.")
+    end
+
+    # Every as_of problem is a block in the parse check's terms: the report
+    # parses, but a fact the conductor would act on cannot be re-checked,
+    # and the fix is the worker re-emitting, never an edit here. The one
+    # warning is the absent key on a complete request report, which is how
+    # every report written before the field existed looks.
+    def as_of_check(env, report)
+      parsed = ReportCheck.load(report[:path])
+      return if parsed.nil?
+
+      ReportCheck.as_of_problems(parsed).each do |problem|
+        env.block!(
+          code: problem[:code],
+          message: "#{report[:path]}: #{problem[:detail]}. " \
+                   "Fix: have the worker re-emit the report with every mutable fact it states " \
+                   "(#{ReportCheck::HEAD_SHA_FACT.inspect} first, when it names a request) as an " \
+                   "as_of entry carrying #{ReportCheck::AS_OF_FIELDS.join(', ')}, because the " \
+                   "conductor re-runs each probe before it acts on the fact.",
+          needs: "human"
+        )
+      end
+      return if parsed.key?("as_of") || parsed["status"] != "complete"
+
+      req = ReportCheck.request(parsed)
+      return unless req
+
+      env.warn(code: "as_of_absent",
+               message: "#{report[:path]} is complete and names the request #{req} but carries no " \
+                        "as_of list, as every report written before the field existed does; read its " \
+                        "head SHA and request state as unverified and re-probe them yourself. A worker " \
+                        "on the current template re-emits with an as_of " \
+                        "#{ReportCheck::HEAD_SHA_FACT.inspect} entry.")
     end
 
     # A malformed optional field warns rather than blocks: the report still
