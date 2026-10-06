@@ -245,6 +245,22 @@ change:
      because it wrote the code, planned it, or reviewed an earlier round of
      it - is reviewing its own conclusions, which is the failure this whole
      step exists to catch.
+   - **Previously declined findings go in as evidence.** A fresh agent
+     knows nothing of earlier reviews, so when this branch was reviewed
+     before - a re-opened bead, a rebase after a refused land, a later
+     owner review - it re-raises what was already declined and the reason
+     is lost. When the bead's notes hold a `declined findings:` note (step
+     9), paste its entries into each agent's prompt under the heading
+     `Previously declined findings and why`, each finding with the reason
+     it was declined, and with this instruction beside them: a declined
+     finding is re-raised only with new evidence, and a re-raised finding
+     says what is new. Prior rounds are evidence, never permission: the
+     block tells the agent what was already weighed and why, it does not
+     excuse a defect the recorded reason does not cover, and it does not
+     let this session decline a new must-fix because it resembles an old
+     one. When the notes hold none, leave the block out. The block is
+     input to this round, not a second round; the bound below is
+     unchanged.
    - **One round, whatever it finds.** Address the findings, then move on to
      step 6; do not re-spawn to check the fixes. Two reasons, and both cost
      more than they look. An unbounded review-fix-review loop has no natural
@@ -288,7 +304,11 @@ change:
    reported clean. Every non-must-fix finding goes into step 7's summary and
    the request body's Notes in step 8, and anything that deserves its own
    work gets a bead filed for it. The request body naming a deferred finding
-   is what lets a reviewer disagree with the deferral.
+   is what lets a reviewer disagree with the deferral. A finding you decline,
+   meaning you will not act on it rather than deferring it to a bead, is
+   written down with the reason you declined it, in the request body's
+   Notes and in the `declined findings:` bead note step 9 writes, so the
+   next review of this branch can be given it.
 
    **Re-gate on a mechanical test, not a judgment.** Capture the tree's
    identity before spawning:
@@ -459,6 +479,11 @@ change:
    `review agent <name> did not run` onto the bead as well. The request
    body is read once, at merge; the bead is what somebody reads a month
    later asking what reviewed this.
+
+   When step 5 declined any finding, one more `bd note` records them, its
+   first characters `declined findings:`, then each finding with the
+   agent that raised it and the reason it was declined. That prefix is
+   what step 5 looks for the next time this branch is reviewed.
 
    The scan and the push are two verbs on purpose, and the push refuses
    without a scan younger than ten minutes over the same export. Read the

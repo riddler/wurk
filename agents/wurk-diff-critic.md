@@ -66,6 +66,20 @@ reviewing a diff, not auditing a system.
    the diff does not implement is a finding on the message, because the
    message is what the history will say.
 
+**An absence is ranked only after its benign reading is checked.** Checks 1
+and 3 find things that are not there: a criterion with no hunk, an error
+that is not surfaced. For every such finding, first name what would make the
+absence benign - a test elsewhere that already covers it, a caller that
+cannot reach the path, a criterion met by an existing hunk or existing code -
+and check that reading in the diff and the tree. If it holds, there is no
+finding; name the reading and what confirmed it under "Checks that passed".
+If it fails, rank the finding and say what you checked. When the benign
+reading cannot be checked, write "unable to assess" with what it would take
+to assess it, and rank it note, never must-fix. This rule is for absences
+only: a change the diff does make - a rename, a changed contract, an
+unasked change (checks 2 and 4) - is ranked on what it does, and callers
+you could not see are not a benign reading of it.
+
 ## Severity vocabulary
 
 `/wurk:mr` treats a finding as must-fix only when you say so. Use exactly
