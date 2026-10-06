@@ -907,6 +907,76 @@ The field is optional ("`finding_severity.rb`: the finding_severity Jev
 site"), so a report without it passes; each entry in `data.reports`
 carries `findings_by_level` as null (absent), `ok` or `malformed`.
 
+## `ready_idle.rb`: open requests that are green and idle
+
+```sh
+ready_idle.rb [--idle-hours N] [--no-fetch] [--repo DIR] [--dry-run] [--json]
+```
+
+Lists the open requests (PRs on GitHub, MRs on GitLab) that are ready to
+merge and have sat that way: not a draft, no conflict, no reviewer block
+the forge exposes, a green pipeline, and no activity for at least the idle
+threshold. An open green request is invisible until someone looks, and
+requests have sat green for over a day with nothing saying so; this is the
+read that says so. It runs behind `Forge.guard!`, so a forge kind with no
+adapter blocks `unsupported_forge` before any CLI is called.
+
+**Flags.** `--idle-hours N` is the threshold in hours, a positive number
+(`1.5` is fine); anything else is a usage error, exit 2, no envelope.
+`--no-fetch` skips `git fetch origin`. `--repo DIR` is the checkout to
+scan: the manifest is located from it and every shell-out runs in it; the
+default is the working directory.
+
+**Threshold.** The flag, else the manifest's `forge.ready_idle_hours`, else
+2.0 (`docs/manifest.md`). `data.idle_hours` is the value applied and
+`data.idle_hours_source` is `flag`, `manifest` or `default`. A request is
+idle when the hours since its last activity - the forge's own updated-at
+timestamp - are at least the threshold, compared unrounded.
+
+**`data` keys.** `forge`, `default_branch`, `idle_hours`,
+`idle_hours_source`, `fetched` (whether a fetch ran and succeeded),
+`scan_complete`, and on a complete scan `ready` and `skipped`. Each `ready`
+row is `{number, title, branch, head, hours_idle, behind, pipeline,
+drift_lower_bound}`, sorted most idle first: `hours_idle` rounded to one
+decimal, `behind` the commit count `git rev-list --count
+<head>..origin/<default_branch>`, `pipeline` always `success`. Each
+`skipped` entry is `{number, reason}`, one per request, with the first
+reason that applies in this order: `draft`, `conflict`,
+`mergeability_unknown` (GitHub has not computed mergeability yet),
+`review_blocked` (GitHub `CHANGES_REQUESTED`; GitLab `requested_changes`
+or `not_approved`), `not_idle`, `pipeline_failed`, `pipeline_running`,
+`no_pipeline`. A request with no checks or pipeline at all is not green.
+On GitLab the list payload carries no pipeline, so the pipeline is read
+per request, and only for requests that survived every earlier reason.
+
+**A scan that could not finish never reports a list.** A forge read that
+fails, output that does not parse or is not a list, a per-request read
+that fails, a GitHub list that reaches its 500-request limit (it may be
+truncated), or an updated-at timestamp that does not parse all block
+`scan_incomplete`: `data.scan_complete` is false and `data.ready` and
+`data.skipped` are absent - never `[]`. An empty `ready` means nothing is
+waiting; reading one off a broken scan would hide exactly the requests
+this exists to surface. The message names what failed and that the fix is
+to check the forge CLI's install and auth, then rerun.
+
+**Drift is exact only against a fresh fetch.** When the fetch is skipped
+(`--no-fetch` or `--dry-run`: warning `fetch_skipped`) or fails (warning
+`fetch_failed`), every row has `drift_lower_bound: true`, because the
+local `origin/<default_branch>` may be behind and `behind` can only
+undercount. A row whose head is not in the local object store gets
+`behind: null`, `drift_lower_bound: true`, and a `drift_unknown` warning
+naming the request. After a successful fetch, a row with a counted
+`behind` has `drift_lower_bound: false`.
+
+**Exit codes.** 0 on a complete scan, whatever it found; 1 when blocked
+(`scan_incomplete`, `unsupported_forge`, a manifest block); 2 on a usage
+error.
+
+**Read-only.** The forge is only listed and viewed; git only fetches
+(remote-tracking refs, never `refs/heads/`) and counts. `--dry-run`
+records the fetch in `commands` without running it and runs every read,
+since nothing here mutates.
+
 ## `session_metrics.rb`: harness metrics from session transcripts
 
 Reads Claude Code session transcripts (JSONL) and reports what the harness

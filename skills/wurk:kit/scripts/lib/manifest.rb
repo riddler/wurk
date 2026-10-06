@@ -98,7 +98,7 @@ class Manifest
     "repo" => %w[default_branch],
     "beads" => %w[prefix topology sync scan_refusal areas],
     "beads.areas" => %w[labels lands_alone always_batchable],
-    "forge" => %w[kind host labels],
+    "forge" => %w[kind host labels ready_idle_hours],
     "gate" => %w[cwd full loop report report_loop attest guard_ledger build_paths also_gated_paths moving_files
                  project_level_skips not_applicable_skips sabotage timeout_seconds long_timeout_seconds],
     "gate.sabotage" => %w[test_roots test_pattern exempt_prefixes],
@@ -149,7 +149,10 @@ class Manifest
     # local default branch have forked behind the remote and rebuilt already-
     # merged work (see docs/manifest.md). Opting out is a deliberate act.
     "parallelism.preflight" => true,
-    "tmux.layout" => "window-per-issue"
+    "tmux.layout" => "window-per-issue",
+    # How long an open, green, unblocked request must sit without activity
+    # before ready_idle.rb lists it. A float, in hours; see docs/manifest.md.
+    "forge.ready_idle_hours" => 2.0
   }.freeze
 
   attr_reader :path, :raw, :errors, :warnings
@@ -389,6 +392,12 @@ class Manifest
   # table and cannot express a default conditioned on forge.kind.
   def forge_host
     fetch("forge.host")
+  end
+
+  # The idle threshold, in hours, ready_idle.rb applies when no --idle-hours
+  # flag overrides it. Integer or Float as the consumer wrote it.
+  def ready_idle_hours
+    fetch("forge.ready_idle_hours")
   end
 
   def forge_labels
@@ -913,6 +922,7 @@ class Manifest
     validate_default_branch
     validate_beads_sync
     validate_forge_host
+    validate_ready_idle_hours
     validate_sabotage
     validate_artifacts_adr
     validate_judge
@@ -998,6 +1008,20 @@ class Manifest
     errors << "#{path}: forge.host must be a bare hostname, optionally with a port " \
               "(gitlab.example.com, git.example.com:8443) - no scheme, no path, no trailing slash; " \
               "omit the field to use the forge kind's own host. Got #{value.inspect}"
+  end
+
+  # validate_ready_idle_hours needs no nil guard: fetch applies the 2.0
+  # default, so the value is only ever absent-and-defaulted or explicitly
+  # wrong. A positive number, Integer or Float - hours are naturally
+  # fractional, unlike the timeout fields above. Zero would list every green
+  # request the moment it went green, which is not "idle"; a negative or
+  # non-numeric value is a typo, and blocking on load is where it is cheap.
+  def validate_ready_idle_hours
+    value = fetch("forge.ready_idle_hours")
+    return if (value.is_a?(Integer) || value.is_a?(Float)) && value.to_f.finite? && value.positive?
+
+    errors << "#{path}: forge.ready_idle_hours must be a positive number of hours (2, 1.5), " \
+              "or omit it for the 2.0 default; got #{value.inspect}"
   end
 
   # Present-or-absent, never half-present: a section that declares roots but

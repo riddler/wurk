@@ -45,7 +45,11 @@ defaults are listed under "Defaults" below.
                                       // Absent means the kind's own host
                                       // (github.com, gitlab.com) - see
                                       // "forge.host" below
-    "labels": {}                      // (opt) e.g. {"agent_filed": "agent-filed"}
+    "labels": {},                     // (opt) e.g. {"agent_filed": "agent-filed"}
+    "ready_idle_hours": 2             // (opt) hours an open green request must
+                                      // sit idle before ready_idle.rb lists
+                                      // it; default 2.0 - see
+                                      // "forge.ready_idle_hours" below
   },
 
   "gate": {                           // see docs/gate-contract.md for tiers
@@ -270,6 +274,21 @@ rather than the `owner` + `repo` pair the kit carried before wu-4wl.1 because
 a GitLab project can be `group/subgroup/project` or deeper, which a
 two-segment pair cannot hold at all; GitHub's two-segment identity is simply
 the shortest case of the same model.
+
+## `forge.ready_idle_hours`
+
+The idle threshold `ready_idle.rb` applies: an open request that is not a
+draft, has no conflict, carries no reviewer block, and has a green pipeline
+is listed once its last activity (the forge's own updated-at timestamp) is at
+least this many hours old. A positive number - Integer or Float, since hours
+are naturally fractional (`1.5`). **Absent means 2.0.** The script's
+`--idle-hours N` flag overrides it for one run; the envelope's
+`data.idle_hours_source` says which of `flag`, `manifest`, or `default` won.
+
+Zero, a negative number, and a non-numeric value block on load: zero would
+list a request the moment it went green, which is not idle, and anything else
+is a typo. See `skills/wurk:kit/REFERENCE.md`, "`ready_idle.rb`: open
+requests that are green and idle", for the script itself.
 
 ## Release recipes
 
@@ -1113,7 +1132,7 @@ common one), `beads.scan_refusal` = `all` (the widest refusal set, see
 `gate.long_timeout_seconds` = `3600`,
 `parallelism.timeout_seconds` = `600`, `parallelism.preflight` = `true`
 (see "`parallelism.preflight`" above for why on is the safe default),
-`tmux.layout` = `window-per-issue`.
+`tmux.layout` = `window-per-issue`, `forge.ready_idle_hours` = `2.0`.
 
 One default is not in that list because it cannot be: `forge.host` defaults to
 the host of the declared `forge.kind`, which a flat dotted-key table cannot
@@ -1190,6 +1209,9 @@ gated.
   a non-string all block; the shape is checked without any DNS or
   reachability probe. An absent field is legal and resolves per forge kind.
   See "`forge.host`" above.
+- **`forge.ready_idle_hours` must be a positive number** (Integer or Float)
+  when present. Zero, a negative number, and a non-numeric value all block.
+  See "`forge.ready_idle_hours`" above.
 - **`gate.timeout_seconds` must be a positive integer.** Zero, a negative
   number, a float, and a non-numeric value all block.
 - **`gate.long_timeout_seconds` must be a positive integer.** Same rule as
