@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require "json"
+require_relative "sh"
+
 # Beads holds the pure, testable logic behind bead.rb: unwrapping bd show's
 # one-element array, splitting its single notes blob into entries and
 # parsing the /wurk:implement --loop note grammar out of them, unioning
@@ -7,6 +10,10 @@
 # /wurk:commit's bead-resolution candidates. bead.rb is the thin CLI that shells
 # out via Sh and wires this module's results into the envelope. See
 # statifier-ex docs/plans/260806-st-hzf-skill-mechanics-scripts.md Phase 3.
+#
+# One read lives here rather than in a CLI: #open_children, the children
+# lookup worktree_cleanup.rb runs over its close candidates. It shells out
+# through Sh like everything else, so a test stubs it with FakeSh.
 module Beads
   # The fields bd show --json is known to carry (docs/research/...: Key
   # discoveries). bead.rb emits every one of these under `data`, degrading a
@@ -31,6 +38,22 @@ module Beads
   # "loop stopped at Phase N: <reason>" note carry a reason that itself
   # spans multiple physical lines.
   NEW_ENTRY_RE = /\A(?:loop: |loop stopped at )/.freeze
+
+  # Statuses that mean a child no longer holds its parent open. Anything
+  # else - open, in_progress, blocked, deferred, or a status this list has
+  # never heard of - counts as open, because the caller uses the answer to
+  # decide whether a parent may be offered for closing, and an unknown
+  # status must not read as "done".
+  CLOSED_STATUSES = %w[closed tombstone].freeze
+
+  # The result of #open_children. `ids` is the sorted ids of the children
+  # still open; on a failed read `error` carries the message and `ids` is
+  # nil - a failed read is never "no open children".
+  ChildrenRead = Struct.new(:ids, :error) do
+    def ok?
+      error.nil?
+    end
+  end
 
   class << self
     # bd show <id> --json returns a one-element array (not an object) -
@@ -109,6 +132,44 @@ module Beads
         resolved: resolved && { id: resolved[:id], strategy: resolved[:strategy], confidence: resolved[:confidence] },
         candidates: remaining.map { |c| annotate(c) }
       }
+    end
+
+    # Asks the tracker for `id`'s children (`bd children <id> --json`, which
+    # includes closed children) through the Sh seam, and returns a
+    # ChildrenRead naming the ones still open. A non-zero exit, unparseable
+    # output, or anything but a JSON array is a failed read, never an empty
+    # one: worktree_cleanup.rb keeps a candidate out of its close list on a
+    # failed read, and that only works if failure is distinguishable.
+    def open_children(id, envelope: nil)
+      result = Sh.run(["bd", "children", id, "--json"], envelope: envelope)
+      unless result.success?
+        msg = result.err.to_s.strip
+        return ChildrenRead.new(nil, msg.empty? ? "bd children #{id} failed" : msg)
+      end
+
+      parsed =
+        begin
+          JSON.parse(result.out.to_s)
+        rescue JSON::ParserError => e
+          return ChildrenRead.new(nil, "bd children #{id} returned unparseable output: #{e.message}")
+        end
+
+      ids = open_child_ids(parsed)
+      return ChildrenRead.new(nil, "bd children #{id} returned something other than a list") unless ids
+
+      ChildrenRead.new(ids, nil)
+    end
+
+    # The pure half of #open_children: the sorted ids of the entries in a
+    # parsed `bd children --json` array whose status is not closed, or nil
+    # when `parsed` is not an array.
+    def open_child_ids(parsed)
+      return nil unless parsed.is_a?(Array)
+
+      parsed.select { |child| child.is_a?(Hash) && !CLOSED_STATUSES.include?(child["status"].to_s) }
+            .map { |child| child["id"].to_s }
+            .reject(&:empty?)
+            .sort
     end
 
     private

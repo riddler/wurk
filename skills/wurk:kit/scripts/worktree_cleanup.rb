@@ -8,6 +8,7 @@ require_relative "lib/sh"
 require_relative "lib/cli"
 require_relative "lib/manifest"
 require_relative "lib/forge"
+require_relative "lib/beads"
 require_relative "worktree_survey"
 require_relative "request_state"
 
@@ -16,10 +17,22 @@ require_relative "request_state"
 # statifier-ex docs/plans/260806-st-hzf-skill-mechanics-scripts.md Phase 4):
 #
 # - Closing beads: this script never calls `bd close`. It emits
-#   `data.beads_to_close`, gathered from `request_state.rb beads` over each
-#   merged PR's commits, and the SKILL.md performs the close - `bd close` is
-#   agent-authorized only against a verified merge, and keeping the call at
-#   the skill boundary is what keeps that trigger visible.
+#   `data.beads_to_close`, a CANDIDATE list the caller verifies before it
+#   closes anything - never a close instruction. Candidates are gathered
+#   from `request_state.rb beads` over each merged PR's commits, and the
+#   SKILL.md performs the close - `bd close` is agent-authorized only
+#   against a verified merge, and keeping the call at the skill boundary is
+#   what keeps that trigger visible.
+#
+#   A request's trailer can name a parent alongside its child (or the
+#   branch was cut for the parent), so each candidate's children are read
+#   from the tracker (Beads.open_children) before the list is emitted. A
+#   candidate with one or more open children moves to
+#   `data.beads_with_open_children` ({id, open_children}) and is left out
+#   of `beads_to_close`: closing it would close work that is still going
+#   on, possibly someone else's. A failed children read also keeps the
+#   candidate out, with a `children_lookup_failed` warning - a failed read
+#   never becomes a close.
 # - tmux quiescing: Phase 5's script, invoked by the SKILL.md between this
 #   script's check phase and its removal phase.
 #
@@ -59,6 +72,7 @@ module WorktreeCleanup
       if worktrees.empty?
         env.data[:results] = []
         env.data[:beads_to_close] = []
+        env.data[:beads_with_open_children] = []
         return env.emit(io)
       end
 
@@ -95,10 +109,38 @@ module WorktreeCleanup
         beads_to_close.concat(beads)
       end
 
+      closable, held_open = split_by_open_children(beads_to_close.uniq.sort, env)
+
       env.data[:results] = results
-      env.data[:beads_to_close] = beads_to_close.uniq.sort
+      env.data[:beads_to_close] = closable
+      env.data[:beads_with_open_children] = held_open
 
       env.emit(io)
+    end
+
+    # Splits the close candidates into those with no open children (still
+    # candidates) and those with at least one ({id:, open_children:}). A
+    # candidate whose children could not be read is in neither list and is
+    # named in a children_lookup_failed warning: leaving it out costs a
+    # caller one manual check, keeping it in could close a live parent.
+    # A read, so it runs on a dry run too.
+    def split_by_open_children(candidates, env)
+      closable = []
+      held_open = []
+
+      candidates.each do |id|
+        read = Beads.open_children(id, envelope: env)
+        if !read.ok?
+          env.warn(code: "children_lookup_failed",
+                   message: "could not read the children of #{id}, left out of beads_to_close: #{read.error}")
+        elsif read.ids.empty?
+          closable << id
+        else
+          held_open << { id: id, open_children: read.ids }
+        end
+      end
+
+      [closable, held_open]
     end
 
     # Whether every commit this worktree carries already has a

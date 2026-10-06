@@ -193,6 +193,48 @@ class BeadsLibTest < Minitest::Test
     assert_nil ranked[:resolved]
     assert_equal [], ranked[:candidates]
   end
+
+  # Only closed (and tombstoned) children stop holding a parent open; any
+  # other status, including one bd has not shipped yet, counts as open.
+  def test_open_child_ids_keeps_every_status_but_closed
+    parsed = [
+      { "id" => "zz-p.4", "status" => "deferred" },
+      { "id" => "zz-p.1", "status" => "closed" },
+      { "id" => "zz-p.3", "status" => "blocked" },
+      { "id" => "zz-p.2", "status" => "tombstone" },
+      { "id" => "zz-p.5", "status" => "something_new" },
+      { "id" => "zz-p.6" }
+    ]
+
+    assert_equal %w[zz-p.3 zz-p.4 zz-p.5 zz-p.6], Beads.open_child_ids(parsed)
+  end
+
+  def test_open_child_ids_of_a_non_array_is_nil_not_empty
+    assert_nil Beads.open_child_ids({ "error" => "no such issue" })
+    assert_nil Beads.open_child_ids(nil)
+    assert_equal [], Beads.open_child_ids([])
+  end
+
+  def test_open_children_reads_through_sh_and_reports_a_failed_read
+    fake = FakeSh.new
+    Sh.runner = fake
+    fake.expect(%w[bd children zz-p --json], out: '[{"id":"zz-p.1","status":"open"}]')
+    fake.expect(%w[bd children zz-q --json], exitstatus: 1, err: "")
+    fake.expect(%w[bd children zz-r --json], out: '{"id":"zz-r"}')
+
+    ok = Beads.open_children("zz-p")
+    failed = Beads.open_children("zz-q")
+    not_a_list = Beads.open_children("zz-r")
+
+    assert ok.ok?
+    assert_equal ["zz-p.1"], ok.ids
+    refute failed.ok?
+    assert_nil failed.ids
+    assert_equal "bd children zz-q failed", failed.error
+    refute not_a_list.ok?
+  ensure
+    Sh.runner = nil
+  end
 end
 
 # Bead (bead.rb): the CLI subcommands, driven end to end through FakeSh.

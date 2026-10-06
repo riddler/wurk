@@ -116,6 +116,7 @@ class WorktreeCleanupTest < Minitest::Test
       ["gh", "pr", "view", "42", "--json", "commits", "--jq", ".commits[].messageBody"],
       out: "Fixes a thing.\n\nRefs: zz-abc\n"
     )
+    expect_children("zz-abc")
     @fake.expect(["git", "worktree", "remove", WT1], out: "")
     @fake.expect(%w[git worktree prune], out: "")
     @fake.expect(["git", "branch", "-D", "zz-abc-merged-thing"], out: "")
@@ -137,6 +138,7 @@ class WorktreeCleanupTest < Minitest::Test
       ["gh", "pr", "view", "42", "--json", "commits", "--jq", ".commits[].messageBody"],
       out: "Fixes a thing.\n\nRefs: zz-abc\n"
     )
+    expect_children("zz-abc")
     @fake.expect(["git", "worktree", "remove", WT1], out: "")
     @fake.expect(%w[git worktree prune], out: "")
     @fake.expect(["git", "branch", "-D", "zz-abc-merged-thing"], out: "")
@@ -154,6 +156,114 @@ class WorktreeCleanupTest < Minitest::Test
     assert_equal "not merged (no request, open, or closed unmerged), kept", wt2["result"]
 
     assert_equal ["zz-abc"], env["data"]["beads_to_close"]
+    # A leaf bead: no children, so nothing is held back.
+    assert_equal [], env["data"]["beads_with_open_children"]
+  end
+
+  # The tracker's answer to `bd children <id> --json`, stubbed - a test
+  # never reads the real tracker. Default: a leaf (no children at all).
+  def expect_children(id, children = [], **opts)
+    @fake.expect(["bd", "children", id, "--json"], out: JSON.generate(children), **opts)
+  end
+
+  # The removal half every children-guard test below shares: zz-abc's
+  # worktree merged as request #42, whose commit trailer is `refs`.
+  def expect_merged_removal(refs)
+    expect_survey
+    @fake.expect(%w[git status --porcelain], out: "")
+    @fake.expect(%w[git rev-parse HEAD], out: "deadbeef\n")
+    @fake.expect(
+      ["gh", "pr", "view", "42", "--json", "commits", "--jq", ".commits[].messageBody"],
+      out: "Fixes a thing.\n\nRefs: #{refs}\n"
+    )
+    @fake.expect(["git", "worktree", "remove", WT1], out: "")
+    @fake.expect(%w[git worktree prune], out: "")
+    @fake.expect(["git", "branch", "-D", "zz-abc-merged-thing"], out: "")
+    @fake.expect(%w[git fetch --prune], out: "")
+  end
+
+  # A trailer naming a child and its parent put the parent in the close
+  # list with nothing checking its children; a caller acting on the list
+  # then closed a parent whose other child was still open.
+  #
+  # sabotage: in worktree_cleanup.rb's split_by_open_children, skip the
+  # Beads.open_children lookup and push every candidate onto closable ->
+  # zz-abc lands in beads_to_close and beads_with_open_children is empty ->
+  # red.
+  def test_a_parent_with_an_open_child_is_held_out_of_beads_to_close
+    expect_merged_removal("zz-abc.1, zz-abc")
+    expect_children("zz-abc", [
+                      { "id" => "zz-abc.1", "status" => "closed" },
+                      { "id" => "zz-abc.2", "status" => "in_progress" }
+                    ])
+    expect_children("zz-abc.1")
+
+    code, env = run_cleanup
+
+    assert_equal 0, code
+    assert_equal ["zz-abc.1"], env["data"]["beads_to_close"]
+    assert_equal [{ "id" => "zz-abc", "open_children" => ["zz-abc.2"] }],
+                 env["data"]["beads_with_open_children"]
+    # The worktree itself still goes: the guard is on the close list only.
+    assert_equal "merged in request #42, removed",
+                 env["data"]["results"].find { |r| r["path"] == WT1 }["result"]
+  end
+
+  def test_a_parent_whose_children_are_all_closed_stays_a_candidate
+    expect_merged_removal("zz-abc.1, zz-abc")
+    expect_children("zz-abc", [
+                      { "id" => "zz-abc.1", "status" => "closed" },
+                      { "id" => "zz-abc.2", "status" => "closed" }
+                    ])
+    expect_children("zz-abc.1")
+
+    code, env = run_cleanup
+
+    assert_equal 0, code
+    assert_equal ["zz-abc", "zz-abc.1"], env["data"]["beads_to_close"]
+    assert_equal [], env["data"]["beads_with_open_children"]
+  end
+
+  # sabotage: treat a failed children read as an empty one (closable << id
+  # on !read.ok?) -> zz-abc lands in beads_to_close after a failed read ->
+  # red.
+  def test_a_failed_children_read_keeps_the_candidate_out_and_warns
+    expect_merged_removal("zz-abc")
+    expect_children("zz-abc", exitstatus: 1, err: "database locked\n")
+
+    code, env = run_cleanup
+
+    assert_equal 0, code
+    assert_equal [], env["data"]["beads_to_close"]
+    assert_equal [], env["data"]["beads_with_open_children"]
+    warning = env["warnings"].find { |w| w["code"] == "children_lookup_failed" }
+    refute_nil warning
+    assert_includes warning["message"], "zz-abc"
+    assert_includes warning["message"], "database locked"
+    # The worktree removal is not held hostage to the tracker read.
+    assert_equal "merged in request #42, removed",
+                 env["data"]["results"].find { |r| r["path"] == WT1 }["result"]
+  end
+
+  def test_unparseable_children_output_is_a_failed_read
+    expect_merged_removal("zz-abc")
+    @fake.expect(%w[bd children zz-abc --json], out: "not json\n")
+
+    _code, env = run_cleanup
+
+    assert_equal [], env["data"]["beads_to_close"]
+    assert(env["warnings"].any? { |w| w["code"] == "children_lookup_failed" })
+  end
+
+  def test_an_empty_sweep_still_emits_both_lists
+    @fake.expect(%w[git worktree list --porcelain],
+                 out: "worktree #{MAIN}\nHEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nbranch refs/heads/main\n")
+
+    code, env = run_cleanup
+
+    assert_equal 0, code
+    assert_equal [], env["data"]["beads_to_close"]
+    assert_equal [], env["data"]["beads_with_open_children"]
   end
 
   def test_dirty_worktree_is_never_force_removed
@@ -229,6 +339,7 @@ class WorktreeCleanupTest < Minitest::Test
       ["gh", "pr", "view", "42", "--json", "commits", "--jq", ".commits[].messageBody"],
       out: "Fixes a thing.\n\nRefs: zz-abc\n"
     )
+    expect_children("zz-abc")
     @fake.expect(["git", "worktree", "remove", WT1], out: "")
     @fake.expect(%w[git worktree prune], out: "")
     @fake.expect(["git", "branch", "-D", "zz-abc-merged-thing"], out: "")
@@ -250,6 +361,7 @@ class WorktreeCleanupTest < Minitest::Test
       ["gh", "pr", "view", "42", "--json", "commits", "--jq", ".commits[].messageBody"],
       out: "Fixes a thing.\n\nRefs: zz-abc\n"
     )
+    expect_children("zz-abc")
     @fake.expect(["git", "worktree", "remove", WT1], out: "")
     @fake.expect(%w[git worktree prune], out: "")
     @fake.expect(["git", "branch", "-D", "zz-abc-merged-thing"], out: "")
@@ -292,6 +404,7 @@ class WorktreeCleanupTest < Minitest::Test
       ["gh", "pr", "view", "42", "--json", "commits", "--jq", ".commits[].messageBody"],
       out: "Refs: zz-abc\n"
     )
+    expect_children("zz-abc")
     # No "git worktree remove" or "git branch -D" expectations - dry-run
     # must not execute either, even though the fetch above is real.
 
@@ -315,6 +428,7 @@ class WorktreeCleanupTest < Minitest::Test
       ["gh", "pr", "view", "42", "--json", "commits", "--jq", ".commits[].messageBody"],
       out: "Fixes a thing.\n\nRefs: zz-abc\n"
     )
+    expect_children("zz-abc")
     @fake.expect(["git", "worktree", "remove", WT1], out: "")
     @fake.expect(%w[git worktree prune], out: "")
     @fake.expect(["git", "branch", "-D", "zz-abc-merged-thing"], out: "")
@@ -342,6 +456,7 @@ class WorktreeCleanupTest < Minitest::Test
       ["gh", "pr", "view", "42", "--json", "commits", "--jq", ".commits[].messageBody"],
       out: "Fixes a thing.\n\nRefs: zz-abc\n"
     )
+    expect_children("zz-abc")
     @fake.expect(["git", "worktree", "remove", WT1], out: "")
     @fake.expect(%w[git worktree prune], out: "")
     @fake.expect(["git", "branch", "-D", "zz-abc-merged-thing"], out: "")
