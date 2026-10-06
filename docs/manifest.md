@@ -80,7 +80,8 @@ defaults are listed under "Defaults" below.
     "sabotage": {                    // (opt) report-only mutation-testing scan
       "test_roots": ["test/"],
       "test_pattern": "\\btest\\s+\"",
-      "exempt_prefixes": ["test/scion_tests/", "test/scxml_tests/"]
+      "exempt_prefixes": ["test/scion_tests/", "test/scxml_tests/"],
+      "note_forms": ["comment"]      // (opt) default ["comment"]; or in_name
     },
     "timeout_seconds": 600,           // (opt) default 600; seconds Sh.run allows
                                       // gate.full/gate.loop and gate.attest before
@@ -386,9 +387,10 @@ existed.
 
 ## `gate.sabotage`
 
-`gate.rb`'s sabotage scan is a grep for a comment shape above an added test
-declaration: it flags new test declarations in the diff with no `# sabotage:`
-note in the comment block directly above them. It is report-only -
+`gate.rb`'s sabotage scan is a grep for a note shape on an added test
+declaration: by default it flags new test declarations in the diff with no
+`# sabotage:` note in the comment block directly above them (`note_forms`
+below widens what counts). It is report-only -
 `data.sabotage.missing` never flips `ok`, and a present note is not evidence
 the mutation was actually run, only that a comment with the right shape
 exists.
@@ -449,6 +451,38 @@ call, and `unverifiable` never flips `ok`.
   one list feeds both the `git diff` pathspec (as `:!prefix` exclusions) and
   the in-scan filter, so there is exactly one definition site for what is
   exempt.
+- **note_forms** - (opt) the list of note forms that count as noted; a
+  declaration is noted when ANY listed form notes it. Default `["comment"]`,
+  which is the scan exactly as it was before the key existed - same
+  `missing` entries, same warning text. Forms:
+  - `comment` - a `# sabotage:` line in the contiguous comment block
+    directly above the declaration.
+  - `in_name` - a `(sabotage: <mutation> -> <observed failure>)` note on
+    the declaration line itself, usually inside the test's name string.
+    `sabotage:` must follow the opening parenthesis (an ordinary
+    parenthesis in a test name is not a note), and the body may nest one
+    level of parentheses. Every noted declaration that carries an in-name
+    note is also listed in `data.sabotage.observed` as
+    `{file, text, observed}`, where `observed` is the text after the
+    body's first `->`, stripped, or `null` when there is no arrow (so a
+    consumer check can require an observed failure on new tests).
+    `observed` is `[]` whenever `in_name` is not listed or the scan did not
+    run.
+  - `records_file` - reserved for a per-test records-file lookup (wu-vny)
+    and rejected by lint today, with a message saying it is not
+    implemented yet. Accepting a form the scan cannot honor would let a
+    consumer turn it on and then see every records-backed test reported
+    missing (or, worse, a silent no-op) - a configuration that claims
+    something the kit does not do. Rejecting it at lint fails loud at the
+    one place a consumer looks while editing the manifest; wu-vny flips it
+    to accepted when the lookup exists.
+
+  An unknown form, a non-list, or an empty list is a lint error naming
+  `gate.sabotage.note_forms`; a duplicate is harmless. `gate.rb` reports
+  the active list as `data.sabotage.note_forms` on every run - including
+  when the scan is off, where it is the default the accessor answers, never
+  `null`. With anything other than the default enabled, the
+  `sabotage_note_missing` warning names every form that would have counted.
 
 statifier-ex runs the broad form (`test_roots: ["test/"]`), scanning every
 new test declaration; predicator-ex runs the narrow form over its
@@ -1278,7 +1312,9 @@ failure, no
 `gate.project_level_skips` and no `gate.not_applicable_skips` means every
 skipped stage blocks, no
 `gate.sabotage` means the sabotage scan is off (`data.sabotage.enabled`
-false, `missing` always `[]`, no `git diff` shelled out for it), no `judge`
+false, `missing` always `[]`, no `git diff` shelled out for it), no
+`gate.sabotage.note_forms` means only the `# sabotage:` comment form counts,
+no `judge`
 section means `judge?` is `false` and the judge never runs, no `rebase`
 section (or an empty `auto_resolve_paths`) means rebase auto-resolution is
 off - see "`rebase.auto_resolve_paths`" above, no `mr` section means

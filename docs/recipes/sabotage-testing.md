@@ -81,6 +81,28 @@ unchanged:
 def test_parse_rules_reads_all_three():
 ```
 
+### The in-name form (opt-in)
+
+Some projects keep the note in the test's NAME instead of a comment above
+it, so the mutation shows up in every test report:
+
+```ruby
+test "rejects an empty batch (sabotage: drop the empty check -> expected error, got :ok)" do
+```
+
+The shape is `(sabotage: <mutation> -> <observed failure>)` anywhere on
+the declaration line. The scanner counts it only when the project lists
+`in_name` in `gate.sabotage.note_forms` (below); with the default
+`["comment"]` an in-name note is reported missing like no note at all.
+`sabotage:` must come right after the opening parenthesis, so an ordinary
+parenthesis in a test name ("handles (nested) input") is not a note, and
+the body may nest one level of parentheses (`return nil from parse() ->
+red`). The text after the first `->` is reported as the observed failure
+under `data.sabotage.observed` (null when the note has no arrow), so a
+project that wants every new test to record what went red can check for
+it. Because the note lives on the declaration line, this form works in
+languages whose comments are not `#`.
+
 ## Enabling the scan
 
 Two keys, present together or not at all (`docs/manifest.md`,
@@ -91,19 +113,29 @@ Two keys, present together or not at all (`docs/manifest.md`,
   "sabotage": {
     "test_roots": ["tests/"],            // git pathspecs the scan diffs
     "test_pattern": "\\bdef test_",      // regex source for a declaration line
-    "exempt_prefixes": ["tests/fixtures/"]   // (opt) never need a note
+    "exempt_prefixes": ["tests/fixtures/"],  // (opt) never need a note
+    "note_forms": ["comment"]            // (opt) default; add "in_name" to count
+                                         // the in-name form too
   }
 }
 ```
+
+`note_forms` picks which note forms count; a declaration is noted when any
+listed form notes it. `["comment"]` (the default) is the comment block
+above; `["in_name"]` is the in-name form alone; `["comment", "in_name"]`
+accepts either, which suits a suite migrating from one to the other.
+`records_file` is reserved for a repo-level records file (wu-vny) and lint
+rejects it until that lookup exists.
 
 `test_pattern` is the project's test framework's declaration shape, not a
 default: `\bdef test_` for pytest and unittest, `\btest\s+"` for ExUnit,
 `\bdef test_` or `\btest\s+"` for minitest depending on style. Match the
 line that declares, not the body. One limit to know before choosing a
-pattern: the scanner walks `#`-prefixed comment lines only, so a language
-whose comments are `//` (Rust, Go, Swift, JavaScript) can adopt the
-discipline but not the scan today; every declaration there would be
-reported as missing whatever note it carries.
+pattern: the comment form walks `#`-prefixed comment lines only, so a
+language whose comments are `//` (Rust, Go, Swift, JavaScript) can adopt
+the comment discipline but not its scan today; every declaration there
+would be reported as missing whatever comment note it carries. The in-name
+form has no such limit.
 
 `test_roots` decides the scan's reach. `["tests/"]` scans every new
 declaration under it; an enumerated list of files scopes the discipline to
@@ -118,8 +150,11 @@ diff can see it.
 ## What the scanner reports, and what it never does
 
 `gate.rb`'s envelope carries `data.sabotage` with `enabled`, `scanned`,
-`missing` (declarations with no note) and `unverifiable` (declarations the
-scan could not check, each with a reason). None of it flips `ok`. A
+`missing` (declarations with no note), `unverifiable` (declarations the
+scan could not check, each with a reason), `note_forms` (the forms that
+counted) and `observed` (one `{file, text, observed}` entry per noted
+declaration carrying an in-name note; `[]` unless `in_name` is enabled).
+None of it flips `ok`. A
 present note is not evidence the mutation was run; it is evidence a
 comment of the right shape exists. The kit reports; the discipline is
 yours.
@@ -131,7 +166,8 @@ or the diff failed); `scanned: true` with empty `missing` and empty
 `unverifiable` means everything was checked and everything had a note.
 
 Known limits, each an open bead in this repo: a repo-level records file
-instead of inline notes is not recognized (wu-vny); the untracked-file
+instead of inline notes is not recognized (wu-vny; `note_forms` reserves
+`records_file` for it); the untracked-file
 half of wu-meh; the recompile guard above (wu-9k4).
 
 ## Making it binding: `.claude/wurk/commit.md`

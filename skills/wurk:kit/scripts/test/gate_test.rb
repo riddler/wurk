@@ -1721,6 +1721,173 @@ class GateTest < Minitest::Test
     end
   end
 
+  # --- wu-sjnr: gate.sabotage.note_forms (the in_name form) ---
+
+  # A one-file diff adding each of `decls` (with an `end` after each) and
+  # the matching working-tree file, scanned under `forms` (or the default
+  # when nil). Returns the scan result.
+  def scan_in_name(decls, forms: nil, comment_above: {})
+    added = decls.flat_map { |d| [comment_above[d], d, "  end"].compact }
+    diff = "diff --git a/test/acme/foo_test.exs b/test/acme/foo_test.exs\n" \
+           "--- a/test/acme/foo_test.exs\n+++ b/test/acme/foo_test.exs\n" \
+           "@@ -1,0 +2,#{added.length} @@\n" + added.map { |l| "+#{l}\n" }.join
+    file = "defmodule Acme.FooTest do\n" + added.map { |l| "#{l}\n" }.join + "end\n"
+    opts = { test_re: EXUNIT_TEST_RE, file_reader: sabotage_files("test/acme/foo_test.exs" => file) }
+    opts[:note_forms] = forms if forms
+    Gate.scan_sabotage(diff, **opts)
+  end
+
+  IN_NAME_DECL = '  test "rejects an empty batch (sabotage: drop the empty check -> expected error, got :ok)" do'
+
+  # sabotage: treat in_name as enabled regardless of note_forms -> red
+  # (Expected: 1, Actual: 0 - the default-forms scan stops flagging it)
+  def test_sabotage_in_name_note_does_not_count_under_the_default_forms
+    result = scan_in_name([IN_NAME_DECL])
+
+    assert_equal 1, result[:missing].length
+    assert_equal IN_NAME_DECL.strip, result[:missing].first[:text]
+    assert_equal [], result[:observed]
+  end
+
+  # sabotage: treat in_name as enabled regardless of note_forms -> red
+  # (Expected: 1, Actual: 0 - the comment-only scan stops flagging it)
+  def test_sabotage_in_name_note_does_not_count_under_comment_only
+    result = scan_in_name([IN_NAME_DECL], forms: ["comment"])
+
+    assert_equal 1, result[:missing].length
+    assert_equal [], result[:observed]
+  end
+
+  # sabotage: drop the in_name branch from sabotage_noted_at? -> red (the
+  # in-name declaration is reported missing)
+  def test_sabotage_in_name_note_counts_when_enabled
+    plain = '  test "rejects an empty batch" do'
+    result = scan_in_name([IN_NAME_DECL, plain], forms: ["in_name"])
+
+    assert_equal [plain.strip], result[:missing].map { |m| m[:text] }
+  end
+
+  # sabotage: make IN_NAME_NOTE_RE match any parenthesis -> red (missing
+  # expected ["test \"handles (nested) input\" do"], got [] - the
+  # unrelated parenthesis is taken for a note)
+  def test_sabotage_in_name_ignores_an_unrelated_parenthesis
+    decl = '  test "handles (nested) input" do'
+    result = scan_in_name([decl], forms: ["in_name"])
+
+    assert_equal [decl.strip], result[:missing].map { |m| m[:text] }
+    assert_equal [], result[:observed]
+  end
+
+  # sabotage: return the whole body instead of the part after the arrow in
+  # in_name_observed -> red (observed carries the mutation too)
+  def test_sabotage_in_name_reports_the_observed_failure
+    bare = '  test "parses a header (Sabotage: skip the header)" do'
+    result = scan_in_name([IN_NAME_DECL, bare], forms: ["in_name"])
+
+    assert_empty result[:missing]
+    assert_equal [
+      { file: "test/acme/foo_test.exs", text: IN_NAME_DECL.strip, observed: "expected error, got :ok" },
+      { file: "test/acme/foo_test.exs", text: bare.strip, observed: nil }
+    ], result[:observed]
+  end
+
+  # sabotage: drop the nested-parenthesis alternative from IN_NAME_NOTE_RE
+  # -> red (the note stops at "parse(" and the declaration is missing)
+  def test_sabotage_in_name_body_may_nest_one_parenthesis
+    decl = '  test "reads the config (sabotage: return nil from parse() -> red)" do'
+    result = scan_in_name([decl], forms: ["in_name"])
+
+    assert_empty result[:missing]
+    assert_equal ["red"], result[:observed].map { |o| o[:observed] }
+  end
+
+  # sabotage: make sabotage_noted_at? require every enabled form instead of
+  # any -> red (both declarations are reported missing)
+  def test_sabotage_either_enabled_form_notes_a_declaration
+    commented = '  test "keeps the order" do'
+    result = scan_in_name([IN_NAME_DECL, commented], forms: %w[comment in_name],
+                          comment_above: { commented => "  # sabotage: reverse the list -> red" })
+
+    assert_empty result[:missing]
+    assert_equal [IN_NAME_DECL.strip], result[:observed].map { |o| o[:text] }
+  end
+
+  # End-to-end: note_forms in the manifest reaches the scan, and the
+  # envelope reports the active forms and the observed list.
+  # sabotage: drop `note_forms: manifest.sabotage_note_forms` from
+  # sabotage_scan's scan_sabotage call -> red (the in-name test is missing
+  # and observed is empty)
+  def test_sabotage_note_forms_flow_from_the_manifest_to_the_envelope
+    in_tmp_cwd do
+      manifest = JSON.parse(File.read(".claude/wurk.json"))
+      manifest["gate"]["sabotage"]["note_forms"] = %w[comment in_name]
+      File.write(".claude/wurk.json", JSON.generate(manifest))
+      noted = '  test "drops blanks (sabotage: keep blanks -> expected [], got [""])" do'
+      plain = '  test "missing its note" do'
+      expect_no_elixir_diff
+      expect_no_sabotage_diff(
+        out: "diff --git a/test/foo_test.exs b/test/foo_test.exs\n" \
+             "--- a/test/foo_test.exs\n+++ b/test/foo_test.exs\n@@ -0,0 +1,2 @@\n" \
+             "+#{noted}\n+#{plain}\n"
+      )
+      FileUtils.mkdir_p("test")
+      File.write("test/foo_test.exs", "#{noted}\n#{plain}\nend\n")
+
+      _code, env = run_gate
+
+      sabotage = env["data"]["sabotage"]
+      assert_equal %w[comment in_name], sabotage["note_forms"]
+      assert_equal [{ "file" => "test/foo_test.exs", "text" => noted.strip, "observed" => 'expected [], got [""]' }],
+                   sabotage["observed"]
+      assert_equal [plain.strip], sabotage["missing"].map { |m| m["text"] }
+      assert_equal ["sabotage_note_missing"], env["warnings"].map { |w| w["code"] }
+      assert_match(/has no sabotage note in any accepted form/, env["warnings"].first["message"])
+      assert_equal true, env["ok"]
+    end
+  end
+
+  # The default path's envelope: note_forms reports the default, observed
+  # is empty, and the warning text is the one it has always been.
+  # sabotage: reword sabotage_note_wanted's default-forms phrase -> red (the
+  # warning text no longer matches byte for byte)
+  def test_sabotage_default_note_forms_keep_the_envelope_and_warning
+    in_tmp_cwd do
+      expect_no_elixir_diff
+      expect_no_sabotage_diff(
+        out: "diff --git a/test/foo_test.exs b/test/foo_test.exs\n" \
+             "--- a/test/foo_test.exs\n+++ b/test/foo_test.exs\n@@ -0,0 +1,1 @@\n" \
+             "+  test \"missing its note\" do\n"
+      )
+      FileUtils.mkdir_p("test")
+      File.write("test/foo_test.exs", "  test \"missing its note\" do\nend\n")
+
+      _code, env = run_gate
+
+      assert_equal ["comment"], env["data"]["sabotage"]["note_forms"]
+      assert_equal [], env["data"]["sabotage"]["observed"]
+      assert_equal "test/foo_test.exs: test \"missing its note\" do has no `# sabotage:` note directly above it " \
+                   "(a present note is not evidence the mutation was run)",
+                   env["warnings"].first["message"]
+    end
+  end
+
+  # With the scan off, the envelope still carries both keys: note_forms is
+  # what the accessor answers (the default) and observed is empty.
+  # sabotage: drop `observed: []` from sabotage_scan's disabled return ->
+  # red (observed is null in the envelope)
+  def test_sabotage_note_forms_and_observed_are_reported_when_the_scan_is_off
+    in_tmp_cwd(fixture: "gate_tier0") do
+      expect_elixir_diff
+      @fake.expect(%w[make check], out: "fine\n")
+
+      _code, env = run_gate
+
+      assert_equal false, env["data"]["sabotage"]["enabled"]
+      assert_equal ["comment"], env["data"]["sabotage"]["note_forms"]
+      assert_equal [], env["data"]["sabotage"]["observed"]
+    end
+  end
+
   # --- wu-821 Phase 4: sabotage scan sees the working tree ---
 
   # The two-dot diff (against the merge-base sha, not `<base>...HEAD`) is

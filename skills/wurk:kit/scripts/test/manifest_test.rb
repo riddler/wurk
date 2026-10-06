@@ -190,6 +190,61 @@ class ManifestValidationTest < Minitest::Test
     assert m.valid?, "expected a fully-declared gate.sabotage section to validate: #{m.errors.inspect}"
   end
 
+  def sabotage_with_note_forms(forms)
+    ManifestFixtures.load_with(
+      "valid",
+      "gate" => { "sabotage" => { "test_roots" => ["test/"], "test_pattern" => "\\btest\\s+\"", "note_forms" => forms } }
+    )
+  end
+
+  # sabotage: drop the unknown-form branch in validate_sabotage_note_forms
+  # -> red (a "bogus" form validates)
+  def test_sabotage_unknown_note_form_blocks_naming_the_key
+    m = sabotage_with_note_forms(%w[comment bogus])
+    refute m.valid?
+    assert_match(/gate\.sabotage\.note_forms entry "bogus" is not a known note form; accepted: comment, in_name/,
+                 m.errors.join("\n"))
+  end
+
+  # sabotage: move records_file into SABOTAGE_NOTE_FORMS_ACCEPTED -> red
+  # (records_file validates though the scan cannot honor it)
+  def test_sabotage_records_file_note_form_blocks_as_reserved
+    m = sabotage_with_note_forms(%w[records_file])
+    refute m.valid?
+    assert_match(/gate\.sabotage\.note_forms entry "records_file" is reserved for the records-file lookup \(wu-vny\) and not implemented yet/,
+                 m.errors.join("\n"))
+  end
+
+  # sabotage: drop the is_a?(Array) / empty check in
+  # validate_sabotage_note_forms -> red (a string or an empty list validates)
+  def test_sabotage_note_forms_must_be_a_non_empty_list
+    ["comment", [], [1]].each do |bad|
+      m = sabotage_with_note_forms(bad)
+      refute m.valid?, "expected note_forms #{bad.inspect} to block"
+      assert_match(/gate\.sabotage\.note_forms must be a non-empty list of note forms/, m.errors.join("\n"))
+    end
+  end
+
+  # sabotage: reject in_name in validate_sabotage_note_forms -> red
+  def test_sabotage_valid_note_forms_validate
+    [%w[in_name], %w[comment in_name], %w[comment comment]].each do |forms|
+      m = sabotage_with_note_forms(forms)
+      assert m.valid?, "expected note_forms #{forms.inspect} to validate: #{m.errors.inspect}"
+      assert_empty m.warnings.grep(/note_forms/), "note_forms must be a known key"
+      assert_equal forms.uniq, m.sabotage_note_forms
+    end
+  end
+
+  # sabotage: default sabotage_note_forms to %w[comment in_name] -> red
+  def test_sabotage_note_forms_default_to_comment
+    m = ManifestFixtures.load_with(
+      "valid",
+      "gate" => { "sabotage" => { "test_roots" => ["test/"], "test_pattern" => "\\btest\\s+\"" } }
+    )
+    assert_equal ["comment"], m.sabotage_note_forms
+    assert_equal ["comment"], ManifestFixtures.load("valid").sabotage_note_forms
+  end
+
   def test_judge_fixture_validates
     m = ManifestFixtures.load("judge")
     assert m.valid?, "expected the judge fixture to validate: #{m.errors.inspect}"
