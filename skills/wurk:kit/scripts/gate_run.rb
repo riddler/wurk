@@ -11,6 +11,7 @@ require_relative "lib/cli"
 require_relative "lib/manifest"
 require_relative "lib/lock"
 require_relative "lib/user_config"
+require_relative "lib/tree_snapshot"
 
 # GateRun is the sanctioned long-gate runner: `start` launches the manifest's
 # gate detached (optionally under one or more locks), `supervise` is the
@@ -233,7 +234,12 @@ end
         "lock_owner" => lock_owner,
         "log_path" => log_path,
         "sentinel_path" => sentinel_path,
-        "pid" => supervisor_pid
+        "pid" => supervisor_pid,
+        # What the supervisor needs for gate.rb's rule 5 (a gate run that
+        # changed the tree blocks): it has no manifest of its own, only
+        # this file.
+        "tree_root" => manifest.checkout_root,
+        "tree_allow" => manifest.daemon_written_paths
       }
       write_json(File.join(run_dir, META_FILE), meta)
 
@@ -327,12 +333,27 @@ end
       meta = load_json(meta_path)
       log_path = meta["log_path"] || File.join(run_dir, LOG_FILE)
 
+      tree_root = meta["tree_root"]
+      tree_exclude = tree_exclude_for(tree_root, run_dir)
+      tree_before = tree_root && TreeSnapshot.take(tree_root, envelope: env, exclude: tree_exclude)
+
       start_time = Time.now
       res = Sh.run_streaming(meta["argv"], chdir: meta["chdir"], timeout: meta["long_timeout_seconds"],
                                             log_path: log_path)
       duration_seconds = (Time.now - start_time).round(3)
 
       release_locks(meta, env)
+
+      # Same check, same fields as gate.rb (TreeSnapshot.check!). A meta.json
+      # written before the check existed carries no tree_root: that run
+      # reports null for both keys without a warning, since nothing failed.
+      if tree_root
+        TreeSnapshot.check!(env, root: tree_root, allow: Array(meta["tree_allow"]), before: tree_before,
+                                 after: TreeSnapshot.take(tree_root, envelope: env, exclude: tree_exclude))
+      else
+        env.data[:tree_changed] = nil
+        env.data[:tree_changed_allowed] = nil
+      end
 
       env.data[:exit_status] = res.status && res.status.exitstatus
       env.data[:timed_out] = res.timed_out?
@@ -372,6 +393,21 @@ end
           )
         end
       end
+    end
+
+    # The run directory defaults to a path inside the checkout
+    # (.claude/wurk-runs/gate/<id>), and the supervisor writes the gate log
+    # there on purpose; that is the runner's own write, not the gate's, so
+    # it is left out of both snapshots. Repo-relative with a trailing "/",
+    # the form git status prints. [] when the run dir is outside the tree.
+    def tree_exclude_for(tree_root, run_dir)
+      return [] unless tree_root
+
+      root = File.join(File.realpath(tree_root), "")
+      dir = File.join(File.realpath(run_dir), "")
+      dir.start_with?(root) ? [dir.delete_prefix(root)] : []
+    rescue SystemCallError
+      []
     end
 
     def write_sentinel(run_dir, env)
