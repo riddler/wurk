@@ -555,6 +555,46 @@ class ManifestValidationTest < Minitest::Test
                  m.warnings.join("\n"))
   end
 
+  # --- gate.could_not_measure_exit (wu-og89) ---------------------------------
+
+  # sabotage: give gate.could_not_measure_exit a DEFAULTS entry -> red
+  def test_gate_could_not_measure_exit_is_nil_when_absent
+    m = ManifestFixtures.load_with("valid", {})
+    assert m.valid?, m.errors.inspect
+    assert_nil m.gate_could_not_measure_exit
+  end
+
+  # sabotage: forget to add "could_not_measure_exit" to KNOWN["gate"] -> red
+  def test_gate_could_not_measure_exit_valid_value_validates_without_warning
+    m = ManifestFixtures.load_with("valid", "gate" => { "could_not_measure_exit" => 3 })
+    assert m.valid?, m.errors.inspect
+    assert_equal 3, m.gate_could_not_measure_exit
+    refute_match(/unknown key gate\.could_not_measure_exit/, m.warnings.join("\n"))
+  end
+
+  # 0 is success: declaring it would turn every green run into a
+  # could-not-measure one.
+  # sabotage: widen the range check to between?(0, 255) -> red
+  def test_gate_could_not_measure_exit_zero_blocks
+    m = ManifestFixtures.load_with("valid", "gate" => { "could_not_measure_exit" => 0 })
+    refute m.valid?
+    assert_match(/gate\.could_not_measure_exit must be an integer from 1 to 255, got 0/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the upper bound of the range check -> red
+  def test_gate_could_not_measure_exit_out_of_range_blocks
+    m = ManifestFixtures.load_with("valid", "gate" => { "could_not_measure_exit" => 256 })
+    refute m.valid?
+    assert_match(/gate\.could_not_measure_exit must be an integer from 1 to 255, got 256/, m.errors.join("\n"))
+  end
+
+  # sabotage: drop the is_a?(Integer) check, letting a string through -> red
+  def test_gate_could_not_measure_exit_non_integer_blocks
+    m = ManifestFixtures.load_with("valid", "gate" => { "could_not_measure_exit" => "3" })
+    refute m.valid?
+    assert_match(/gate\.could_not_measure_exit must be an integer from 1 to 255, got "3"/, m.errors.join("\n"))
+  end
+
   # --- repo.daemon_written_paths (wu-bjfq) -----------------------------------
 
   # sabotage: drop the "repo.daemon_written_paths" DEFAULTS entry and the

@@ -494,6 +494,28 @@ the checkout root); `data.gate_cwd` reports the resolved directory. See
   enumerated declaration): a project declaring neither gets the strict
   reading, where an unrecognized skip reason blocks, and widening either
   list is an edit to the consumer's own manifest, not to kit source.
+- **Could not measure is a third outcome, never a pass and never a skip.**
+  A tier-1 stage with the status `could_not_measure` (and a `reason`, falling
+  back to `summary`) is listed under `data.could_not_measure` as
+  `{scope: "stage", name, reason}` and warns with `stage_could_not_measure`;
+  a run with no report whose gate command exits the manifest's
+  `gate.could_not_measure_exit` gets one `{scope: "run", name: null, reason}`
+  entry and warns with `gate_could_not_measure` in place of
+  `gate_tier0_failure` (`data.gate_output` is still filled). A run the kit
+  killed for its timeout never matches. While any entry exists `ok` is
+  false, whatever the exit code or the report's status said, and the exit
+  code is 1 - the kit's 0/1/2 contract does not change.
+  `data.skipped_stages` never carries these stages. `data.could_not_measure`
+  is always present (`[]` when there is nothing to say).
+- `data.verdict` names the outcome in one of three words: `green` (ok),
+  `red` (not ok, and either nothing could-not-measure or some stage reported
+  a measured failure - a status outside `ok`/`pass`/`passed`/`skip`/
+  `skipped`/`could_not_measure`, which wins over a gap), or
+  `could not measure`. `data.summary` is the one-line human form, leading
+  with that word (`could not measure: Tests (worker died before
+  reporting)`). Both are `null` when no gate command ran (the carve-out, or
+  a command that could not start). A run-level skip that blocks reads `red`;
+  its detail stays in `data.skipped_stages`.
 - Only one profile argument is accepted: `--profile loop`. It always sets
   `data.attested` to `false`. No `--skip`, `--quick`, or other `--profile`
   value is defined by this script's parser, so passing one is a usage error

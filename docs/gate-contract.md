@@ -47,7 +47,9 @@ ported):
     {"name": "Dialyzer", "status": "skip", "reason": "disabled in .quality.exs",
      "level": "project"},          // "run" skip = block; "project" skip = warn;
                                     // "not_applicable" skip = warn, not required in reports
-    {"name": "Tests",    "status": "fail", "detail": "..."}
+    {"name": "Tests",    "status": "fail", "detail": "..."},
+    {"name": "Coverage", "status": "could_not_measure",
+     "reason": "worker exited before reporting"}   // never ok, never a skip
   ],
   "attested": false                 // tier 2 sets this true
 }
@@ -66,6 +68,20 @@ distinction (a stage skipped by this run blocks; a stage the project never
 enables warns and is named in reports; a stage the project has declared
 permanently inapplicable warns but need not be named), stage names in
 reports, and honest "what was actually measured" summaries.
+
+A stage the gate was asked to measure and could not - a toolchain missing, a
+worker that died before reporting, a filter that matched zero files - reports
+the status `could_not_measure` with a `reason`. It is a third outcome, not a
+kind of skip: `gate.rb` lists it under `data.could_not_measure` (never under
+`data.skipped_stages`, whose classifications a project can declare
+non-blocking), and the envelope is not ok while one exists, whatever the
+report's own status says. `data.verdict` then reads `could not measure`
+rather than `red`, unless another stage reported a measured failure, which is
+the stronger statement and wins. A tier-0 project gets the same outcome for
+the whole run by declaring the exit code its gate uses for it,
+`gate.could_not_measure_exit` (see `docs/manifest.md`). Either way the kit's
+own exit code is 1, the same as red: the field, not the exit code, tells the
+two apart.
 
 ## Tier 2: attestation and the gate guard (optional)
 

@@ -86,13 +86,16 @@ defaults are listed under "Defaults" below.
                                       // gate.full/gate.loop and gate.attest before
                                       // killing them - raise it for a gate that
                                       // runs inside e.g. docker-compose
-    "long_timeout_seconds": 3600      // (opt) default 3600; seconds the detached
+    "long_timeout_seconds": 3600,     // (opt) default 3600; seconds the detached
                                       // long-gate runner (gate_run.rb) allows the
                                       // gate command before killing it. Separate
                                       // from timeout_seconds: that one bounds a
                                       // FOREGROUND run whose caller is blocked, this
                                       // one bounds the DETACHED run that exists to
                                       // outlive that bound
+    "could_not_measure_exit": 3       // (opt) no default; the exit code the gate
+                                      // command uses for "could not measure" when
+                                      // it gives no report - see below
   },
 
   "parallelism": {
@@ -352,6 +355,31 @@ stage blocks. Widening either list is a review decision made in this file,
 not a kit default - see `gate.rb`'s module doc for why the strict direction
 is deliberate. statifier-ex's values above are that project's own taxonomy,
 not a default any other consumer inherits.
+
+## `gate.could_not_measure_exit`
+
+An integer exit code, 1 to 255, with no default. It names the code the
+project's gate command exits with when it **could not measure** - a toolchain
+that is not installed, a worker that died before reporting, a filter that
+matched zero files - as opposed to measuring and finding a failure.
+
+When the gate command gives no tier-1 report and exits with exactly this
+code, `gate.rb` records one entry for the whole run under
+`data.could_not_measure` (`scope: "run"`) instead of an ordinary tier-0
+failure, and `data.verdict` reads `could not measure` rather than `red`. The
+envelope is still not ok and still exits 1: this key only says *which*
+not-ok a run was, it can never make one pass. That is also why `0` is
+refused - it would turn every green run into a could-not-measure one. A run
+the kit killed for exceeding `gate.timeout_seconds` never matches, whatever
+code it carries, since the code is not the gate command's own statement.
+
+A project with a tier-1 report does not need the key for its stages: the
+report says it per stage, with the stage status `could_not_measure` (see
+`docs/gate-contract.md`). The key covers the run that never got as far as
+writing a report.
+
+Absent, every non-zero exit is a plain failure, exactly as before the key
+existed.
 
 ## `gate.sabotage`
 
@@ -1196,6 +1224,8 @@ Everything else absent means the capability is off, and the scripts say so
 rather than guessing: no `tmux` section means no tmux integration, and a
 `tmux` section with no `layout` means `window-per-issue`; no
 `gate.report` means tier 0, no `gate.attest` means `attested: false`, no
+`gate.could_not_measure_exit` means every non-zero gate exit is a plain
+failure, no
 `gate.project_level_skips` and no `gate.not_applicable_skips` means every
 skipped stage blocks, no
 `gate.sabotage` means the sabotage scan is off (`data.sabotage.enabled`
@@ -1272,6 +1302,9 @@ gated.
   legal but warns, naming which field bounds which kind of run - it is
   almost certainly a mistake, since the long-gate run exists to outlive the
   short one, not the other way around.
+- **`gate.could_not_measure_exit` must be an integer from 1 to 255** when
+  present. `0`, anything above 255, a float, and a string all block; absent
+  is legal. See "`gate.could_not_measure_exit`" above.
 - **`parallelism.timeout_seconds` must be a positive integer.** Same rule,
   same validation, as `gate.timeout_seconds` above.
 - **`parallelism.preflight` must be a JSON boolean.** Absent is legal and
