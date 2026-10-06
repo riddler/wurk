@@ -997,12 +997,16 @@ Escalation ladder:
 4. Third stall: retire the worker; inspect the worktree yourself;
    dispatch a FRESH worker with a takeover brief (verified worktree
    state, committed-vs-uncommitted inventory, "read uncommitted edits
-   critically", "stand down any live writer first"; workers run
+   critically", "stand down any live writer first", "never `git
+   clean`"; workers run
    /wurk:verify --unattended after implementation - it machine-checks
    and fixes what it can, and human-only items stay deferred). The
    inventory is one you VERIFIED yourself, not a summary of the dead
    worker's last message: path counts, a diffstat, and which paths are
-   staged, unstaged and untracked, each named. Ask the fresh worker to
+   staged, unstaged and untracked, each named, and the salvage below -
+   the stash sha and the salvage root the untracked copies sit under -
+   so the fresh worker knows a discarded draft is still recoverable and
+   where. Ask the fresh worker to
    report KEPT / CHANGED / DISCARDED against that inventory, item by
    item, so the takeover's own result says what it did with a dead
    worker's draft - two such takeovers reported one draft kept whole
@@ -1011,6 +1015,33 @@ Escalation ladder:
    rubric's answer for the bead as it now stands, and a bead that has
    stalled a worker is by that fact no longer fully specified: it goes
    to `opus`.
+
+**Salvage before rung 3 or rung 4.** Both rungs hand a worktree that may
+hold a dead worker's only copy of its work to a new writer, and the brief
+names what is at risk without keeping it - untracked files in particular
+vanish silently, because no git operation brings them back. So before
+either redispatch (and before every takeover the sections below route to
+rung 4), salvage the worktree:
+
+```sh
+ruby ~/.claude/skills/wurk:kit/scripts/worktree_salvage.rb \
+  --out <campaign state dir>/salvage/<campaign-id>/<worktree-basename>/ <worktree>
+```
+
+It records the tracked changes with `git stash create` (no ref written, no
+file touched) and copies every untracked file under the root, preserving
+relative paths; it never cleans, stashes, resets or checks out. Two facts
+about what comes back. The `stash_sha` is a pointer, not a backup: nothing
+references that commit, so a later gc may prune it - journal it, and treat
+the copy as the durable half. And the root must sit outside every work
+tree or under a directory one ignores (the campaign state dir is excluded),
+and a non-empty root is refused, so a second salvage of the same worktree
+takes a fresh root (append the UTC time). Journal the sha and the root in
+that redispatch's `[dispatch]` entry, and hand both to the takeover brief.
+A blocked salvage stops the redispatch: a takeover without a copy is the
+loss this step exists to prevent. A `status_changed_during_salvage`
+warning means a writer is still live in the worktree - stand it down
+first, per the brief's own rule.
 
 **An infrastructure kill is not a stall, and it enters the ladder at
 rung 4.** A worker terminated by something outside the campaign - an
@@ -1248,8 +1279,14 @@ for an hour.
    resume redispatches, and it goes through the takeover brief (rung
    4, or the one-step tier escalation at rung 3 when the dead worker
    was a `sonnet` dispatch), never a fresh Phase 3 dispatch that
-   ignores the worktree's uncommitted edits. Everything else keeps its
-   worker and waits for the next sweep.
+   ignores the worktree's uncommitted edits. It is salvaged first
+   ("Salvage before rung 3 or rung 4", above), and its brief carries
+   the sha and the salvage root. Everything else keeps its worker and
+   waits for the next sweep.
+4. A harness status string is not a ruling. A worker or task listed as
+   "was stopped" or "stopped by the user" is a fact about the process,
+   not an operator decision about the bead or its worktree; only an
+   `[operator]` or `[ruling-taken]` journal entry is one.
 
 A resume's first journal entry is a [graph] render saying what was
 reconstructed and from which files, so the next resume can verify it -

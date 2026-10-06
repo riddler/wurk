@@ -1028,6 +1028,64 @@ on a dry run, would be) whatever its bead's children say, and the read
 runs on a dry run too, so the dry run and the real sweep report the same
 lists. Both keys are always present, `[]` when empty.
 
+## `worktree_salvage.rb`: copy a worktree's uncommitted work aside
+
+```sh
+worktree_salvage.rb --out <salvage-root> [--dry-run] [--json] <worktree>
+```
+
+Takes a copy of what one worktree holds that no commit holds, before the
+worktree is handed to a new writer (the conductor's takeover path, in its
+"Worker stalls, resumes, takeovers" section). It is its own script rather
+than a `worktree_survey.rb` subcommand because the survey is a read over
+every worktree behind the manifest and forge guards, while this is a write
+(the copies) aimed at exactly one worktree and needing neither.
+
+**Two halves, not equally durable.** Tracked changes - staged, unstaged,
+and newly added files - go into `git stash create`, which builds a stash
+commit, prints its sha, writes no ref and changes no file. Nothing
+references that commit, so a later gc may prune it: the caller records the
+sha (the conductor journals it), and it is a pointer, not a backup.
+Untracked files, which `git stash create` never includes, are copied under
+the salvage root at their worktree-relative paths, symlinks as symlinks.
+The copy is the durable half. Ignored files are not salvaged. An untracked
+embedded repository is listed in `data.not_copied` with reason
+`nested_repository` and an `untracked_not_copied` warning, never flattened
+into a file copy.
+
+**The salvage root is required and has no default** - a kit script carries
+no consumer path. It is refused before anything runs when it sits inside
+the worktree being salvaged (`salvage_root_in_worktree`: removing the
+worktree would delete the salvage), inside any git directory
+(`salvage_root_in_git_dir`), or inside any other git work tree that does not
+ignore it (`salvage_root_in_work_tree`), so salvaged files never land where
+`git add -A` could carry them. A root under a directory the enclosing tree
+ignores - a git-excluded campaign state dir - passes. A root that exists and
+is not an empty directory is refused (`salvage_root_not_empty`), so a
+second salvage never overwrites the first. A path outside any work tree
+blocks `not_a_work_tree`.
+
+**What it never runs:** git clean, git stash push/pop/apply/drop, reset,
+checkout, or any write inside the worktree. `git status --porcelain` is
+read before and after; `data.status_unchanged` false comes with a
+`status_changed_during_salvage` warning, because it means another writer is
+live there.
+
+**`data` keys.** `worktree` (the resolved top level), `out` (the resolved
+root), `dry_run`, `head`, `tracked_changes` and `untracked` (paths from the
+status read), `stash_sha` (null when there were no tracked changes, and
+under `--dry-run`), `copied`, `would_copy` (the `--dry-run` list),
+`not_copied`, and `status_unchanged`.
+
+**`--dry-run`** runs the status reads and the root checks, skips
+`git stash create`, and copies nothing: `would_copy` lists every untracked
+path a real run would copy.
+
+**Exit codes.** 0 when salvaged (or previewed), including a clean worktree
+with nothing to salvage; 1 when blocked (`stash_create_failed` included,
+which means the tracked half is not salvaged); 2 on a usage error such as a
+missing `--out`.
+
 ## `session_metrics.rb`: harness metrics from session transcripts
 
 Reads Claude Code session transcripts (JSONL) and reports what the harness
