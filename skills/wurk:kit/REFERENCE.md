@@ -977,6 +977,37 @@ error.
 records the fetch in `commands` without running it and runs every read,
 since nothing here mutates.
 
+## `worktree_cleanup.rb`: close candidates, not close instructions
+
+`data.beads_to_close` is a **candidate list the caller verifies**, never an
+instruction to close. The script itself closes nothing (the contract test
+bans `bd close`); `/wurk:cleanup`'s close step does, after its own `bd
+show`. Candidates come from the commit trailers of each merged request,
+deduped and sorted.
+
+A trailer can name a parent alongside its child, and a branch can be cut
+for a parent, so a merged request is no evidence the parent is finished.
+Before emitting, the script reads each candidate's children from the
+tracker (`Beads.open_children`, `bd children <id> --json`) and splits the
+list:
+
+- **No open children** (a leaf, or every child closed): stays in
+  `beads_to_close`.
+- **One or more open children**: moves to `data.beads_with_open_children`,
+  one `{id, open_children}` entry per parent with the open child ids
+  sorted, and is left out of `beads_to_close`. A child counts as open
+  unless its status is `closed` or `tombstone`; an unknown status counts
+  as open.
+- **The children read failed** (non-zero exit, unparseable output, not a
+  list): in neither list, with a `children_lookup_failed` warning naming
+  the bead. A failed read never becomes a close; the caller checks that
+  bead by hand.
+
+The split governs the close list only. A merged worktree is removed (or,
+on a dry run, would be) whatever its bead's children say, and the read
+runs on a dry run too, so the dry run and the real sweep report the same
+lists. Both keys are always present, `[]` when empty.
+
 ## `session_metrics.rb`: harness metrics from session transcripts
 
 Reads Claude Code session transcripts (JSONL) and reports what the harness
