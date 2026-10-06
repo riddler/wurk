@@ -448,4 +448,97 @@ end
     err = capture_io_stderr { assert_raises(SystemExit) { GateRun.run(["poll"]) } }
     assert_match(/usage/, err)
   end
+
+  # --- tree-write check in supervise (wu-jqol) --------------------------------
+
+  # sabotage: drop "tree_root"/"tree_allow" from start's meta -> red
+  def test_start_records_what_the_supervisor_needs_for_the_tree_check
+    in_tmp_repo("valid") do |dir|
+      run_dir = File.join(dir, "run")
+      run_gr(%W[start --run-dir #{run_dir}])
+
+      meta = JSON.parse(File.read(File.join(run_dir, "meta.json")))
+      assert_equal File.realpath(dir), File.realpath(meta["tree_root"])
+      assert_equal [], meta["tree_allow"]
+    end
+  end
+
+  # sabotage: n/a - asserts the legacy shape stays quiet; the FakeSh above
+  # would raise on any git status this path tried to run
+  def test_supervise_without_a_tree_root_reports_null_tree_keys_and_no_warning
+    Dir.mktmpdir do |dir|
+      build_run_dir(dir, pid: Process.pid)
+      @fake.expect(%w[make report], out: "all good", exitstatus: 0)
+
+      code, env = run_gr(%W[supervise --run-dir #{dir}])
+
+      assert_equal 0, code
+      assert_nil env["data"]["tree_changed"]
+      assert_nil env["data"]["tree_changed_allowed"]
+      assert_equal [], env["warnings"]
+    end
+  end
+
+  TREE_GIT_SCRUB = { "GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_COMMON_DIR" => nil, "GIT_INDEX_FILE" => nil,
+                     "GIT_CONFIG_NOSYSTEM" => "1", "GIT_CONFIG_GLOBAL" => File::NULL,
+                     "GIT_AUTHOR_NAME" => "t", "GIT_AUTHOR_EMAIL" => "t@example.invalid",
+                     "GIT_COMMITTER_NAME" => "t", "GIT_COMMITTER_EMAIL" => "t@example.invalid" }.freeze
+
+  # A committed scratch repo whose supervise run executes `/bin/sh -c
+  # <script>` for real, with its run dir at the default in-tree location
+  # (.claude/wurk-runs/gate/<id>) - which the snapshot must leave out, since
+  # the supervisor writes gate.log there itself.
+  def with_supervised_tree_repo(script, allow: [])
+    require "open3"
+    scrub = TREE_GIT_SCRUB.merge(ENV.keys.grep(/\ACLAUDE_CODE_/).to_h { |k| [k, nil] })
+    saved = scrub.keys.to_h { |k| [k, ENV[k]] }
+    scrub.each { |k, v| ENV[k] = v }
+    Sh.runner = nil
+    Dir.mktmpdir do |tmp|
+      repo = File.realpath(tmp)
+      File.write(File.join(repo, "tracked.txt"), "tracked\n")
+      [%w[init -q -b main], %w[add .], %w[commit -q -m init]].each do |args|
+        out, status = Open3.capture2e("git", "-c", "commit.gpgsign=false", *args, chdir: repo)
+        raise "git #{args.join(' ')} failed: #{out}" unless status.success?
+      end
+      run_dir = File.join(repo, ".claude", "wurk-runs", "gate", "20260101T000000Z-1")
+      FileUtils.mkdir_p(run_dir)
+      build_run_dir(run_dir, pid: Process.pid)
+      meta = JSON.parse(File.read(File.join(run_dir, "meta.json")))
+      meta["argv"] = ["/bin/sh", "-c", script]
+      meta["chdir"] = repo
+      meta["tree_root"] = repo
+      meta["tree_allow"] = allow
+      File.write(File.join(run_dir, "meta.json"), JSON.generate(meta))
+      yield repo, run_dir
+    end
+  ensure
+    saved&.each { |k, v| ENV[k] = v }
+  end
+
+  # sabotage: pass tree_before as the after-snapshot in run_supervise -> red
+  def test_supervise_blocks_a_gate_that_edits_a_tracked_file_and_the_sentinel_says_so
+    with_supervised_tree_repo("echo touched >> tracked.txt") do |_repo, run_dir|
+      code, env = run_gr(%W[supervise --run-dir #{run_dir}])
+
+      assert_equal 1, code
+      assert_equal ["gate_wrote_tree"], env["blocked"].map { |b| b["code"] }
+      assert_equal ["tracked.txt"], env["data"]["tree_changed"]
+      result = JSON.parse(File.read(File.join(run_dir, "result.json")))
+      refute result["ok"]
+      assert_equal ["tracked.txt"], result["data"]["tree_changed"]
+    end
+  end
+
+  # sabotage: return [] unconditionally from tree_exclude_for -> red: the
+  # supervisor's own gate.log under the in-tree run dir is reported
+  def test_supervise_leaves_its_own_in_tree_run_dir_out_and_honors_the_allowlist
+    with_supervised_tree_repo("echo touched >> tracked.txt", allow: ["tracked.txt"]) do |_repo, run_dir|
+      code, env = run_gr(%W[supervise --run-dir #{run_dir}])
+
+      assert_equal 0, code, env.inspect
+      assert_equal ["tracked.txt"], env["data"]["tree_changed"]
+      assert_equal ["tracked.txt"], env["data"]["tree_changed_allowed"]
+    end
+  end
 end

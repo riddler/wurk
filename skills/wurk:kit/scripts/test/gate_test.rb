@@ -7,6 +7,7 @@ require "tmpdir"
 require "fileutils"
 require_relative "../gate"
 require_relative "../lib/gate_paths"
+require_relative "../lib/tree_snapshot"
 require_relative "support/manifest_helper"
 require_relative "support/fake_sh"
 
@@ -15,6 +16,10 @@ class GateTest < Minitest::Test
 
   def setup
     @fake = FakeSh.new
+    # The tree snapshot (rule 5) runs around every gate command; the tests
+    # below that are not about it see a clean tree on both sides. The
+    # tree-write tests at the bottom of this file run real git instead.
+    @fake.allow(TreeSnapshot::STATUS_ARGV, out: "")
     Sh.runner = @fake
     @orig_pwd = Dir.pwd
   end
@@ -2104,6 +2109,205 @@ class GateTest < Minitest::Test
       assert_equal File.realpath(root), File.realpath(diff_call.chdir)
       assert_equal [], env["data"]["sabotage"]["missing"]
       assert_equal [], env["data"]["sabotage"]["unverifiable"]
+    end
+  end
+
+  # --- rule 5: a gate run that changed the tree blocks (wu-jqol) -------------
+  #
+  # Real git in a scratch repo, real /bin/sh gate commands: the snapshot is
+  # a git status plus file hashes, and a FakeSh answer to git status would
+  # test the parser, not whether the tree moved. ENV is scrubbed of git
+  # variables (a hook-run suite would otherwise aim git at this checkout)
+  # and of CLAUDE_CODE_* for the gate child.
+
+  TREE_GIT_SCRUB = { "GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_COMMON_DIR" => nil, "GIT_INDEX_FILE" => nil,
+                     "GIT_CONFIG_NOSYSTEM" => "1", "GIT_CONFIG_GLOBAL" => File::NULL,
+                     "GIT_AUTHOR_NAME" => "t", "GIT_AUTHOR_EMAIL" => "t@example.invalid",
+                     "GIT_COMMITTER_NAME" => "t", "GIT_COMMITTER_EMAIL" => "t@example.invalid" }.freeze
+
+  def tree_git!(dir, *args)
+    out, status = Open3.capture2e("git", "-c", "commit.gpgsign=false", *args, chdir: dir)
+    raise "git #{args.join(' ')} failed in #{dir}: #{out}" unless status.success?
+
+    out
+  end
+
+  # A committed repo with tracked.txt, notes.txt and log/ledger.md, whose
+  # manifest's gate.full is `/bin/sh -c <script>` run from the repo root.
+  # Yields the repo dir with cwd inside it and the real Sh runner installed.
+  def with_tree_repo(script, daemon_written: nil)
+    require "open3"
+    scrub = TREE_GIT_SCRUB.merge(ENV.keys.grep(/\ACLAUDE_CODE_/).to_h { |k| [k, nil] })
+    saved = scrub.keys.to_h { |k| [k, ENV[k]] }
+    scrub.each { |k, v| ENV[k] = v }
+    Sh.runner = nil
+    Manifest.reset!
+    Dir.mktmpdir do |tmp|
+      dir = File.realpath(tmp)
+      raw = JSON.parse(File.read(fixture_path("gate_tier0")))
+      raw["gate"]["full"] = ["/bin/sh", "-c", script]
+      raw["repo"] = { "daemon_written_paths" => daemon_written } if daemon_written
+      FileUtils.mkdir_p(File.join(dir, ".claude"))
+      FileUtils.mkdir_p(File.join(dir, "log"))
+      File.write(File.join(dir, ".claude", "wurk.json"), JSON.generate(raw))
+      File.write(File.join(dir, "tracked.txt"), "tracked\n")
+      File.write(File.join(dir, "notes.txt"), "notes\n")
+      File.write(File.join(dir, "log", "ledger.md"), "first\n")
+      tree_git!(dir, "init", "-q", "-b", "main")
+      tree_git!(dir, "add", ".")
+      tree_git!(dir, "commit", "-q", "-m", "init")
+      Dir.chdir(dir) { yield dir }
+    end
+  ensure
+    Manifest.reset!
+    saved&.each { |k, v| ENV[k] = v }
+  end
+
+  def blocked_codes(env)
+    env["blocked"].map { |b| b["code"] }
+  end
+
+  # sabotage: replace the after-snapshot in gate.rb with tree_before (skip
+  # the second take) -> red: tree_changed is [] and nothing blocks
+  def test_a_gate_that_edits_a_tracked_file_blocks_naming_the_path
+    with_tree_repo("echo touched >> tracked.txt") do
+      code, env = run_gate(["--force"])
+
+      assert_equal 1, code
+      refute env["ok"]
+      assert_equal ["gate_wrote_tree"], blocked_codes(env)
+      assert_match(/tracked\.txt/, env["blocked"].first["message"])
+      assert_match(/Fix:/, env["blocked"].first["message"])
+      assert_equal ["tracked.txt"], env["data"]["tree_changed"]
+      assert_equal [], env["data"]["tree_changed_allowed"]
+      assert_equal "red", env["data"]["verdict"]
+    end
+  end
+
+  # sabotage: make TreeSnapshot.partition put every path in `allowed` ->
+  # red in test_a_gate_that_edits_a_tracked_file_blocks_naming_the_path;
+  # make it put none there -> red here
+  def test_a_daemon_written_path_the_gate_run_changed_is_reported_and_does_not_block
+    with_tree_repo("echo touched >> tracked.txt", daemon_written: ["tracked.txt"]) do
+      code, env = run_gate(["--force"])
+
+      assert_equal 0, code, env.inspect
+      assert env["ok"]
+      assert_equal ["tracked.txt"], env["data"]["tree_changed"]
+      assert_equal ["tracked.txt"], env["data"]["tree_changed_allowed"]
+    end
+  end
+
+  # sabotage: drop the trailing-"/" branch of GatePaths.match_one? -> red
+  def test_a_directory_prefix_entry_allows_a_change_under_it_and_nothing_else
+    with_tree_repo("echo next >> log/ledger.md; echo x >> notes.txt", daemon_written: ["log/"]) do
+      code, env = run_gate(["--force"])
+
+      assert_equal 1, code
+      assert_equal ["log/ledger.md", "notes.txt"], env["data"]["tree_changed"]
+      assert_equal ["log/ledger.md"], env["data"]["tree_changed_allowed"]
+      assert_equal ["gate_wrote_tree"], blocked_codes(env)
+      assert_match(/changed notes\.txt in/, env["blocked"].first["message"])
+      refute_match(/ledger\.md/, env["blocked"].first["message"])
+    end
+  end
+
+  # sabotage: have TreeSnapshot.take return nil -> red (keys null, a warning)
+  def test_a_gate_that_writes_nothing_reports_tree_changed_empty
+    with_tree_repo("true") do
+      code, env = run_gate(["--force"])
+
+      assert_equal 0, code, env.inspect
+      assert_equal [], env["data"]["tree_changed"]
+      assert_equal [], env["data"]["tree_changed_allowed"]
+      refute(env["warnings"].any? { |w| w["code"] == "tree_snapshot_failed" })
+    end
+  end
+
+  # sabotage: drop the content hash from TreeSnapshot.take's signature
+  # (status letters only) -> still green here, red in the next test
+  def test_a_path_dirty_before_and_unchanged_after_is_not_reported
+    with_tree_repo("true") do |dir|
+      File.write(File.join(dir, "notes.txt"), "an operator's uncommitted edit\n")
+      File.write(File.join(dir, "scratch.txt"), "an untracked file already there\n")
+
+      code, env = run_gate(["--force"])
+
+      assert_equal 0, code, env.inspect
+      assert_equal [], env["data"]["tree_changed"]
+    end
+  end
+
+  # sabotage: drop the content hash from TreeSnapshot.take's signature
+  # (status letters only) -> red: " M" before and after reads as unchanged
+  def test_a_path_dirty_before_that_the_gate_edits_again_is_reported
+    with_tree_repo("echo again >> notes.txt") do |dir|
+      File.write(File.join(dir, "notes.txt"), "an operator's uncommitted edit\n")
+
+      code, env = run_gate(["--force"])
+
+      assert_equal 1, code
+      assert_equal ["notes.txt"], env["data"]["tree_changed"]
+      assert_equal ["gate_wrote_tree"], blocked_codes(env)
+    end
+  end
+
+  # sabotage: drop --untracked-files=all from TreeSnapshot::STATUS_ARGV ->
+  # red: the new file inside a new directory is reported as "out/" instead
+  def test_an_untracked_file_the_gate_creates_is_reported
+    with_tree_repo("mkdir -p out && echo x > out/artifact.txt") do
+      code, env = run_gate(["--force"])
+
+      assert_equal 1, code
+      assert_equal ["out/artifact.txt"], env["data"]["tree_changed"]
+      assert_match(%r{out/artifact\.txt}, env["blocked"].first["message"])
+    end
+  end
+
+  # sabotage: n/a - asserts the ignore rule git itself applies; a gate is
+  # expected to write build output under an ignored path
+  def test_a_write_under_an_ignored_path_is_not_reported
+    with_tree_repo("mkdir -p _build && echo x > _build/out.txt") do |dir|
+      File.write(File.join(dir, ".gitignore"), "_build/\n")
+      tree_git!(dir, "add", ".gitignore")
+      tree_git!(dir, "commit", "-q", "-m", "ignore")
+
+      code, env = run_gate(["--force"])
+
+      assert_equal 0, code, env.inspect
+      assert_equal [], env["data"]["tree_changed"]
+    end
+  end
+
+  # sabotage: n/a - the parser case for a rename record, which needs a
+  # staged rename the gate scenarios above never produce
+  def test_status_parse_skips_a_rename_origin_field
+    out = "R  new.txt\0old.txt\0 M tracked.txt\0?? out/a.txt\0"
+    assert_equal [["R ", "new.txt"], [" M", "tracked.txt"], ["??", "out/a.txt"]], TreeSnapshot.parse(out)
+  end
+
+  # sabotage: make TreeSnapshot.check! treat a nil snapshot as {} -> red
+  def test_a_failed_snapshot_leaves_the_keys_null_and_warns
+    env = Envelope.new(script: "gate")
+    TreeSnapshot.check!(env, root: "/nowhere", allow: [], before: nil, after: {})
+
+    assert env.ok?
+    assert_nil env.data[:tree_changed]
+    assert_nil env.data[:tree_changed_allowed]
+    assert_equal ["tree_snapshot_failed"], env.warnings.map { |w| w[:code] }
+  end
+
+  # sabotage: n/a - asserts the carve-out path shells out nothing new
+  def test_the_carve_out_reports_the_tree_keys_as_null
+    in_tmp_cwd do
+      expect_no_elixir_diff
+      expect_no_sabotage_diff
+
+      _code, env = run_gate
+
+      assert_nil env["data"]["tree_changed"]
+      assert_nil env["data"]["tree_changed_allowed"]
+      refute(@fake.calls.any? { |c| c.argv[0, 3] == TreeSnapshot::STATUS_ARGV.first(3) })
     end
   end
 end

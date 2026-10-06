@@ -102,6 +102,38 @@ Two independent capabilities:
   enforcement for Elixir repos (both can run; they agree by construction on
   the same manifest data).
 
+## A gate run that writes to the tree it measures
+
+A green is a statement about the tree the gate measured. A stage that
+writes to that tree - a formatter in fix mode, a test that leaves a file
+behind, a generator that rewrites a checked-in artifact - makes the
+statement about a tree that no longer exists, at every tier.
+
+So `gate.rb` checks it, and this check **blocks**, unlike the gate guard
+and the sabotage scan, which only ever report. Around the gate command run
+(and `gate.attest`, when declared) it takes a per-path signature of the
+working tree: every path `git status` lists (tracked edits and untracked
+files alike; ignored paths never), each with its status letters and a
+content hash. `data.tree_changed` lists every path whose signature moved.
+That catches a clean file the run edited, a dirty file it edited again,
+and a file it created; a path dirty before the run and untouched by it is
+the operator's, not the gate's, and is not listed. Writes under ignored
+paths - build output, caches - are expected and invisible to the check.
+
+Any changed path blocks with `gate_wrote_tree`, whose message names the
+paths and a `Fix:`, except the paths the manifest declares in
+`repo.daemon_written_paths` (`docs/manifest.md`): a daemon that writes and
+commits those on its own may write one while a gate runs in the same
+checkout, so a changed path on that list is reported under
+`data.tree_changed_allowed` and does not block. It is the same key the
+worktree preflight reads; there is no second list.
+
+Both keys are `null` when no gate command ran, and when `git status`
+itself failed, which warns `tree_snapshot_failed`: `null` means "not
+checked", never "nothing changed". `gate_run.rb`'s detached supervisor runs
+the same check and reports the same keys, leaving its own in-tree run
+directory out.
+
 ## Degradation summary
 
 | Capability | present | absent |

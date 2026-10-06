@@ -40,6 +40,7 @@ class FakeSh
 
   def initialize
     @expectations = []
+    @allowed = []
     @calls = []
     @detached_calls = []
     @next_detached_pid = 424_242
@@ -65,6 +66,18 @@ class FakeSh
   def expect(argv_prefix, out: "", err: "", exitstatus: 0, timed_out: false, start_failed: false, log: nil)
     @expectations << { prefix: argv_prefix, out: out, err: err, exitstatus: exitstatus,
                         timed_out: timed_out, start_failed: start_failed, log: log }
+    self
+  end
+
+  # Registers a STANDING response for every call whose argv starts with
+  # argv_prefix - never consumed, and consulted only when no #expect
+  # expectation matches. For a shell-out a script makes on every run that a
+  # whole test file is not about (gate.rb's tree snapshot), so each test
+  # does not have to spell it out; a test that IS about it uses a real
+  # runner instead.
+  def allow(argv_prefix, out: "", err: "", exitstatus: 0)
+    @allowed << { prefix: argv_prefix, out: out, err: err, exitstatus: exitstatus,
+                  timed_out: false, start_failed: false, log: nil }
     self
   end
 
@@ -117,7 +130,12 @@ class FakeSh
   end
 
   def result_for(argv)
-    exp = @expectations.delete_at(expectation_index_for(argv))
+    standing = @allowed.find { |e| argv[0, e[:prefix].length] == e[:prefix] }
+    exp = if standing && @expectations.none? { |e| argv[0, e[:prefix].length] == e[:prefix] }
+            standing
+          else
+            @expectations.delete_at(expectation_index_for(argv))
+          end
     if exp[:start_failed]
       return Sh::Result.new(out: exp[:out], err: exp[:err], status: Sh::StartFailureStatus.new)
     end

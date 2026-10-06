@@ -854,9 +854,9 @@ an operator's edit for a human to rule on, and it is never the kit's to
 stash. This key is how a consumer says which paths those are.
 
 It is the **one** key for that fact. `worktree_create.rb`'s base preflight
-reads it (below); a gate-side check for a stage that wrote to the tree
-reads the same key rather than declaring a second list, so a consumer
-names its daemon's paths once.
+reads it (below), and so does `gate.rb`'s check for a gate run that wrote
+to the tree (and `gate_run.rb`'s supervisor, the same check) rather than
+declaring a second list, so a consumer names its daemon's paths once.
 
 Shape: a list of strings, default `[]`. Same matching rule as the gate
 path lists (see "Two path lists, not one" below): an entry ending in `/` is
@@ -886,6 +886,15 @@ What the preflight does with it (see "`parallelism.preflight`" above):
 
 With the key absent or empty, the preflight runs exactly the commands it
 ran before the key existed.
+
+What the gate does with it (see `docs/gate-contract.md`, "A gate run that
+writes to the tree it measures"): `gate.rb` snapshots the working tree
+before and after the gate command and blocks with `gate_wrote_tree` on any
+path the run changed. A changed path on this list is reported under
+`data.tree_changed_allowed` instead and does not block - a daemon appending
+to its ledger in the main checkout while a gate runs there is not the
+gate's write. Without the key, a daemon writing during every main-checkout
+gate run makes every such run block.
 
 Validation: the value must be a list of non-empty strings, and no entry may
 match the whole repo (`/` or `.`) - an entry that claimed every path would

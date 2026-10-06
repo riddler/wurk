@@ -8,6 +8,7 @@ require_relative "lib/cli"
 require_relative "lib/gate_paths"
 require_relative "lib/manifest"
 require_relative "lib/base_ref"
+require_relative "lib/tree_snapshot"
 
 # Gate runs the consumer's own gate commands (gate.full, gate.loop,
 # gate.report, gate.report_loop, gate.attest) and reports which tier of
@@ -63,7 +64,9 @@ require_relative "lib/base_ref"
 #    and run nothing), and says so as `data.forced: true`.
 # 3. `data.sabotage.missing` and `data.gate_guard` are reports. Neither ever
 #    flips `ok`, and there is no code path anywhere in this file that writes
-#    docs/quality-gate-changes.md - see test/contract_test.rb. The sabotage
+#    docs/quality-gate-changes.md - see test/contract_test.rb. (The one
+#    tree-related check that DOES block is rule 5's, and it is about what
+#    the gate command wrote, not about the gate config.) The sabotage
 #    scan itself only runs when the manifest declares `gate.sabotage`; a
 #    project that does not is reported as `enabled: false`, not silently
 #    skipped. `data.sabotage.unverifiable` is a report on the same terms as
@@ -80,6 +83,20 @@ require_relative "lib/base_ref"
 #    (`green`, `red`, `could not measure`) so a reader of the summary does
 #    not have to reconstruct which one a not-ok envelope was. The kit's own
 #    exit contract is unchanged: could-not-measure exits 1, like red.
+# 5. A gate run that changed the tree it measured BLOCKS - unlike rule 3's
+#    reports. Around every gate command run (the quality command and, when
+#    declared, gate.attest) this script takes a per-path signature of the
+#    working tree (lib/tree_snapshot.rb: git status plus a content hash of
+#    each listed path) and diffs the two. `data.tree_changed` lists every
+#    path whose signature moved; the subset declared in
+#    `repo.daemon_written_paths` (a daemon writes those on its own, so a
+#    change there is not the gate's) is also listed under
+#    `data.tree_changed_allowed` and does not block; any other changed path
+#    blocks with `gate_wrote_tree`, naming the paths. A green measured on a
+#    tree the gate itself rewrote is a statement about a tree that no
+#    longer exists. Both keys are null when the gate command never ran, or
+#    when a snapshot could not be taken (warned as `tree_snapshot_failed`) -
+#    null is "not checked", never "nothing changed".
 module Gate
   # Matches both accepted note forms - a real mutation
   # (`# sabotage: <what> -> red`) and a stated exemption
@@ -526,6 +543,11 @@ module Gate
         opts.separator "actually run against broken code - see docs/testing.md. The scan only runs"
         opts.separator "when the manifest declares gate.sabotage; otherwise data.sabotage.enabled"
         opts.separator "is false and no diff is shelled out for it."
+        opts.separator ""
+        opts.separator "A gate run that changes the tree it measures blocks with gate_wrote_tree:"
+        opts.separator "data.tree_changed lists every path whose git status or content moved during"
+        opts.separator "the run, data.tree_changed_allowed the ones repo.daemon_written_paths"
+        opts.separator "declares (those never block)."
         opts.on("--profile PROFILE", "only 'loop' is accepted") do |v|
           raise OptionParser::InvalidArgument, "profile must be 'loop' (got #{v.inspect})" if v != "loop"
 
@@ -619,9 +641,14 @@ module Gate
         env.data[:summary] = nil
         env.data[:gate_guard] = gate_guard_from([], ledger_path, manifest.checkout_root)
         env.data[:gate_cwd] = nil
+        env.data[:tree_changed] = nil
+        env.data[:tree_changed_allowed] = nil
         return env.emit(io)
       end
 
+      # Rule 5: the before-snapshot is taken only once the gate command is
+      # certain to run, so the carve-out path above shells out nothing new.
+      tree_before = TreeSnapshot.take(manifest.checkout_root, envelope: env)
       res, report = run_quality(env, manifest, loop_mode)
 
       # The gate command itself never got a chance to run: a typo'd gate.cwd
@@ -645,6 +672,8 @@ module Gate
         env.data[:summary] = nil
         env.data[:gate_guard] = gate_guard_from([], ledger_path, manifest.checkout_root)
         env.data[:gate_cwd] = manifest.gate_chdir
+        env.data[:tree_changed] = nil
+        env.data[:tree_changed_allowed] = nil
         env.data[:attested] = false
         env.data[:attestation_message] = nil
         # res.err is already the self-describing sentence Sh emits (see
@@ -714,6 +743,12 @@ module Gate
         env.data[:attestation_message] =
           "this project has no gate.attest command; attestation degrades to the exit code of the run above"
       end
+
+      # After gate.attest too: an attest command runs the gate again, and a
+      # write it makes is the same defect as one the quality run makes.
+      TreeSnapshot.check!(env, root: manifest.checkout_root, allow: manifest.daemon_written_paths,
+                                before: tree_before,
+                                after: TreeSnapshot.take(manifest.checkout_root, envelope: env))
 
       # Tier 1 judges on the report's status; tier 0 has only the exit code,
       # which is the whole of the contract's floor. Neither substitutes for
