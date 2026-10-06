@@ -56,6 +56,23 @@ class Cli
       [parser, options]
     end
 
+    # True when argv is exactly one element that contains whitespace: a
+    # command line a shell did not word-split (a zsh variable expanded
+    # without ${=var}), which a bare subcommand check would misread as a
+    # usage error. The caller then emits a blocked envelope (exit 2) so a
+    # caller chaining on success does not read "refused" as "not needed".
+    def unsplit_argv?(argv)
+      argv.length == 1 && argv.first.to_s.match?(/\s/)
+    end
+
+    # The blocked-envelope message for an unsplit argv: quotes the first 60
+    # characters and carries the Fix line.
+    def unsplit_message(argv)
+      "argv is one unsplit element (#{argv.first[0, 60].inspect}). " \
+        "Fix: call the script with each word as its own argument; " \
+        "in zsh use ${=var} or an array"
+    end
+
     # Parses argv against parser. On a usage error, prints a plain-text
     # message to stderr (no envelope) and exits 2, per the README's
     # exit-code contract.

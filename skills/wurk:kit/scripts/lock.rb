@@ -58,6 +58,12 @@ module LockCli
 
     def run(argv, io: $stdout)
       argv = argv.dup
+      if Cli.unsplit_argv?(argv)
+        env = Envelope.new(script: "lock")
+        env.block!(code: "argv_unsplit", message: Cli.unsplit_message(argv))
+        env.emit(io)
+        exit 2
+      end
       unless SUBCOMMANDS.include?(argv.first)
         warn usage
         exit 2

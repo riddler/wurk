@@ -83,6 +83,12 @@ module GateRun
   class << self
     def run(argv, io: $stdout)
       argv = argv.dup
+      if Cli.unsplit_argv?(argv)
+        env = Envelope.new(script: "gate_run")
+        env.block!(code: "argv_unsplit", message: Cli.unsplit_message(argv))
+        env.emit(io)
+        exit 2
+      end
       unless SUBCOMMANDS.include?(argv.first)
         warn usage
         exit 2

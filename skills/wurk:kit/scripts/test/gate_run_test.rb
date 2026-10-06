@@ -435,6 +435,15 @@ end
     assert_match(/usage/, err)
   end
 
+  def test_unsplit_single_argv_blocks_with_argv_unsplit
+    io = StringIO.new
+    assert_raises(SystemExit) { GateRun.run(["start --profile loop --gate-lock /x/y"], io: io) }
+    env = JSON.parse(io.string)
+
+    refute env["ok"]
+    assert_equal "argv_unsplit", env["blocked"].first["code"]
+  end
+
   def test_poll_without_run_dir_is_a_usage_error_not_an_envelope
     err = capture_io_stderr { assert_raises(SystemExit) { GateRun.run(["poll"]) } }
     assert_match(/usage/, err)
