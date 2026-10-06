@@ -55,7 +55,7 @@ agents are linked, not copied, so an edit in this clone is live immediately.
 Hooks are opt-in. `ruby install.rb --with hooks` also links each
 `hooks/*.sh` into `~/.claude/hooks/` as `wurk-<name>.sh` and prints the
 `settings.json` snippet that wires them; it never edits a settings file, so a
-hook runs only once you merge its entry yourself. The two guards both wire
+hook runs only once you merge its entry yourself. The three guards all wire
 under `PreToolUse` with matcher `Bash`, `<home>` being your real home
 directory:
 
@@ -70,6 +70,10 @@ directory:
       {"matcher": "Bash",
        "hooks": [{"type": "command",
                   "command": "<home>/.claude/hooks/wurk-safe-wait-guard.sh",
+                  "timeout": 10}]},
+      {"matcher": "Bash",
+       "hooks": [{"type": "command",
+                  "command": "<home>/.claude/hooks/wurk-scratch-rm-guard.sh",
                   "timeout": 10}]}
     ]
   }

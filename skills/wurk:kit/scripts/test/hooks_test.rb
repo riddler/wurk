@@ -344,6 +344,116 @@ class HooksTest < Minitest::Test
     end
   end
 
+  # --- scratch-rm-guard ------------------------------------------------------
+
+  RM_GUARD = File.join(HOOKS_DIR, "scratch-rm-guard.sh")
+  RM_SESSION = "sess-0001"
+
+  # A shared scratch root holding this session's scratchpad and a sibling's,
+  # a project with a build dir, and a stand-in TMPDIR, all in a tmpdir. No
+  # rm is ever run against it: the hook only evaluates the command text.
+  def with_scratch_tree
+    Dir.mktmpdir("wurk-rm-guard-") do |tmp|
+      tmp = File.realpath(tmp)
+      root = File.join(tmp, "root")
+      scratch = File.join(root, "project-slug", RM_SESSION, "scratchpad")
+      proj = File.join(tmp, "proj")
+      tmpdir = File.join(tmp, "tmpdir")
+      FileUtils.mkdir_p([File.join(scratch, "sub"), File.join(root, "project-slug", "sess-0002", "scratchpad"),
+                         File.join(proj, "_build"), tmpdir])
+      yield root: root, scratch: scratch, proj: proj, tmpdir: tmpdir
+    end
+  end
+
+  def rm_input(cwd, command)
+    JSON.generate("session_id" => RM_SESSION, "hook_event_name" => "PreToolUse", "cwd" => cwd,
+                  "tool_name" => "Bash", "tool_input" => { "command" => command })
+  end
+
+  # scratch: nil leaves WURK_SCRATCHPAD_DIR unset, so the hook falls back to
+  # discovering the scratchpad from the input's session_id.
+  def run_rm_guard(dirs, command, cwd: dirs[:proj], scratch: nil)
+    run_hook(RM_GUARD, stdin: rm_input(cwd, command),
+                       env: { "TMPDIR" => dirs[:tmpdir], "WURK_SCRATCHPAD_DIR" => scratch })
+  end
+
+  RM_FLAG_SHAPES = ["-rf", "-fr", "-R", "-Rf", "--recursive", "-r -f", "-f -r"].freeze
+
+  # sabotage: drop the is_scratch_parent check from check_command -> red,
+  # by both sources.
+  def test_rm_guard_denies_a_parent_of_the_scratchpad_in_any_flag_order
+    with_scratch_tree do |dirs|
+      [nil, dirs[:scratch]].each do |scratch|
+        RM_FLAG_SHAPES.each do |flags|
+          [dirs[:root], File.join(dirs[:root], "project-slug"),
+           File.join(dirs[:root], "project-slug", RM_SESSION)].each do |target|
+            command = "rm #{flags} #{target}"
+            out, status = run_rm_guard(dirs, command, scratch: scratch)
+            assert status.success?, "guard exits 0 even when denying (#{command.inspect})"
+            assert_includes deny_reason(out), "sibling sessions",
+                            "#{command.inspect} (scratchpad from #{scratch ? 'env' : 'session id'}) must deny"
+            assert_equal 1, out.lines.count
+          end
+        end
+        out, = run_rm_guard(dirs, "rm -rf ../..", cwd: dirs[:scratch], scratch: scratch)
+        assert_includes deny_reason(out), "sibling sessions", "a relative parent must deny"
+      end
+    end
+  end
+
+  # sabotage: drop the trailing-glob strip in resolve_target -> red here (a
+  # glob operand is judged as the glob, which is no directory and no root).
+  def test_rm_guard_denies_a_glob_over_the_scratch_root_or_temp_root
+    with_scratch_tree do |dirs|
+      out, = run_rm_guard(dirs, "rm -rf #{dirs[:root]}/*")
+      assert_includes deny_reason(out), "sibling sessions"
+      out, = run_rm_guard(dirs, "rm -rf '#{dirs[:root]}/project-slug'/*", scratch: dirs[:scratch])
+      assert_includes deny_reason(out), "sibling sessions"
+      ["rm -rf /tmp/*", "rm -fr /var/tmp/claude-*", "rm -rf ${TMPDIR}/*", "rm -rf #{dirs[:tmpdir]}/*"].each do |command|
+        out, status = run_rm_guard(dirs, command)
+        assert status.success?
+        assert_includes deny_reason(out), "temp root", "#{command.inspect} must deny"
+      end
+    end
+  end
+
+  def test_rm_guard_denies_the_temp_root_and_tmpdir_itself
+    with_scratch_tree do |dirs|
+      ["rm -rf /tmp", "rm -R /var/tmp/", 'rm -rf "$TMPDIR"', "rm --recursive $TMPDIR",
+       "cd /x && rm -rf #{dirs[:tmpdir]}/"].each do |command|
+        out, status = run_rm_guard(dirs, command)
+        assert status.success?
+        assert_includes deny_reason(out), "temp root", "#{command.inspect} must deny"
+      end
+    end
+  end
+
+  # sabotage: treat the scratchpad itself as its own parent in is_parent_of
+  # -> the glob-inside-own-scratchpad cases go red.
+  def test_rm_guard_allows_own_scratchpad_build_dirs_and_non_recursive_rm
+    with_scratch_tree do |dirs|
+      [nil, dirs[:scratch]].each do |scratch|
+        ["rm -rf #{dirs[:scratch]}/sub", "rm -rf #{dirs[:scratch]}/*", "rm -rf _build",
+         "rm -rf #{dirs[:proj]}/_build && ls", 'rm -rf "$TMPDIR/my-build-1"',
+         "rm -f /tmp/*", "rm #{dirs[:root]}/*", "rm -f #{dirs[:tmpdir]}/*",
+         "git rm -r --cached #{dirs[:root]}", 'rm -rf "$OTHER_DIR"'].each do |command|
+          out, status = run_rm_guard(dirs, command, scratch: scratch)
+          assert status.success?
+          assert_equal "", out, "guard must stay silent for #{command.inspect}"
+        end
+      end
+    end
+  end
+
+  def test_rm_guard_fails_open_on_garbage_and_missing_input
+    ["not json {{{", "", "{\"tool_name\":\"Bash\"}", "{\"tool_name\":\"Bash\",\"tool_input\":{}}",
+     JSON.generate("tool_name" => "Read", "tool_input" => { "file_path" => "rm -rf /tmp" })].each do |stdin|
+      out, status = run_hook(RM_GUARD, stdin: stdin)
+      assert status.success?, "guard must exit 0 on #{stdin.inspect}"
+      assert_equal "", out, "guard must stay silent on #{stdin.inspect}"
+    end
+  end
+
   # --- harness-event ---------------------------------------------------------
 
   def post_tool_input(tool, response)

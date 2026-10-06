@@ -40,8 +40,8 @@ class InstallTest < Minitest::Test
     JSON.parse(output[output.index(/^\{/)..-1])
   end
 
-  def test_repo_ships_four_hooks
-    assert_equal %w[git-stash-guard.sh harness-event.sh main-session-policy.sh safe-wait-guard.sh], hook_basenames
+  def test_repo_ships_five_hooks
+    assert_equal %w[git-stash-guard.sh harness-event.sh main-session-policy.sh safe-wait-guard.sh scratch-rm-guard.sh], hook_basenames
   end
 
   # sabotage: link hooks unconditionally in install_actions -> red
@@ -88,12 +88,12 @@ class InstallTest < Minitest::Test
       end
 
       assert_equal "startup", snippet["hooks"]["SessionStart"].first["matcher"]
-      assert_equal %w[Bash Bash], snippet["hooks"]["PreToolUse"].map { |e| e["matcher"] }
+      assert_equal %w[Bash Bash Bash], snippet["hooks"]["PreToolUse"].map { |e| e["matcher"] }
       assert_equal "", snippet["hooks"]["PostToolUse"].first["matcher"],
                    "an empty matcher is every tool, which is what a per-call recorder needs"
       assert_includes snippet["hooks"]["SessionStart"].first["hooks"].first["command"], "wurk-main-session-policy.sh"
       pre_tool = snippet["hooks"]["PreToolUse"].map { |e| File.basename(e["hooks"].first["command"]) }
-      assert_equal %w[wurk-git-stash-guard.sh wurk-safe-wait-guard.sh], pre_tool
+      assert_equal %w[wurk-git-stash-guard.sh wurk-safe-wait-guard.sh wurk-scratch-rm-guard.sh], pre_tool
       assert_includes snippet["hooks"]["PostToolUse"].first["hooks"].first["command"], "wurk-harness-event.sh"
       assert_includes out, "settings.json"
       assert_includes out, "never edits settings.json"
