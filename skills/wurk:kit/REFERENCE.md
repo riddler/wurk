@@ -559,6 +559,15 @@ the checkout root); `data.gate_cwd` reports the resolved directory. See
   `missing` ones; a consumer that gates on the scan decides for itself what
   a non-empty `unverifiable` means - the kit reports, it does not make that
   call.
+  `data.sabotage.note_forms` is the list of note forms that counted
+  (`gate.sabotage.note_forms`; `["comment"]` by default, and reported as
+  that default even when the scan is off). With `in_name` among them, a
+  `(sabotage: <mutation> -> <observed>)` note on the declaration line
+  counts too, and `data.sabotage.observed` holds one `{file, text,
+  observed}` entry per noted declaration carrying such a note - `observed`
+  is the text after the note's first `->`, or `null` with no arrow. It is
+  `[]` when `in_name` is not enabled or the scan did not run, and, like
+  `missing`, it never flips `ok`.
 - **`data.gate_guard` reports; it never writes.** There is no code path in
   `gate.rb` that writes `docs/quality-gate-changes.md` - `test/contract_test.rb`
   asserts that mechanically over every file under `scripts/`.

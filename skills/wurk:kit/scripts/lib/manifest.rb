@@ -64,6 +64,21 @@ class Manifest
     "tmux.layout" => %w[window-per-issue session-per-issue]
   }.freeze
 
+  # The note forms gate.sabotage.note_forms may name (docs/manifest.md).
+  # `comment` is a `# sabotage:` comment block directly above the test
+  # declaration; `in_name` is a `(sabotage: ...)` note inside the
+  # declaration line itself. `records_file` is reserved for the per-test
+  # records-file lookup (wu-vny) and rejected by lint until that lookup
+  # exists - the reserved map's value names what it waits on, for the
+  # error message. The default is the comment form alone, the scan every
+  # consumer had before the key existed.
+  SABOTAGE_NOTE_FORMS_ACCEPTED = %w[comment in_name].freeze
+  SABOTAGE_NOTE_FORMS_RESERVED = {
+    "records_file" => "the records-file lookup (wu-vny)"
+  }.freeze
+  SABOTAGE_NOTE_FORMS = (SABOTAGE_NOTE_FORMS_ACCEPTED + SABOTAGE_NOTE_FORMS_RESERVED.keys).freeze
+  SABOTAGE_NOTE_FORMS_DEFAULT = %w[comment].freeze
+
   # Keys this schema used to carry. A consumer pinned to an older kit may
   # still set one; the answer is a warning that names the replacement, not a
   # block - removing a key can never be a reason to refuse to run.
@@ -102,7 +117,7 @@ class Manifest
     "gate" => %w[cwd full loop report report_loop attest guard_ledger build_paths also_gated_paths moving_files
                  project_level_skips not_applicable_skips sabotage timeout_seconds long_timeout_seconds
                  could_not_measure_exit],
-    "gate.sabotage" => %w[test_roots test_pattern exempt_prefixes],
+    "gate.sabotage" => %w[test_roots test_pattern exempt_prefixes note_forms],
     "parallelism" => %w[model worktrees_dir trust warm_clone warm_globs warm repair_when repair post_branch
                         timeout_seconds preflight control_check],
     "tmux" => %w[session model layout editor],
@@ -540,6 +555,16 @@ class Manifest
 
   def sabotage_exempt_prefixes
     Array(fetch("gate.sabotage.exempt_prefixes"))
+  end
+
+  # Which note forms count as "noted" for the sabotage scan
+  # (gate.sabotage.note_forms, see docs/manifest.md). Absent - or the whole
+  # section absent - means SABOTAGE_NOTE_FORMS_DEFAULT, the comment form
+  # alone, which is exactly the scan every consumer had before the key
+  # existed. Deduplicated; order is the manifest's.
+  def sabotage_note_forms
+    value = fetch("gate.sabotage.note_forms")
+    value.is_a?(Array) ? value.uniq : SABOTAGE_NOTE_FORMS_DEFAULT
   end
 
   def parallelism_model
@@ -1115,6 +1140,32 @@ class Manifest
     exempt = section["exempt_prefixes"]
     unless exempt.nil? || (exempt.is_a?(Array) && exempt.all? { |p| p.is_a?(String) })
       errors << "#{path}: gate.sabotage.exempt_prefixes must be a list of path prefixes"
+    end
+
+    validate_sabotage_note_forms(section["note_forms"]) if section.key?("note_forms")
+  end
+
+  # Optional; absent means SABOTAGE_NOTE_FORMS_DEFAULT. A reserved form is
+  # rejected with its own message rather than the unknown-form one: it is a
+  # word the kit knows and means to honor, just not yet, and a consumer who
+  # turns it on today would get a scan that claims something it does not do.
+  def validate_sabotage_note_forms(forms)
+    unless forms.is_a?(Array) && !forms.empty? && forms.all? { |f| f.is_a?(String) }
+      errors << "#{path}: gate.sabotage.note_forms must be a non-empty list of note forms " \
+                "(accepted: #{SABOTAGE_NOTE_FORMS_ACCEPTED.join(', ')}); omit it for the " \
+                "#{SABOTAGE_NOTE_FORMS_DEFAULT.inspect} default"
+      return
+    end
+
+    forms.uniq.each do |form|
+      if SABOTAGE_NOTE_FORMS_RESERVED.key?(form)
+        errors << "#{path}: gate.sabotage.note_forms entry #{form.inspect} is reserved for " \
+                  "#{SABOTAGE_NOTE_FORMS_RESERVED[form]} and not implemented yet; " \
+                  "accepted: #{SABOTAGE_NOTE_FORMS_ACCEPTED.join(', ')}"
+      elsif !SABOTAGE_NOTE_FORMS_ACCEPTED.include?(form)
+        errors << "#{path}: gate.sabotage.note_forms entry #{form.inspect} is not a known note form; " \
+                  "accepted: #{SABOTAGE_NOTE_FORMS_ACCEPTED.join(', ')}"
+      end
     end
   end
 

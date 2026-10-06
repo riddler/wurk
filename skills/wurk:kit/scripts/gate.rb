@@ -98,8 +98,9 @@ require_relative "lib/tree_snapshot"
 #    when a snapshot could not be taken (warned as `tree_snapshot_failed`) -
 #    null is "not checked", never "nothing changed".
 module Gate
-  # Matches both accepted note forms - a real mutation
-  # (`# sabotage: <what> -> red`) and a stated exemption
+  # The `comment` note form (gate.sabotage.note_forms; the default and, with
+  # the key absent, the only form). Matches both kinds of comment note - a
+  # real mutation (`# sabotage: <what> -> red`) and a stated exemption
   # (`# sabotage: n/a - <why>`) - because both start with the same prefix.
   # Case-insensitive: consumer repos write the prefix as `# sabotage:` or
   # `# Sabotage:` (house style differs per repo, and the operator ruled
@@ -109,6 +110,23 @@ module Gate
   # wurk's own comment-shape grammar, not consumer data - it stays a
   # constant.
   SABOTAGE_NOTE_RE = /#\s*sabotage:/i.freeze
+
+  # The `in_name` note form: a `(sabotage: <mutation> -> <observed>)` note
+  # inside the test declaration line itself, typically in the test's name
+  # string. The `sabotage:` has to follow the opening parenthesis - an
+  # ordinary parenthesis in a test name ("handles (nested) input") is not a
+  # note. The body may hold one level of nested parentheses
+  # (`return nil from parse() -> red`). Case-insensitive, like the comment
+  # form. Opt-in only: the scan checks it when note_forms names `in_name`.
+  IN_NAME_NOTE_RE = /\(\s*sabotage:(?<body>(?:[^()]|\([^()]*\))*)\)/i.freeze
+
+  # Splits an in-name note body into mutation and observed failure: the
+  # observed string is whatever follows the FIRST arrow.
+  IN_NAME_OBSERVED_SEPARATOR = "->"
+
+  # The scan's note forms when nothing says otherwise - the manifest's own
+  # default, so a direct caller and a manifest with no note_forms key agree.
+  DEFAULT_NOTE_FORMS = Manifest::SABOTAGE_NOTE_FORMS_DEFAULT
 
   # Any comment line, used to walk the contiguous comment block above a test
   # line - a `# sabotage:` note may wrap across several `#`-prefixed lines,
@@ -162,9 +180,10 @@ module Gate
 
     # Parses a -U0 unified diff for CANDIDATE test-declaration lines - added
     # lines matching `test_re` (manifest data) - and, for each candidate,
-    # answers "does it have a `# sabotage:` note" against the WORKING-TREE
-    # FILE, not the diff. The diff is only good for finding which lines
-    # changed; a note's presence is a property of the file, not of the diff.
+    # answers "does it have a sabotage note in one of `note_forms`" against
+    # the WORKING-TREE FILE, not the diff. The diff is only good for finding
+    # which lines changed; a note's presence is a property of the file, not
+    # of the diff.
     # Two things go wrong if the note check stays diff-only: an edit that
     # touches the note and the test declaration but leaves an untouched line
     # between them splits the two across separate `-U0` hunks, and a note
@@ -175,9 +194,17 @@ module Gate
     # `file_reader` is an injectable seam (defaults to real disk reads) so
     # tests can hand in file contents without touching disk. Report-only -
     # see the module doc.
-    def scan_sabotage(diff_text, test_re:, exempt_prefixes: [], file_reader:)
+    #
+    # `note_forms` (gate.sabotage.note_forms) says which note forms count;
+    # it defaults to the comment form alone, the scan as it was before the
+    # key existed. With `in_name` among them, every noted candidate whose
+    # declaration carries an in-name note also lands in `observed`, with
+    # the failure string after the note's arrow (nil when it has none) - so
+    # a consumer check can require one on new tests.
+    def scan_sabotage(diff_text, test_re:, exempt_prefixes: [], file_reader:, note_forms: DEFAULT_NOTE_FORMS)
       missing = []
       unverifiable = []
+      observed = []
       current_file = nil
       file_lines_by_path = {}
 
@@ -204,14 +231,34 @@ module Gate
           next
         end
 
-        case sabotage_note_status(file_lines, content)
+        case sabotage_note_status(file_lines, content, note_forms)
+        when :noted
+          note = note_forms.include?("in_name") && in_name_note(content)
+          observed << { file: current_file, text: content.strip, observed: in_name_observed(note) } if note
         when :unnoted then missing << { file: current_file, text: content.strip }
         when :not_found
           unverifiable << { reason: "declaration_not_found", file: current_file, text: content.strip, detail: nil }
         end
       end
 
-      { missing: missing, unverifiable: unverifiable }
+      { missing: missing, unverifiable: unverifiable, observed: observed }
+    end
+
+    # The in-name note's body on `line`, or nil when the line carries none.
+    def in_name_note(line)
+      match = IN_NAME_NOTE_RE.match(line)
+      match && match[:body]
+    end
+
+    # The observed failure string of an in-name note body: everything after
+    # the first arrow, stripped; nil when there is no arrow or nothing after
+    # it.
+    def in_name_observed(body)
+      _mutation, arrow, rest = body.to_s.partition(IN_NAME_OBSERVED_SEPARATOR)
+      return nil if arrow.empty?
+
+      rest = rest.strip
+      rest.empty? ? nil : rest
     end
 
     # Reads `path` through `file_reader` and splits it into chomped lines,
@@ -225,7 +272,9 @@ module Gate
     end
 
     # Does any line in `file_lines` equal to `content` (the candidate test
-    # declaration) have a `# sabotage:` note directly above it? A
+    # declaration) carry a sabotage note in one of `note_forms` - a
+    # `# sabotage:` comment directly above it (`comment`), or a
+    # `(sabotage: ...)` note on the line itself (`in_name`)? A
     # declaration can appear more than once verbatim (parameterized-looking
     # names, duplicated fixtures); checking every occurrence and accepting
     # if any one of them is noted is the charitable reading - it is the same
@@ -241,11 +290,17 @@ module Gate
     # missing-file case in scan_sabotage, and for the same reason: a
     # report-only scan should not manufacture a note-missing warning out of
     # its own inability to locate the line - but it is no longer silent.
-    def sabotage_note_status(file_lines, content)
+    def sabotage_note_status(file_lines, content, note_forms = DEFAULT_NOTE_FORMS)
       indices = file_lines.each_index.select { |i| file_lines[i] == content }
       return :not_found if indices.empty?
 
-      indices.any? { |i| sabotage_comment_block_above?(file_lines, i) } ? :noted : :unnoted
+      indices.any? { |i| sabotage_noted_at?(file_lines, i, note_forms) } ? :noted : :unnoted
+    end
+
+    # A declaration is noted when ANY enabled form notes it.
+    def sabotage_noted_at?(file_lines, idx, note_forms)
+      (note_forms.include?("comment") && sabotage_comment_block_above?(file_lines, idx)) ||
+        (note_forms.include?("in_name") && !in_name_note(file_lines[idx]).nil?)
     end
 
     # Walks upward from the line directly above `idx` over the contiguous
@@ -261,6 +316,22 @@ module Gate
         i -= 1
       end
       false
+    end
+
+    # What a `sabotage_note_missing` warning says was wanted. With the
+    # default forms this is the exact phrase the warning has always used;
+    # with others enabled it names every form that would have counted.
+    def sabotage_note_wanted(note_forms)
+      return "`# sabotage:` note directly above it" if note_forms == DEFAULT_NOTE_FORMS
+
+      described = note_forms.map do |form|
+        case form
+        when "comment" then "a `# sabotage:` comment directly above it"
+        when "in_name" then "a (sabotage: ...) note in the declaration"
+        else form
+        end
+      end
+      "sabotage note in any accepted form (#{described.join(' or ')})"
     end
 
     # Two-dot against the merge-base sha, not `<base>...HEAD`: the two-dot
@@ -304,11 +375,11 @@ module Gate
     # claim from "checked everything and found nothing", and the one case
     # where the blind spot covers the whole run rather than one declaration.
     def sabotage_scan(env, manifest, base)
-      return { scanned: false, missing: [], unverifiable: [] } unless manifest.sabotage?
+      return { scanned: false, missing: [], unverifiable: [], observed: [] } unless manifest.sabotage?
 
       merge_base = BaseRef.merge_base(env, base)
       if merge_base.nil?
-        return { scanned: false, missing: [],
+        return { scanned: false, missing: [], observed: [],
                  unverifiable: [{ reason: "no_base_ref", file: nil, text: nil, detail: nil }] }
       end
 
@@ -319,12 +390,13 @@ module Gate
       # is explicitly never applied to.
       diff_res = Sh.run(sabotage_diff_args(manifest, merge_base), chdir: manifest.checkout_root, envelope: env)
       unless diff_res.success?
-        return { scanned: false, missing: [],
+        return { scanned: false, missing: [], observed: [],
                  unverifiable: [{ reason: "diff_failed", file: nil, text: nil,
                                   detail: diff_res.err.to_s.strip }] }
       end
 
       result = scan_sabotage(diff_res.out,
+                              note_forms: manifest.sabotage_note_forms,
                               test_re: manifest.sabotage_test_pattern,
                               exempt_prefixes: manifest.sabotage_exempt_prefixes,
                               file_reader: default_sabotage_file_reader(manifest.checkout_root)).merge(scanned: true)
@@ -576,17 +648,20 @@ module Gate
       applicable = gate_applicable?(manifest, changed)
 
       scan = sabotage_scan(env, manifest, changed[:base])
+      note_forms = manifest.sabotage_note_forms
       env.data[:sabotage] = {
         enabled: manifest.sabotage?,
         reason: manifest.sabotage? ? nil : "no gate.sabotage section in the manifest; the scan is off",
         scanned: scan[:scanned],
         missing: scan[:missing],
-        unverifiable: scan[:unverifiable]
+        unverifiable: scan[:unverifiable],
+        note_forms: note_forms,
+        observed: scan[:observed]
       }
       scan[:missing].each do |m|
         env.warn(
           code: "sabotage_note_missing",
-          message: "#{m[:file]}: #{m[:text]} has no `# sabotage:` note directly above it " \
+          message: "#{m[:file]}: #{m[:text]} has no #{sabotage_note_wanted(note_forms)} " \
                     "(a present note is not evidence the mutation was run)"
         )
       end
@@ -609,7 +684,8 @@ module Gate
 
         env.warn(
           code: "sabotage_unverifiable",
-          message: "#{u[:file]}: #{u[:text]} could not be checked for a `# sabotage:` note " \
+          message: "#{u[:file]}: #{u[:text]} could not be checked for a " \
+                   "#{note_forms == DEFAULT_NOTE_FORMS ? '`# sabotage:` note' : 'sabotage note'} " \
                    "(#{u[:reason]}) - this is not a clean result for that declaration"
         )
       end
