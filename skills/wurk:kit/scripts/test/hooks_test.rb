@@ -344,6 +344,131 @@ class HooksTest < Minitest::Test
     end
   end
 
+  # --- worktree-escape-guard -------------------------------------------------
+
+  ESCAPE_GUARD = File.join(HOOKS_DIR, "worktree-escape-guard.sh")
+
+  # Every command that changes what is checked out, or rewrites the tree,
+  # in a form the guard must catch.
+  CHECKOUT_CHANGES = ["git checkout a1b2c3d", "git checkout main", "git checkout -b x",
+                      "git checkout -- README.md", "git switch x", "git switch -c x",
+                      "git reset --hard", "git reset --hard HEAD~1", "git reset HEAD~1",
+                      "git stash", "git stash -u", "git stash push -m x", "git stash pop",
+                      "git add -A && git checkout main"].freeze
+
+  OWNED_MANIFEST = { "wurk" => 1,
+                     "parallelism" => { "model" => "worktree-per-issue", "worktrees_dir" => "../wt",
+                                        "main_checkout_owned" => true } }.freeze
+
+  # An opted-in main checkout with one linked worktree, plus two main
+  # checkouts that did not opt in: one without the key, one with it under
+  # branch-in-place. The manifests are written untracked into each main
+  # checkout; no guarded command is ever run.
+  def with_owned_main_checkout
+    Dir.mktmpdir("wurk-escape-guard-") do |tmp|
+      dirs = { main: File.join(tmp, "main"), wt: File.join(tmp, "wt"), free: File.join(tmp, "free"),
+               bip: File.join(tmp, "bip"), plain: File.join(tmp, "plain"), tmp: tmp }
+      manifests = {
+        main: OWNED_MANIFEST,
+        free: { "wurk" => 1, "parallelism" => { "model" => "worktree-per-issue", "worktrees_dir" => "../wt" } },
+        bip: { "wurk" => 1, "parallelism" => { "model" => "branch-in-place", "main_checkout_owned" => true } }
+      }
+      FileUtils.mkdir_p(dirs[:plain])
+      manifests.each do |key, manifest|
+        repo = dirs[key]
+        FileUtils.mkdir_p(File.join(repo, ".claude"))
+        [["init", "-q"],
+         ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", "init"]]
+          .each do |args|
+          assert system(GIT_ENV, "git", "-C", repo, *args, out: File::NULL, err: File::NULL),
+                 "fixture setup failed: git #{args.join(' ')}"
+        end
+        File.write(File.join(repo, ".claude", "wurk.json"), JSON.pretty_generate(manifest))
+      end
+      assert system(GIT_ENV, "git", "-C", dirs[:main], "worktree", "add", "-q", "-b", "wt", dirs[:wt],
+                    out: File::NULL, err: File::NULL), "fixture setup failed: git worktree add"
+      # the linked worktree carries the same manifest, as a tracked one would
+      FileUtils.mkdir_p(File.join(dirs[:wt], ".claude"))
+      File.write(File.join(dirs[:wt], ".claude", "wurk.json"), JSON.pretty_generate(OWNED_MANIFEST))
+      yield dirs
+    end
+  end
+
+  def run_escape_guard(cwd, command)
+    run_hook(ESCAPE_GUARD, stdin: stash_input(cwd, command), env: GIT_ENV)
+  end
+
+  def assert_escape_denied(cwd, command)
+    out, status = run_escape_guard(cwd, command)
+    assert status.success?, "guard exits 0 even when denying (#{command.inspect})"
+    assert_includes deny_reason(out), "work in the bead's worktree", "#{command.inspect} in #{cwd} must deny"
+    assert_equal 1, out.lines.count, "exactly one decision for #{command.inspect}"
+  end
+
+  def assert_escape_allowed(cwd, command, why)
+    out, status = run_escape_guard(cwd, command)
+    assert status.success?
+    assert_equal "", out, "#{why}: #{command.inspect} must pass"
+  end
+
+  # sabotage: let `--hard` and a positional through the reset branch of
+  # tree_changing_targets -> red on the three reset commands.
+  def test_escape_guard_denies_checkout_changes_in_an_owned_main_checkout
+    with_owned_main_checkout do |dirs|
+      CHECKOUT_CHANGES.each { |command| assert_escape_denied(dirs[:main], command) }
+      assert_escape_denied(File.join(dirs[:main], ".claude"), "git checkout x")
+    end
+  end
+
+  # sabotage: drop the is_main_checkout test from check_command -> red here,
+  # on the linked-worktree half.
+  def test_escape_guard_allows_the_same_commands_in_a_linked_worktree
+    with_owned_main_checkout do |dirs|
+      CHECKOUT_CHANGES.each do |command|
+        assert_escape_allowed(dirs[:wt], command, "a linked worktree is where the work happens")
+      end
+      assert_escape_allowed(dirs[:main], "git -C #{dirs[:wt]} checkout x", "-C into a linked worktree")
+    end
+  end
+
+  # sabotage: make opted_in return 0 unconditionally -> red.
+  def test_escape_guard_allows_everything_without_the_opt_in
+    with_owned_main_checkout do |dirs|
+      CHECKOUT_CHANGES.each do |command|
+        assert_escape_allowed(dirs[:free], command, "no parallelism.main_checkout_owned")
+        assert_escape_allowed(dirs[:bip], command, "branch-in-place is not worktree-per-issue")
+      end
+    end
+  end
+
+  def test_escape_guard_follows_dash_c_into_the_owned_main_checkout
+    with_owned_main_checkout do |dirs|
+      assert_escape_denied(dirs[:wt], "git -C #{dirs[:main]} checkout x")
+      assert_escape_denied(dirs[:plain], "git -C #{dirs[:main]} reset --hard")
+      assert_escape_denied(dirs[:tmp], "git -C main switch x")
+    end
+  end
+
+  def test_escape_guard_leaves_reads_and_index_only_commands_alone
+    with_owned_main_checkout do |dirs|
+      ["git show HEAD", "git log --oneline", "git diff main...HEAD", "git status", "git stash list",
+       "git stash show -p", "git reset", "git reset -- README.md", "git worktree add ../look a1b2c3d",
+       "cat checkout.txt"].each do |command|
+        assert_escape_allowed(dirs[:main], command, "reading never changes the checkout")
+      end
+    end
+  end
+
+  def test_escape_guard_fails_open_on_garbage_and_missing_input
+    ["not json {{{", "", "{\"tool_name\":\"Bash\"}", "{\"tool_name\":\"Bash\",\"tool_input\":{}}",
+     JSON.generate("tool_name" => "Read", "tool_input" => { "file_path" => "git checkout x" }),
+     stash_input("/nonexistent/wurk-escape-guard", "git checkout x")].each do |stdin|
+      out, status = run_hook(ESCAPE_GUARD, stdin: stdin, env: GIT_ENV)
+      assert status.success?, "guard must exit 0 on #{stdin.inspect}"
+      assert_equal "", out, "guard must stay silent on #{stdin.inspect}"
+    end
+  end
+
   # --- scratch-rm-guard ------------------------------------------------------
 
   RM_GUARD = File.join(HOOKS_DIR, "scratch-rm-guard.sh")

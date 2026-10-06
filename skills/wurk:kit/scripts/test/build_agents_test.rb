@@ -373,6 +373,16 @@ class BuildAgentsShippedTest < Minitest::Test
     assert_match(/When the benign\s+reading cannot be checked, write "unable to assess" with what it would take\s+to assess it, and rank it note, never must-fix\./, text)
   end
 
+  # sabotage: delete the never-change-the-checkout rule from
+  # agents/wurk-diff-critic.md.in and rebuild -> red. A reviewer handed a
+  # main checkout's path must read with show and diff, never move its HEAD.
+  def test_diff_critic_never_changes_the_checkout
+    text = File.read(File.join(AGENTS_DIR, "wurk-diff-critic.md"))
+    assert_includes text, "**Never change what is checked out.**"
+    assert_match(/Read history with `git show` and\s+`git diff <base>\.\.\.HEAD` only: no `git checkout`, `git switch`,\s+`git reset` or `git stash`/, text)
+    assert_match(/state this rule in the report's "Checks that passed"/, text)
+  end
+
   # sabotage: let a generated file lose its banner (a hand edit that
   # deletes the comment) and skip regeneration -> the shipped check above
   # catches it as stale; this one says why it matters: the banner is what

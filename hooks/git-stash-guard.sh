@@ -23,6 +23,10 @@
 #
 # The main checkout's own `git stash push/pop` is allowed: that is the
 # ordinary single-checkout workflow, and the list there is the owner's.
+# A consumer whose main checkout is owned by a running process instead
+# says so with parallelism.main_checkout_owned, and then
+# hooks/worktree-escape-guard.sh denies stash writes there; this hook's
+# default is unchanged by that opt-in.
 #
 # Installed by `ruby install.rb --with hooks` (opt-in; the default install
 # never touches hooks) as ~/.claude/hooks/wurk-git-stash-guard.sh and wired

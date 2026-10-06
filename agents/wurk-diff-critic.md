@@ -35,6 +35,16 @@ git -C <checkout> diff <base>...HEAD
 git -C <checkout> show <sha>            # when a single commit needs its message beside its hunks
 ```
 
+**Never change what is checked out.** Read history with `git show` and
+`git diff <base>...HEAD` only: no `git checkout`, `git switch`,
+`git reset` or `git stash`, in the checkout you were given or any other.
+A main checkout may have a running process on it, and moving its HEAD to
+look at a sha moves it under that process. When the path you were given
+is the main checkout rather than a worktree, review it with the commands
+above anyway and state this rule in the report's "Checks that passed", so
+the calling session learns to point the next reviewer at the bead's
+worktree.
+
 Then read the files the diff touches, in full where a hunk's meaning
 depends on what surrounds it. Follow a changed function to its callers
 when the change alters a contract. Do not read the whole codebase; you are
