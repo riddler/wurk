@@ -1917,6 +1917,24 @@ that decision is recorded with its reason, because "we could not
 predict the files" and "we forgot" are the same empty field to
 everyone downstream.
 
+**Read back every tracker-write claim before the report is written.**
+A report sentence that says a tracker write happened - "noted on X",
+"closed", "filed as", "labelled" - is the same shape as the command
+you ran in Confirming your own commands, one step later, and it fails
+the same way: the report is written from memory of having run the
+command, and the command may have refused, hit the wrong id, or never
+run. Before the report is written, read each such claim back with
+`bd show <id>` (or `bead.rb show`) and write the claim from what the
+tracker holds, quoting it. Having run `bd note` is not evidence the
+note exists: the report never says "noted on X" from memory. A claim
+the read-back does not confirm is written as "intended to note on X;
+not found on read-back" (with the verb that fits: closed, filed,
+labelled) and journaled as `[conductor-error]`, with the claim, the
+id, and what the tracker held instead. This is the report-side
+counterpart of the audit above: the audit catches a tracker that
+disagrees with the journal, and this catches a report sentence that
+disagrees with the tracker.
+
 Final act: the morning report - what landed (branch, SHA, gate,
 PR/merge), graph end state, discovered beads, the queue with required
 ordering, judgement calls, deferred verification items - plus the Phase
@@ -1967,6 +1985,10 @@ tracker that is is a project value, so take it from where the campaign
 gets its other project values - the campaign file's policy block, or
 the project's fleet manifest - and never from a name carried over from
 another project.
+
+A report sentence that the "Read back every tracker-write claim" step
+(Journal and morning report) found unconfirmed is a defect to list
+under (1), beside the `[conductor-error]` it was journaled as.
 
 **Both halves, and neither replaces the other.** File as you go AND
 synthesize at the end; they catch different things. Incremental filing
