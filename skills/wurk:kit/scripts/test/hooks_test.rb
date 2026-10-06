@@ -250,6 +250,100 @@ class HooksTest < Minitest::Test
     end
   end
 
+  # --- git-stash-guard -------------------------------------------------------
+
+  STASH_GUARD = File.join(HOOKS_DIR, "git-stash-guard.sh")
+
+  # git in the fixture and in the hook never reads the operator's git
+  # config, and never inherits a GIT_DIR from whatever runs this suite.
+  GIT_ENV = { "GIT_CONFIG_NOSYSTEM" => "1", "GIT_CONFIG_GLOBAL" => File::NULL,
+              "GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_COMMON_DIR" => nil,
+              "GIT_INDEX_FILE" => nil }.freeze
+
+  STASH_WRITES = ["git stash", "git stash push -m x", "git stash pop", "git stash apply",
+                  "git stash drop", "git stash clear", "git add -A && git stash"].freeze
+
+  # A throwaway repository with one linked worktree, built in a tmpdir. No
+  # stash command is ever run in it: the hook only asks git where it is.
+  def with_linked_worktree
+    Dir.mktmpdir("wurk-stash-guard-") do |tmp|
+      main = File.join(tmp, "main")
+      wt = File.join(tmp, "wt")
+      plain = File.join(tmp, "plain")
+      FileUtils.mkdir_p([main, plain])
+      [["init", "-q"],
+       ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", "init"],
+       ["worktree", "add", "-q", "-b", "wt", wt]].each do |args|
+        assert system(GIT_ENV, "git", "-C", main, *args, out: File::NULL, err: File::NULL),
+               "fixture setup failed: git #{args.join(' ')}"
+      end
+      yield main: main, wt: wt, plain: plain
+    end
+  end
+
+  def stash_input(cwd, command)
+    JSON.generate("session_id" => "s1", "hook_event_name" => "PreToolUse", "cwd" => cwd,
+                  "tool_name" => "Bash", "tool_input" => { "command" => command })
+  end
+
+  def run_stash_guard(cwd, command)
+    run_hook(STASH_GUARD, stdin: stash_input(cwd, command), env: GIT_ENV)
+  end
+
+  # sabotage: make every git stash call deny regardless of is_linked_worktree
+  # -> red here, on the main-checkout half.
+  def test_stash_guard_denies_stash_writes_from_a_linked_worktree_only
+    with_linked_worktree do |dirs|
+      (STASH_WRITES + ["git stash -u"]).each do |command|
+        out, status = run_stash_guard(dirs[:wt], command)
+        assert status.success?, "guard exits 0 even when denying (#{command.inspect})"
+        assert_includes deny_reason(out), "wip commit", "linked worktree must deny #{command.inspect}"
+      end
+      STASH_WRITES.each do |command|
+        out, status = run_stash_guard(dirs[:main], command)
+        assert status.success?
+        assert_equal "", out, "the main checkout owns its stash list: #{command.inspect} must pass"
+      end
+    end
+  end
+
+  def test_stash_guard_allows_reads_and_unrelated_git_from_a_linked_worktree
+    with_linked_worktree do |dirs|
+      ["git stash list", "git stash show -p", "git status", "git commit -m 'Adds the stash notes'",
+       "git add docs/stash-notes.md && cat stash/README"].each do |command|
+        out, status = run_stash_guard(dirs[:wt], command)
+        assert status.success?
+        assert_equal "", out, "guard must stay silent for #{command.inspect}"
+      end
+    end
+  end
+
+  # sabotage: add pop to the list|show allow case -> red.
+  def test_stash_guard_denies_dash_c_pop_drop_clear_from_anywhere
+    with_linked_worktree do |dirs|
+      [[dirs[:main], "git -C #{dirs[:wt]} stash pop"],
+       [dirs[:plain], "git -C #{dirs[:main]} stash drop"],
+       [dirs[:wt], "git -C #{dirs[:main]} stash clear"]].each do |cwd, command|
+        out, status = run_stash_guard(cwd, command)
+        assert status.success?
+        assert_includes deny_reason(out), "whoever made it", "#{command.inspect} from #{cwd} must deny"
+        assert_equal 1, out.lines.count
+      end
+      out, = run_stash_guard(dirs[:plain], "git -C #{dirs[:main]} stash list")
+      assert_equal "", out
+    end
+  end
+
+  def test_stash_guard_fails_open_on_garbage_and_missing_input
+    ["not json {{{", "", "{\"tool_name\":\"Bash\"}", "{\"tool_name\":\"Bash\",\"tool_input\":{}}",
+     JSON.generate("tool_name" => "Read", "tool_input" => { "file_path" => "git stash pop" }),
+     stash_input("/nonexistent/wurk-stash-guard", "git stash pop")].each do |stdin|
+      out, status = run_hook(STASH_GUARD, stdin: stdin, env: GIT_ENV)
+      assert status.success?, "guard must exit 0 on #{stdin.inspect}"
+      assert_equal "", out, "guard must stay silent on #{stdin.inspect}"
+    end
+  end
+
   # --- harness-event ---------------------------------------------------------
 
   def post_tool_input(tool, response)

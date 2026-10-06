@@ -77,6 +77,7 @@ module Install
     # it records one line per tool call, so narrowing it would blind the sink
     # to whatever the matcher left out.
     HOOK_EVENTS = {
+      "git-stash-guard.sh" => { event: "PreToolUse", matcher: "Bash" },
       "harness-event.sh" => { event: "PostToolUse", matcher: "" },
       "main-session-policy.sh" => { event: "SessionStart", matcher: "startup" },
       "safe-wait-guard.sh" => { event: "PreToolUse", matcher: "Bash" }
