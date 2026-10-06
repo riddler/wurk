@@ -119,9 +119,13 @@ defaults are listed under "Defaults" below.
                                       // origin/default before cutting a worktree,
                                       // fast-forward a stale one, refuse a diverged
                                       // one. See ## `parallelism.preflight`.
-    "control_check": ["bin/ctl", "control", "check"]  // (opt) no default; run before
+    "control_check": ["bin/ctl", "control", "check"], // (opt) no default; run before
                                       // every worker spawn, exit 0 = spawn. See
                                       // ## `parallelism.control_check`.
+    "main_checkout_owned": true       // (opt) default absent (off); something runs in
+                                      // the main checkout, so nothing may change what
+                                      // is checked out there. See
+                                      // ## `parallelism.main_checkout_owned`.
   },
 
   "tmux": {                           // (opt) omit = no tmux integration
@@ -917,6 +921,56 @@ The command owns the policy; the kit only honors the answer.
 `manifest.rb check` reports the argv as `data.control_check`, null when
 the key is absent (or the manifest is invalid), which is how the conductor
 reads it without parsing the manifest itself.
+
+## `parallelism.main_checkout_owned`
+
+An optional boolean, default absent (off). `true` declares that the main
+checkout is **owned** by something that runs in it - a daemon, a
+scheduler, a server reading its own tree - so nothing may change what is
+checked out there. It is meaningful only under `parallelism.model:
+"worktree-per-issue"`, where the work has a linked worktree to happen in;
+under `branch-in-place` it is ignored. `Manifest#main_checkout_owned?`
+answers true only for both together.
+
+Why a declaration and not a default: under worktree-per-issue the main
+checkout is usually idle, and an operator working there by hand is the
+ordinary case. But when a process lives there, an agent handed that
+checkout's path - a reviewer given a path and a sha range - can run
+`git checkout <sha>` to look at a commit and detach the HEAD under the
+process. That has happened, and the reviewer meant no harm. Only the
+consumer knows whether its main checkout has an owner, so the consumer
+says so.
+
+What reads it: `hooks/worktree-escape-guard.sh` (opt-in, installed by
+`ruby install.rb --with hooks`, see `docs/adoption.md`). Under the opt-in
+it denies, from the Bash tool, `git checkout` with any argument
+(`git checkout -- <file>` included, since it rewrites the tree),
+`git switch`, a `git reset` that can move HEAD or rewrite the tree, and
+`git stash` with any verb but `list` and `show`, whenever the session's
+cwd or the command's `-C` target is the main checkout (`git rev-parse
+--git-dir` equals `--git-common-dir`). The same commands in a linked
+worktree are allowed, reads (`git show`, `git log`, `git diff`) are never
+judged, and the denial names the fix: work in the bead's worktree, and
+read history with `git -C <main> show`/`log`/`diff` or a temporary
+worktree. The hook reads the key from the main checkout's
+`.claude/wurk.json` by text matching, so it sees only a literal JSON
+`true`.
+
+- **Absent or `false`** means not owned: the hook allows everything, and
+  `hooks/git-stash-guard.sh` keeps allowing the main checkout's own stash
+  (its default single-checkout reading). The two hooks do not disagree;
+  this key is what moves the main checkout from the owner's workspace to
+  a process's.
+- **Present, it must be a JSON boolean.** A string `"true"` blocks,
+  because a Ruby reader would take it as opted in and the hook would not.
+- **Limit:** a PreToolUse hook sees only commands the Bash tool runs. A
+  kit script that runs git itself - `worktree_create.rb --stash-dirty`
+  stashes the main checkout's dirty edits from Ruby - is not covered by
+  the hook.
+
+```jsonc
+"parallelism": { "model": "worktree-per-issue", "main_checkout_owned": true }
+```
 
 ## `repo.daemon_written_paths`
 

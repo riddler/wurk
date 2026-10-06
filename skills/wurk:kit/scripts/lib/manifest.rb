@@ -119,7 +119,7 @@ class Manifest
                  could_not_measure_exit],
     "gate.sabotage" => %w[test_roots test_pattern exempt_prefixes note_forms],
     "parallelism" => %w[model worktrees_dir trust warm_clone warm_globs warm repair_when repair post_branch
-                        timeout_seconds preflight control_check],
+                        timeout_seconds preflight control_check main_checkout_owned],
     "tmux" => %w[session model layout editor],
     "models" => %w[direction],
     "artifacts" => %w[plans research adr filename repository],
@@ -635,6 +635,15 @@ class Manifest
     value && argv(value)
   end
 
+  # Whether the consumer has declared its main checkout owned by something
+  # that runs there (a daemon, a server), so nothing may change what is
+  # checked out in it. Only meaningful under worktree-per-issue, where the
+  # work has somewhere else to happen; true only for a written JSON true.
+  # hooks/worktree-escape-guard.sh reads the same two keys from the file.
+  def main_checkout_owned?
+    parallelism_model == "worktree-per-issue" && fetch("parallelism.main_checkout_owned") == true
+  end
+
   def tmux?
     !fetch("tmux").nil?
   end
@@ -995,6 +1004,7 @@ class Manifest
     validate_gate_could_not_measure_exit
     validate_parallelism_timeout_seconds
     validate_parallelism_preflight
+    validate_parallelism_main_checkout_owned
     validate_gate_cwd
     validate_tmux
     validate_retired
@@ -1233,6 +1243,16 @@ class Manifest
     return if value.nil? || value == true || value == false
 
     errors << "#{path}: parallelism.preflight must be true or false, got #{value.inspect}"
+  end
+
+  # A JSON boolean or nothing, for the same reason as the preflight: a
+  # string "true" is truthy to a Ruby reader, but the hook matches a literal
+  # JSON true, so the two would disagree about whether the consumer opted in.
+  def validate_parallelism_main_checkout_owned
+    value = dig_raw("parallelism.main_checkout_owned")
+    return if value.nil? || value == true || value == false
+
+    errors << "#{path}: parallelism.main_checkout_owned must be true or false, got #{value.inspect}"
   end
 
   # Shape only, never the filesystem - see docs/manifest.md and this plan's

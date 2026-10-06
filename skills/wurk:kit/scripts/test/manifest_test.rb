@@ -2236,3 +2236,41 @@ class ManifestControlCheckTest < Minitest::Test
     end
   end
 end
+
+# --- parallelism.main_checkout_owned (wu-tr8w.2) ----------------------------
+#
+# The opt-in for hooks/worktree-escape-guard.sh: the consumer declares that
+# something runs in its main checkout, so nothing may change what is checked
+# out there. A JSON boolean, default absent (off), meaningful only under
+# worktree-per-issue.
+class ManifestMainCheckoutOwnedTest < Minitest::Test
+  def test_absent_validates_and_reads_as_not_owned
+    m = ManifestFixtures.load("valid")
+    assert m.valid?, m.errors.inspect
+    assert_nil m.dig_raw("parallelism.main_checkout_owned")
+    refute m.main_checkout_owned?
+  end
+
+  # sabotage: forget to add "main_checkout_owned" to KNOWN["parallelism"] -> red
+  def test_true_under_worktree_per_issue_validates_and_is_owned
+    m = ManifestFixtures.load_with("valid", "parallelism" => { "main_checkout_owned" => true })
+    assert m.valid?, m.errors.inspect
+    refute_match(/unknown key parallelism\.main_checkout_owned/, m.warnings.join("\n"))
+    assert m.main_checkout_owned?
+  end
+
+  # sabotage: drop the parallelism_model test from main_checkout_owned? -> red
+  def test_true_under_branch_in_place_is_not_owned
+    m = ManifestFixtures.load_with("valid", "parallelism" => { "model" => "branch-in-place",
+                                                                "main_checkout_owned" => true })
+    refute m.main_checkout_owned?
+  end
+
+  # sabotage: drop validate_parallelism_main_checkout_owned -> red
+  def test_string_true_blocks_naming_the_key
+    m = ManifestFixtures.load_with("valid", "parallelism" => { "main_checkout_owned" => "true" })
+    refute m.valid?
+    assert_match(/parallelism\.main_checkout_owned must be true or false, got "true"/, m.errors.join("\n"))
+    refute m.main_checkout_owned?
+  end
+end

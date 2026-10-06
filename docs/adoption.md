@@ -287,7 +287,7 @@ Fix the manifest, not the script.
   root, per ADR-0014. Consistent with a pilot's footprint, since hooks are
   untracked.
 - **Session hooks.** `ruby install.rb --with hooks` from the wurk checkout
-  links five Claude Code hooks into `~/.claude/hooks/`; it is opt-in and
+  links six Claude Code hooks into `~/.claude/hooks/`; it is opt-in and
   the default install is unchanged. `wurk-main-session-policy.sh`
   (SessionStart) tells the top-level session that it coordinates and
   delegates rather than codes, and suppresses itself inside subagents by
@@ -311,6 +311,15 @@ Fix the manifest, not the script.
   from the input's `session_id`, by the directory named for it. Deleting
   inside one's own scratchpad and a project build dir stays allowed, and
   it is fail-open like the other guards.
+  `wurk-worktree-escape-guard.sh` (PreToolUse on Bash) acts only when the
+  repo opts in with `parallelism.main_checkout_owned: true` under
+  worktree-per-issue (`docs/manifest.md`): then, when the cwd or a `-C`
+  target is the main checkout, it denies `git checkout` with any
+  argument, `git switch`, a `git reset` that can move HEAD, and `git
+  stash` writes, naming the bead's worktree as the place to work and
+  `git -C <main> show`/`log`/`diff` as the way to read. Linked worktrees
+  and repos that did not opt in are untouched, and it is fail-open like
+  the other guards.
   `wurk-harness-event.sh` (PostToolUse on every tool) appends one JSON
   line per tool call - `{"timestamp", "ts", "tool", "ok", "level",
   "is_error"}` - to this machine's telemetry sink, so tool calls are
@@ -353,6 +362,10 @@ Fix the manifest, not the script.
         {"matcher": "Bash",
          "hooks": [{"type": "command",
                     "command": "<home>/.claude/hooks/wurk-scratch-rm-guard.sh",
+                    "timeout": 10}]},
+        {"matcher": "Bash",
+         "hooks": [{"type": "command",
+                    "command": "<home>/.claude/hooks/wurk-worktree-escape-guard.sh",
                     "timeout": 10}]}
       ],
       "SessionStart": [
