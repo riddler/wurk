@@ -80,6 +80,9 @@ All of it read-only. Nothing you open is modified.
   `[conductor-error]`, `[premise-corrected]`, `[stale]`,
   `[ruling-queued]`, `[held]`, `[scope]`, `[adoption]`, `[discovery]`.
   Grep them by type; read the surrounding lines for the incident.
+  `[presence]` is not friction: it records the operator's availability
+  changing (away, back, a quiet window), never a ruling, and is context
+  for reading how long a `[ruling-queued]` sat.
 - **Per-bead result files** - the worker JSON under
   `reports/<campaign>/<bead>-report.json`. `judgementCalls`,
   `openQuestions`, `discoveredDeps` and a `blocked`/`failed` status are
