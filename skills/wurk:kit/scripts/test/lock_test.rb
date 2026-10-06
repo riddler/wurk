@@ -648,6 +648,27 @@ class LockCliTest < Minitest::Test
     assert_equal 2, status
   end
 
+  def test_unsplit_single_argv_blocks_with_argv_unsplit_and_creates_no_lock_dir
+    io = StringIO.new
+    line = "acquire --gate-lock #{lock_dir} --campaign c1 --bead zz-1"
+    _, status = capture_exit { LockCli.run([line], io: io) }
+    env = JSON.parse(io.string)
+
+    assert_equal 2, status
+    refute env["ok"]
+    assert_equal "argv_unsplit", env["blocked"].first["code"]
+    assert_match(/Fix: call the script with each word as its own argument/, env["blocked"].first["message"])
+    refute File.exist?(lock_dir)
+  end
+
+  def test_single_argv_bare_subcommand_still_works
+    io = StringIO.new
+    _, status = capture_exit { LockCli.run(["status"], io: io) }
+
+    assert_equal 2, status
+    assert_empty io.string
+  end
+
   def test_acquire_blocked_with_lock_contended_reports_the_probe
     Lock.try_acquire(lock_dir, { "campaign" => "other", "bead" => "zz-9" })
 

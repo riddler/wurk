@@ -2148,7 +2148,10 @@ CONTENDING GATES: the campaign mutex dir, the repo gate-lock dir
 and the slots dir + slot count, acquired in that fixed order (campaign
 mutex, then repo lock, then machine slot) via `lock.rb acquire` with
 `--hold-seconds <N>` and released in reverse; bounded-wait shape,
-always-release, staleness = report not break.
+always-release, staleness = report not break. A `lock.rb acquire`
+that did not return ok means the gate did not run under the lock: stop
+and report, never proceed to the gate (a command line a shell failed to
+word-split comes back blocked `argv_unsplit`).
 NON-CONTENDING GATES: the explicit negative - "NO semaphore, no lock
 dir, no slots - gate measured at Ns; run it foreground and build no
 coordination around it.">
