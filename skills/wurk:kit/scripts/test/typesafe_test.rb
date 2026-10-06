@@ -767,6 +767,147 @@ class TypesafePolicyTest < Minitest::Test
     refused(judge(cfg), "key_missing", "unreadable")
   end
 
+  # ---- payload store ------------------------------------------------------
+
+  REPO_ROOT = File.expand_path("../../../..", __dir__)
+
+  def store_dir
+    File.join(@tmp, "payloads")
+  end
+
+  # The store dir in every fixture is under the test tmpdir, never the repo.
+  def store_config(keep_days: nil, **extra)
+    store = { "dir" => store_dir }
+    store["keep_days"] = keep_days unless keep_days.nil?
+    refute File.expand_path(store_dir).start_with?("#{REPO_ROOT}/"), "store dir is under the repo"
+    config(payload_store: store, **extra)
+  end
+
+  def payload_files
+    Dir.exist?(store_dir) ? Dir.children(store_dir).sort : []
+  end
+
+  # sabotage: write the payload whenever log_state is on, or default the store
+  # to a path -> red: a file appears with the key absent
+  def test_payload_store_absent_writes_nothing_and_leaves_the_result_unchanged
+    @fake.respond(200, body: GOOD_BODY)
+    off = judge(config)
+    assert_equal "ok", off.outcome
+    assert_nil config.typesafe_payload_store_dir
+    assert_empty payload_files
+    refute(Dir.glob(File.join(@tmp, "**", "*.json")).any? { |p| File.basename(p).match?(Typesafe::PAYLOAD_FILE) })
+    assert_equal [], off.warnings
+
+    @fake.respond(200, body: GOOD_BODY)
+    on = judge(store_config)
+    strip = ->(r) { r.to_h.reject { |k, _| %i[call_id elapsed_ms].include?(k) } }
+    assert_equal strip.call(off), strip.call(on), "the store changes nothing on the result"
+  end
+
+  # sabotage: write the decision line (or anything beyond the body) into the
+  # file, or store the input instead of the request body -> red
+  def test_payload_store_on_writes_one_file_per_call_with_the_exact_request
+    cfg = store_config
+    @fake.respond(200, body: GOOD_BODY).raise_error(Net::ReadTimeout.new("slow"))
+    first = judge(cfg)
+    second = judge(cfg)
+    assert_equal %w[ok timeout], [first.outcome, second.outcome]
+    assert_equal ["#{first.call_id}.json", "#{second.call_id}.json"].sort, payload_files
+
+    sent = @fake.calls.first.request.body
+    path = File.join(store_dir, "#{first.call_id}.json")
+    assert_equal sent, File.read(path), "the file holds exactly the request body sent"
+    stored = JSON.parse(File.read(path))
+    assert_equal %w[model questions state], stored.keys.sort
+    refute stored.key?("source"), "source is not part of the request body"
+    assert_equal 0o600, File.stat(path).mode & 0o777
+    assert_equal 0o700, File.stat(store_dir).mode & 0o777
+    assert_equal NOW, File.mtime(path).utc
+
+    assert_equal ["ok", stored], Typesafe.read_payload(config: cfg, call_id: first.call_id)
+  end
+
+  # sabotage: let the restricted-source check in payload_restricted? fall
+  # through -> red on the direct store call (judge alone would still refuse)
+  def test_payload_store_never_keeps_restricted_or_invalid_text
+    %w[shadow on].each do |mode|
+      cfg = store_config(sites: { "review" => { "mode" => mode } }, restricted_sources: [SOURCE_MARK],
+                         log_state: true)
+      refused(judge(cfg), "source_restricted")
+      refused(judge(cfg, input(questions: {})), "input_invalid")
+    end
+    assert_empty payload_files
+
+    cfg = store_config(restricted_sources: [SOURCE_MARK])
+    id = SecureRandom.hex(8)
+    assert_equal "refused", Typesafe.store_payload(config: cfg, call_id: id, input: input, now: NOW)
+    assert_equal "refused", Typesafe.store_payload(config: cfg, call_id: id, input: input(state: nil), now: NOW)
+    assert_empty payload_files
+    refute Dir.exist?(store_dir), "a refusal does not even create the dir"
+  end
+
+  # sabotage: ignore keep_days in the prune (prune everything, or nothing) -> red
+  def test_payload_store_prunes_past_keep_days_and_keeps_inside_the_window
+    FileUtils.mkdir_p(store_dir)
+    old_id = "a" * 16
+    fresh_id = "b" * 16
+    foreign = File.join(store_dir, "notes.json")
+    [old_id, fresh_id].each { |id| File.write(File.join(store_dir, "#{id}.json"), "{}") }
+    File.write(foreign, "{}")
+    File.utime(NOW - 11 * 86_400, NOW - 11 * 86_400, File.join(store_dir, "#{old_id}.json"))
+    File.utime(NOW - 9 * 86_400, NOW - 9 * 86_400, File.join(store_dir, "#{fresh_id}.json"))
+    File.utime(NOW - 400 * 86_400, NOW - 400 * 86_400, foreign)
+
+    @fake.respond(200, body: GOOD_BODY)
+    r = judge(store_config(keep_days: 10))
+    assert_equal ["#{fresh_id}.json", "#{r.call_id}.json", "notes.json"].sort, payload_files
+
+    File.utime(NOW - 31 * 86_400, NOW - 31 * 86_400, File.join(store_dir, "#{fresh_id}.json"))
+    @fake.respond(200, body: GOOD_BODY)
+    r2 = judge(store_config)
+    assert_equal 30, store_config.typesafe_payload_store_keep_days
+    assert_equal ["#{r.call_id}.json", "#{r2.call_id}.json", "notes.json"].sort, payload_files
+  end
+
+  # sabotage: drop the work-tree walk -> red: the file lands inside a repo
+  def test_payload_store_inside_a_work_tree_writes_nothing_and_warns
+    repo = File.join(@tmp, "a-repo")
+    FileUtils.mkdir_p(File.join(repo, ".git"))
+    cfg = config(payload_store: { "dir" => File.join(repo, "deep", "payloads") })
+    @fake.respond(200, body: GOOD_BODY)
+    r = judge(cfg)
+    assert_equal "ok", r.outcome, "the store never fails the call"
+    assert_includes r.warnings, "payload_store_in_repo"
+    refute Dir.exist?(File.join(repo, "deep"))
+  end
+
+  # sabotage: let a store failure raise out of judge -> red
+  def test_payload_store_failure_is_a_warning_not_a_failed_call
+    File.write(store_dir, "a file where the dir should be")
+    @fake.respond(200, body: GOOD_BODY)
+    r = judge(store_config)
+    assert_equal "ok", r.outcome
+    assert_includes r.warnings, "payload_store_failed"
+    assert_equal 1, ledger.size
+  end
+
+  # sabotage: accept any string as a call id (path traversal) -> red
+  def test_read_payload_blocks_unknown_and_malformed_ids
+    cfg = store_config
+    assert_equal ["not_found", nil], Typesafe.read_payload(config: cfg, call_id: "c" * 16)
+    ["../../etc/passwd", "C" * 16, "c" * 15, "", nil, "#{'c' * 16}.json"].each do |id|
+      assert_equal ["malformed", nil], Typesafe.read_payload(config: cfg, call_id: id), id.inspect
+    end
+    assert_equal ["malformed", nil], Typesafe.read_payload(config: config, call_id: "x")
+    assert_equal ["off", nil], Typesafe.read_payload(config: config, call_id: "c" * 16)
+    FileUtils.mkdir_p(store_dir)
+    File.write(File.join(store_dir, "#{'d' * 16}.json"), "[1]")
+    assert_equal ["unreadable", nil], Typesafe.read_payload(config: cfg, call_id: "d" * 16)
+    assert_raises(ArgumentError) do
+      Typesafe.store_payload(config: cfg, call_id: "../x", input: input, now: NOW)
+    end
+  end
+
   # ---- the sweep ----------------------------------------------------------
 
   # sabotage: put the key on any Result, ledger or decision line, or print it
