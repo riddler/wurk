@@ -1144,8 +1144,9 @@ The kit's client for TypeSafe's System One API (the Jev model: typed
 judgments - `choice`, `noul`, `score` - with probabilities, never free
 text). `lib/typesafe.rb` is what a call site requires (`Typesafe.judge`,
 `Typesafe.record_outcome`, `Typesafe.site_mode`, `Typesafe.threshold_key`);
-`typesafe.rb` is the CLI over it for shell callers, operators and smoke
-tests. This section is the contract every call site builds to. Its
+`Typesafe.store_payload` and `Typesafe.read_payload` are the optional
+payload store; `typesafe.rb` is the CLI over it for shell callers,
+operators and smoke tests. This section is the contract every call site builds to. Its
 configuration is the machine config's `typesafe` section, documented in
 `docs/machine-config.md` ("typesafe"); no manifest is read, so the script
 works from any directory. It SHIPS DARK: every site is `off` unless the
@@ -1157,6 +1158,7 @@ machine config names it with another mode.
 typesafe.rb call    [--site NAME] --input PATH|-  [--dry-run]
 typesafe.rb outcome --call-id ID --site NAME --action LABEL
                     [--decision LABEL] [--agreement agree|disagree|n/a] [--dry-run]
+typesafe.rb payload CALL_ID
 ```
 
 - **`call`** reads one JSON input (a file, or stdin with `--input -`):
@@ -1176,10 +1178,20 @@ typesafe.rb outcome --call-id ID --site NAME --action LABEL
   (or, on a dry run, would be) - never a header.
 - **`outcome`** appends the caller's outcome line (below) for a `call_id`
   the `call` envelope returned. `data`: `line`, `written`, `dry_run`.
+- **`payload`** reads back the exact request a live call stored when
+  `typesafe.payload_store` is on (below). `data`: `call_id`, `request`
+  (the stored body, `{state, model, questions}`). Read-only, sends
+  nothing. Blocked, exit 1, never a stack trace: `call_id_malformed`
+  (not 16 lowercase hex characters; the store is not touched and the id
+  is not echoed), `payload_not_found` (refused before sending, stored
+  while the store was off, or pruned), `payload_store_off`, all
+  `needs: "none"`; and `payload_unreadable` (`needs: "human"`) for a
+  stored file that is not a JSON object or cannot be read.
 - **Usage errors exit 2 with no envelope:** no or unknown subcommand, an
   unknown flag, `call` without `--input`, `outcome` without `--call-id`,
   `--site` or `--action`, and a `--call-id`, `--action`, `--decision` or
-  `--agreement` value that breaks the label rule. `--help` (first, or
+  `--agreement` value that breaks the label rule, and `payload` without
+  exactly one `CALL_ID`. `--help` (first, or
   after a subcommand) prints usage and exits 0.
 - **Also blocked, outside the outcome set:** an invalid machine config
   (`user_config_invalid`, with `data` empty), and a failure reading or
@@ -1316,6 +1328,37 @@ UTC month:
   shadow mode this line is where agreement between Jev and the caller is
   recorded.
 - A dry run writes neither file.
+
+### The payload store
+
+The decision log keeps no request text unless `log_state` is on, and that
+switch is all-or-nothing. The payload store is the bounded alternative: when
+the machine config sets `typesafe.payload_store` (`{dir, keep_days}`, see
+`docs/machine-config.md`), every live call writes the exact request body it
+sends - `{state, model, questions}`, byte for byte, nothing else - to
+`<dir>/<call_id>.json` before the attempt, so a later "that judgment was
+wrong" signal naming the `call_id` can be checked against what was asked.
+
+- **Off by default.** No `payload_store`, no write, and the `call` envelope
+  is the same either way; the store adds a record, never a field or a
+  decision.
+- **Only a live call writes.** Pre-call refusals, `site_off` and dry runs
+  write nothing. Restricted text never writes: a `source` in
+  `restricted_sources`, or an input that would refuse as `input_invalid`,
+  is refused by the store itself as well as by `judge`'s ordering - the
+  same rule `log_state` obeys on `source_restricted` and `input_invalid`
+  lines.
+- **Bounded.** Each write first deletes store files (names of the form
+  `<16 hex>.json` only; anything else in the dir is left alone) whose mtime
+  is more than `keep_days` (default 30) before the call. A file's mtime is
+  its call time.
+- **Private.** The dir is created mode 700 and each file mode 600. A dir
+  inside a git work tree (any `.git` at or above it) is never written: the
+  call proceeds with warning `payload_store_in_repo`. A filesystem failure
+  in the store never fails the call either; it warns
+  `payload_store_failed`.
+- **Never sent back.** The kit reads the store only for `payload`; nothing
+  in it is ever sent to the provider. The key is never in it.
 
 ### Question sets and thresholds
 

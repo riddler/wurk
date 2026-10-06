@@ -9,7 +9,8 @@ require_relative "lib/user_config"
 require_relative "lib/typesafe"
 
 # The CLI over lib/typesafe.rb: `call` asks Jev one gated question set,
-# `outcome` records what the caller did next. The contract (modes, the
+# `outcome` records what the caller did next, `payload` reads back the
+# request a call stored when typesafe.payload_store is on. The contract (modes, the
 # closed outcome set, the fallback rule, budget, logs, caller rules) is
 # REFERENCE.md's "typesafe.rb: the Jev client and the call-site contract".
 #
@@ -18,16 +19,19 @@ require_relative "lib/typesafe"
 # made by the library through Net::HTTP). run returns the exit code and
 # never calls exit, so tests drive it in-process.
 module TypesafeCli
-  SUBCOMMANDS = %w[call outcome].freeze
+  SUBCOMMANDS = %w[call outcome payload].freeze
   USAGE = <<~TEXT
     usage: typesafe.rb call    [--site NAME] --input PATH|-  [--dry-run]
            typesafe.rb outcome --call-id ID --site NAME --action LABEL
                                [--decision LABEL] [--agreement agree|disagree|n/a] [--dry-run]
+           typesafe.rb payload CALL_ID
 
     call     one gated Jev call; the envelope's data.outcome is the one field
              a caller routes on ("ok", or a member of the closed outcome set).
              No --site is an ad-hoc probe call. --input - reads stdin.
     outcome  append the caller's outcome line (labels only) for a call_id.
+    payload  read back the exact request a call stored (typesafe.payload_store
+             on) as data.request. Read-only; never sent anywhere.
     --dry-run  call: report the outcome up to the request and the request
                itself with Authorization redacted; send and write nothing.
                outcome: report the line in data.line; write nothing.
@@ -49,7 +53,11 @@ module TypesafeCli
       return usage_error("unknown subcommand") unless SUBCOMMANDS.include?(sub)
       return help(io) if (argv & HELP_FLAGS).any?
 
-      sub == "call" ? run_call(argv, io, stdin, http_class) : run_outcome(argv, io)
+      case sub
+      when "call" then run_call(argv, io, stdin, http_class)
+      when "outcome" then run_outcome(argv, io)
+      else run_payload(argv, io)
+      end
     end
 
     private
@@ -164,6 +172,12 @@ module TypesafeCli
       when "ledger_malformed"
         env.warn(code: code, message: "#{count} line(s) of this month's ledger are not JSON objects; " \
                                       "they count as unmeasurable spend (see budget_exhausted)")
+      when "payload_store_in_repo"
+        env.warn(code: code, message: "typesafe.payload_store.dir is inside a git work tree, so the " \
+                                      "request was not kept; point it outside any repo")
+      when "payload_store_failed"
+        env.warn(code: code, message: "writing to typesafe.payload_store.dir failed, so the request " \
+                                      "was not kept; the call itself was not affected")
       else
         env.warn(code: code, message: "client warning #{code}")
       end
@@ -249,6 +263,61 @@ module TypesafeCli
                  needs: "human")
       env.emit(io)
     end
+
+# --- payload ------------------------------------------------------------
+
+PAYLOAD_BLOCKS = {
+  "off" => ["payload_store_off", "none",
+            "typesafe.payload_store is not configured, so no request was kept. An operator " \
+            "sets typesafe.payload_store.dir (outside any repo) to start keeping them."],
+  "malformed" => ["call_id_malformed", "none",
+                  "the call id is not one the client mints (16 lowercase hex characters). " \
+                  "Pass data.call_id from the call's envelope."],
+  "not_found" => ["payload_not_found", "none",
+                  "no stored request for that call id: the call was refused before sending, " \
+                  "the store was off at the time, or keep_days has pruned it."],
+  "unreadable" => ["payload_unreadable", "human",
+                   "the stored request for that call id is not a JSON object. An operator " \
+                   "checks or removes the file."]
+}.freeze
+
+# One positional CALL_ID. Read-only, so no --dry-run is meaningful; the
+# flag is accepted (Cli.build adds it) and changes nothing.
+def run_payload(argv, io)
+  options, code = parse_payload(argv)
+  return code if code
+
+  env = Envelope.new(script: "typesafe")
+  config = UserConfig.require!(env)
+  return env.emit(io) unless config
+
+  status, request = Typesafe.read_payload(config: config, call_id: options[:call_id])
+  # The id is echoed only once it has passed the minted-id rule.
+  env.data[:call_id] = status == "malformed" ? nil : options[:call_id]
+  env.data[:request] = request
+  unless status == "ok"
+    block_code, needs, message = PAYLOAD_BLOCKS.fetch(status)
+    env.block!(code: block_code, message: message, needs: needs)
+  end
+  env.emit(io)
+rescue SystemCallError, IOError => e
+  env ||= Envelope.new(script: "typesafe")
+  env.block!(code: "payload_unreadable",
+             message: "reading typesafe.payload_store failed (#{e.class.name}).", needs: "human")
+  env.emit(io)
+end
+
+def parse_payload(argv)
+  options = {}
+  parser, options = Cli.build("typesafe.rb payload CALL_ID", options) { |_opts| nil }
+  rest = parser.parse!(argv)
+  return [nil, usage_error("payload needs exactly one CALL_ID")] unless rest.size == 1
+
+  options[:call_id] = rest.first
+  [options, nil]
+rescue OptionParser::ParseError => e
+  [nil, usage_error(e.message)]
+end
 
     # --- outcome ------------------------------------------------------------
 

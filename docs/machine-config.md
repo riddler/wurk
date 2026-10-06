@@ -461,6 +461,10 @@ its own decision. It SHIPS DARK: every site is `off` unless named under
     },
     "state_dir": "~/.local/state/wurk/typesafe", // default: see below
     "log_state": false,                         // default false
+    "payload_store": {                          // NO default; absent = no request kept
+      "dir": "~/.local/state/wurk/typesafe-payloads", // required when present; outside any repo
+      "keep_days": 30                           // default 30
+    },
     "restricted_sources": [],                   // default []
     "sites": {                                  // site name -> entry; default: every site off
       "some-site": { "mode": "shadow", "deadline_ms": 1500 }
@@ -489,6 +493,16 @@ Keys, defaults, and how a bad value is treated:
   convention as `hooks/harness-event.sh`. A non-string or blank value blocks.
 - **`log_state`** - whether decision lines may carry the state and question
   text, a boolean, default `false`. Any other type blocks.
+- **`payload_store`** - an optional keep of the exact request body each live
+  call sends, so a call_id named later can be read back with
+  `typesafe.rb payload CALL_ID`. An object with `dir` (where the files go,
+  `~` expanded; required when the section is present, a non-string or blank
+  value blocks) and `keep_days` (a positive integer, default 30; anything
+  else blocks). No default and no default path: an absent section keeps
+  nothing, because keeping request text is an opt-in. Put `dir` outside any
+  repo; a dir inside a git work tree is refused at write time (the call
+  proceeds with a warning). A restricted or invalid input is never stored.
+  See REFERENCE.md's "The payload store" for the full rule.
 - **`restricted_sources`** - source labels a caller must refuse to send, an
   array of non-blank strings, default `[]`. Anything else blocks.
 - **`sites`** - an object of site name to entry. A name outside
@@ -542,8 +556,9 @@ latency, and no text unless `log_state` is true.
 ### What `check` reports
 
 `user_config.rb check` reports `data.typesafe_declared` (whether the section
-is present) and `data.typesafe_site_modes` (site name to mode, configured
-sites only). It deliberately reports neither the key path, the state dir nor
-any budget number: a lint envelope has no reason to carry a pointer at the
+is present), `data.typesafe_payload_store_declared` (whether a store dir is
+set - the path itself is not reported) and `data.typesafe_site_modes`
+(site name to mode, configured sites only). It deliberately reports neither
+the key path, the state dir, the store dir nor any budget number: a lint envelope has no reason to carry a pointer at the
 key or the operator's dollars. Errors and warnings follow the block-or-warn
 rules above.

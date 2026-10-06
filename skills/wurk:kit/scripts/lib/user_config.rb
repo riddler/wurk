@@ -54,8 +54,9 @@ class UserConfig
     "machine" => %w[name gate_slots],
     "workloads[]" => %w[root fleet_manifest enabled primary],
     "metrics" => %w[prices error_events],
-    "typesafe" => %w[key_path model budget state_dir log_state sites restricted_sources],
-    "typesafe.budget" => %w[monthly_usd per_minute]
+    "typesafe" => %w[key_path model budget state_dir log_state payload_store sites restricted_sources],
+    "typesafe.budget" => %w[monthly_usd per_minute],
+    "typesafe.payload_store" => %w[dir keep_days]
   }.freeze
 
   # The TypeSafe Jev client's machine config (lib/typesafe.rb). Every site is
@@ -66,6 +67,9 @@ class UserConfig
   TYPESAFE_DEFAULT_DEADLINE_MS = 1500
   TYPESAFE_DEFAULT_PER_MINUTE = 60
   TYPESAFE_MAX_DEADLINE_MS = 60_000
+  # How long a stored request body is kept, in days, when payload_store sets
+  # no keep_days.
+  TYPESAFE_DEFAULT_KEEP_DAYS = 30
   # Site names, and the question-set id rule too.
   TYPESAFE_NAME = /\A[a-z0-9][a-z0-9_-]{0,63}\z/
 
@@ -313,6 +317,21 @@ class UserConfig
     typesafe_section["log_state"] == true
   end
 
+  # The payload store's directory, `~` expanded, or nil when the store is
+  # off. Off is the default: an absent payload_store (or one without a usable
+  # dir) means no request body is ever written. Unlike state_dir there is no
+  # default path, because keeping request text is an opt-in, not a setting.
+  def typesafe_payload_store_dir
+    dir = typesafe_payload_store["dir"]
+    dir.is_a?(String) && !dir.strip.empty? ? File.expand_path(dir) : nil
+  end
+
+  # Days a stored request body is kept before the next write prunes it.
+  def typesafe_payload_store_keep_days
+    days = typesafe_payload_store["keep_days"]
+    days.is_a?(Integer) && days.positive? ? days : TYPESAFE_DEFAULT_KEEP_DAYS
+  end
+
   # The monthly dollar cap, or nil. No default on purpose: absent means no
   # live calls at all, because dollars must be explicit.
   def typesafe_monthly_usd
@@ -367,6 +386,11 @@ class UserConfig
     section = raw["typesafe"]
     section.is_a?(Hash) ? section : {}
   end
+
+def typesafe_payload_store
+  store = typesafe_section["payload_store"]
+  store.is_a?(Hash) ? store : {}
+end
 
   def typesafe_budget
     budget = typesafe_section["budget"]
@@ -627,6 +651,7 @@ class UserConfig
     end
 
     validate_typesafe_budget(section["budget"]) if section.key?("budget")
+    validate_typesafe_payload_store(section["payload_store"]) if section.key?("payload_store")
     validate_typesafe_sites(section["sites"]) if section.key?("sites")
 
     return unless section.key?("restricted_sources")
@@ -657,6 +682,29 @@ class UserConfig
 
     errors << "#{path}: typesafe.budget.per_minute must be a positive integer, got #{rate.inspect}"
   end
+
+# The store is all-or-nothing on shape: a present section must name a dir,
+# because a payload_store with no dir would read as "on" to a person and
+# write nothing. Shape only, no filesystem access, same as the rest of the
+# file; whether the dir sits inside a repo is checked at write time.
+def validate_typesafe_payload_store(store)
+  unless store.is_a?(Hash)
+    errors << "#{path}: typesafe.payload_store must be a JSON object, got #{store.class}"
+    return
+  end
+
+  dir = store["dir"]
+  if !dir.is_a?(String) || dir.strip.empty?
+    errors << "#{path}: typesafe.payload_store.dir must be a non-blank string, got #{dir.inspect}"
+  end
+
+  return unless store.key?("keep_days")
+
+  days = store["keep_days"]
+  return if days.is_a?(Integer) && days.positive?
+
+  errors << "#{path}: typesafe.payload_store.keep_days must be a positive integer, got #{days.inspect}"
+end
 
   def validate_typesafe_sites(sites)
     unless sites.is_a?(Hash)
@@ -755,6 +803,7 @@ module UserConfigCli
       # Declared-ness and per-site modes only: never the key path, the state
       # dir or a budget number, same reasoning as the two above.
       env.data[:typesafe_declared] = config.typesafe_declared?
+      env.data[:typesafe_payload_store_declared] = !config.typesafe_payload_store_dir.nil?
       env.data[:typesafe_site_modes] = config.typesafe_sites.each_with_object({}) { |(n, e), h| h[n] = e["mode"] }
 
       config.warnings.each { |w| env.warn(code: "unknown_key", message: w) }

@@ -422,6 +422,109 @@ class TypesafeCliTest < Minitest::Test
     end
   end
 
+  # ---- payload -------------------------------------------------------------
+
+  REPO_ROOT = File.expand_path("../../../..", __dir__)
+
+  # with_home's config plus a payload store under the tmp HOME (never the repo).
+  def with_store(keep_days: nil, &block)
+    store = { "dir" => "~/payloads" }
+    store["keep_days"] = keep_days unless keep_days.nil?
+    with_home({ "payload_store" => store }) do |dir|
+      @store_dir = File.join(dir, "payloads")
+      refute File.expand_path(@store_dir).start_with?("#{REPO_ROOT}/"), "store dir is under the repo"
+      block.call(dir)
+    end
+  end
+
+  def store_files
+    Dir.exist?(@store_dir) ? Dir.children(@store_dir).sort : []
+  end
+
+  # sabotage: write a payload with the key absent, or add a field to the
+  # call envelope when the store is on -> red
+  def test_call_envelope_is_the_same_with_the_store_off_or_on
+    bodies = []
+    with_home do |dir|
+      @fake.respond(200, body: GOOD_BODY)
+      _, body, = run_cli(["call", "--site", "review", "--input", write_input])
+      bodies << body
+      assert_empty Dir.glob(File.join(dir, "**", "*.json")).select { |p| File.basename(p).match?(Typesafe::PAYLOAD_FILE) }
+    end
+    with_store do
+      @fake.respond(200, body: GOOD_BODY)
+      _, body, = run_cli(["call", "--site", "review", "--input", write_input])
+      bodies << body
+      assert_equal ["#{body['data']['call_id']}.json"], store_files
+    end
+    strip = lambda do |b|
+      b.merge("data" => b["data"].reject { |k, _| %w[call_id elapsed_ms].include?(k) })
+    end
+    assert_equal(*bodies.map(&strip))
+  end
+
+  # sabotage: return the input (with source) instead of the stored request,
+  # or echo a malformed id -> red
+  def test_payload_returns_the_stored_request_for_a_known_id
+    with_store do
+      @fake.respond(200, body: GOOD_BODY)
+      _, call, = run_cli(["call", "--site", "review", "--input", write_input])
+      id = call["data"]["call_id"]
+      code, body, = run_cli(["payload", id])
+      assert_equal 0, code
+      assert_empty body["blocked"]
+      assert_equal id, body["data"]["call_id"]
+      assert_equal JSON.parse(@fake.calls.first.request.body), body["data"]["request"]
+      assert_includes body["data"]["request"]["state"], STATE_MARK
+      assert_equal 1, @fake.calls.size, "reading a payload sends nothing"
+    end
+  end
+
+  # sabotage: let a restricted source through to the store -> red
+  def test_restricted_call_stores_nothing_even_with_the_store_on
+    with_home({ "payload_store" => { "dir" => "~/payloads" }, "restricted_sources" => ["private"],
+                "log_state" => true }) do |dir|
+      code, body, = run_cli(["call", "--site", "review", "--input",
+                             write_input(JSON.generate(input_hash(source: "private")))])
+      assert_equal 1, code
+      assert_equal "source_restricted", body["data"]["outcome"]
+      refute Dir.exist?(File.join(dir, "payloads"))
+    end
+  end
+
+  # sabotage: map an unknown id to a stack trace (or exit 0), or touch the
+  # store for a malformed id -> red
+  def test_payload_blocks_unknown_and_malformed_ids
+    with_store do
+      code, body, out, = run_cli(["payload", "e" * 16])
+      assert_equal 1, code
+      assert_equal "payload_not_found", body["blocked"][0]["code"]
+      assert_nil body["data"]["request"]
+
+      ["../../secret", "NOT-HEX", "e" * 17].each do |id|
+        code, body, out, = run_cli(["payload", id])
+        assert_equal 1, code, id
+        assert_equal "call_id_malformed", body["blocked"][0]["code"]
+        assert_nil body["data"]["call_id"]
+        refute_includes out, id
+      end
+    end
+    with_home do
+      code, body, = run_cli(["payload", "e" * 16])
+      assert_equal 1, code
+      assert_equal "payload_store_off", body["blocked"][0]["code"]
+    end
+  end
+
+  # sabotage: accept zero or two ids -> red
+  def test_payload_needs_exactly_one_id
+    [%w[payload], ["payload", "a" * 16, "b" * 16]].each do |argv|
+      code, body, = run_cli(argv)
+      assert_equal 2, code, argv.inspect
+      assert_nil body
+    end
+  end
+
   # ---- usage ---------------------------------------------------------------
 
   # sabotage: route --help through Cli.build's handler (it calls exit) or

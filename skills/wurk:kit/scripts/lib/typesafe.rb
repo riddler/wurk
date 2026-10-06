@@ -309,11 +309,12 @@ module Typesafe
     attempt(ctx, client)
   end
 
-  # Steps 7-10 for a live call: one attempt, its cost, the ledger line in an
-  # ensure, then the decision line.
+  # Steps 7-10 for a live call: the payload store (when on), one attempt,
+  # its cost, the ledger line in an ensure, then the decision line.
   def self.attempt(ctx, client)
     result = nil
     cost = nil
+    keep_payload(ctx)
     begin
       result = client.post(ctx[:input])
       cost = cost_of(ctx, result.usage)
@@ -355,6 +356,134 @@ module Typesafe
     append_line(config.typesafe_state_dir, format(DECISIONS, month: month_of(now)), line) unless dry_run
     line
   end
+
+  # ---- payload store -------------------------------------------------------
+  #
+  # An optional, bounded keep of the exact request body behind a call_id, so
+  # a later "that judgment was wrong" signal naming the id can be checked
+  # against what was actually asked. Off unless typesafe.payload_store names
+  # a dir. It adds a record and never a decision: nothing here is read by
+  # judge, and nothing in the store is ever sent to the provider by the kit.
+
+  # Every call_id judge mints (SecureRandom.hex(8)). The store's file names
+  # are exactly this plus ".json", which is also what the prune matches, so
+  # a foreign file in the dir is never deleted.
+  PAYLOAD_ID = /\A[0-9a-f]{16}\z/.freeze
+  PAYLOAD_FILE = /\A[0-9a-f]{16}\.json\z/.freeze
+  DAY_S = 86_400
+
+  # Writes the exact request body for `call_id` to <dir>/<call_id>.json,
+  # mode 600 in a mode-700 dir, after pruning files older than keep_days.
+  # Returns one status label:
+  #   "off"         - no payload_store dir configured; nothing touched.
+  #   "refused"     - restricted or invalid input; nothing touched. The same
+  #                   rule log_state obeys (NEVER_LOG_TEXT): text that may not
+  #                   be logged may not be stored either.
+  #   "in_repo"     - the dir sits inside a git work tree; nothing written,
+  #                   because request text must never land where a commit
+  #                   could carry it.
+  #   "written"
+  # Raises ArgumentError for a call_id outside PAYLOAD_ID; a filesystem
+  # failure raises SystemCallError or IOError to the caller.
+  def self.store_payload(config:, call_id:, input:, now: Time.now.utc)
+    raise ArgumentError, "call_id must be a minted call id" unless payload_id?(call_id)
+
+    dir = config.typesafe_payload_store_dir
+    return "off" if dir.nil?
+
+    input = stringify(input)
+    return "refused" if payload_restricted?(config, input)
+    return "in_repo" if inside_work_tree?(dir)
+
+    FileUtils.mkdir_p(dir, mode: 0o700)
+    prune_payloads(dir, now, config.typesafe_payload_store_keep_days)
+    body = Client.new(key: nil, model: config.typesafe_model, deadline_ms: 1).body(input)
+    path = File.join(dir, "#{call_id}.json")
+    File.open(path, File::WRONLY | File::CREAT | File::EXCL, 0o600) do |f|
+      f.write(JSON.generate(body))
+    end
+    File.utime(now, now, path)
+    "written"
+  end
+
+  # [status, request] for one stored call. status is "ok" (request is the
+  # parsed body), "off", "malformed" (not a minted call id; the store is
+  # never touched), "not_found" or "unreadable"; request is nil unless ok.
+  def self.read_payload(config:, call_id:)
+    return ["malformed", nil] unless payload_id?(call_id)
+
+    dir = config.typesafe_payload_store_dir
+    return ["off", nil] if dir.nil?
+
+    path = File.join(dir, "#{call_id}.json")
+    return ["not_found", nil] unless File.file?(path)
+
+    parsed = begin
+      JSON.parse(File.read(path))
+    rescue JSON::ParserError, EncodingError, SystemCallError, IOError
+      nil
+    end
+    parsed.is_a?(Hash) ? ["ok", parsed] : ["unreadable", nil]
+  end
+
+  def self.payload_id?(call_id)
+    call_id.is_a?(String) && call_id.match?(PAYLOAD_ID)
+  end
+  private_class_method :payload_id?
+
+  # Restricted text never enters the store: a listed source, or an input
+  # judge would refuse as invalid. Checked here as well as by judge's own
+  # ordering, so the store is safe for any caller.
+  def self.payload_restricted?(config, input)
+    return true if validate_input(input, site: nil)
+
+    input.key?("source") && config.typesafe_restricted_sources.include?(input["source"])
+  end
+  private_class_method :payload_restricted?
+
+  # Whether `dir`, or any directory above it, holds a .git entry. The dir
+  # need not exist yet; the walk is over its expanded path.
+  def self.inside_work_tree?(dir)
+    current = File.expand_path(dir)
+    loop do
+      return true if File.exist?(File.join(current, ".git"))
+
+      parent = File.dirname(current)
+      return false if parent == current
+
+      current = parent
+    end
+  end
+  private_class_method :inside_work_tree?
+
+  # Deletes store files whose mtime is more than keep_days before `now`.
+  # Only names matching PAYLOAD_FILE are considered.
+  def self.prune_payloads(dir, now, keep_days)
+    cutoff = now - keep_days * DAY_S
+    Dir.children(dir).each do |name|
+      next unless name.match?(PAYLOAD_FILE)
+
+      path = File.join(dir, name)
+      begin
+        File.delete(path) if File.file?(path) && File.mtime(path) < cutoff
+      rescue Errno::ENOENT
+        next # a concurrent writer pruned it first
+      end
+    end
+  end
+  private_class_method :prune_payloads
+
+  # judge's hook: store the request before the attempt, so a timeout still
+  # leaves the request behind. A store failure never fails the call; it
+  # becomes a warning, and the call proceeds.
+  def self.keep_payload(ctx)
+    status = store_payload(config: ctx[:config], call_id: ctx[:call_id],
+                           input: ctx[:input], now: ctx[:now])
+    ctx[:warnings] << "payload_store_in_repo" if status == "in_repo"
+  rescue SystemCallError, IOError
+    ctx[:warnings] << "payload_store_failed"
+  end
+  private_class_method :keep_payload
 
   # ---- policy helpers ------------------------------------------------------
 

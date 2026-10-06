@@ -617,6 +617,8 @@ class UserConfigTypesafeTest < Minitest::Test
         assert_equal [], config.typesafe_restricted_sources
         assert_equal({ "mode" => "off", "deadline_ms" => 1500 }, config.typesafe_site("anything"))
         assert_equal({}, config.typesafe_sites)
+        assert_nil config.typesafe_payload_store_dir, "the payload store ships off"
+        assert_equal 30, config.typesafe_payload_store_keep_days
       end
     end
   end
@@ -645,6 +647,18 @@ class UserConfigTypesafeTest < Minitest::Test
       assert_equal File.join(home, "st"), config.typesafe_state_dir
     end
   end
+
+# sabotage: skip File.expand_path on the store dir, or ignore a configured
+# keep_days -> red
+def test_payload_store_reads_back_expanded_with_keep_days
+  in_tmp_home("typesafe" => { "payload_store" => { "dir" => "~/payloads", "keep_days" => 7 } }) do |home|
+    config = UserConfig.load
+    assert config.valid?, config.errors.inspect
+    assert_empty config.warnings
+    assert_equal File.join(home, "payloads"), config.typesafe_payload_store_dir
+    assert_equal 7, config.typesafe_payload_store_keep_days
+  end
+end
 
   # sabotage: drop deadline_ms from the normalized entry, or return the
   # unconfigured site's default as something other than off/1500 -> red
@@ -695,7 +709,12 @@ class UserConfigTypesafeTest < Minitest::Test
       ["state_dir", 3],
       ["model", ""],
       ["restricted_sources", "private"],
-      ["sites", []]
+      ["sites", []],
+      ["payload_store", "on"],
+      ["payload_store", {}],
+      ["payload_store", { "dir" => " " }],
+      ["payload_store", { "dir" => "/x", "keep_days" => 0 }],
+      ["payload_store", { "dir" => "/x", "keep_days" => 1.5 }]
     ].each do |key, value|
       errors = typesafe_errors(key => value)
       refute_empty errors, "#{key} => #{value.inspect} should block"
@@ -808,24 +827,28 @@ class UserConfigCliTest < Minitest::Test
   end
 
   # sabotage: leave typesafe_declared or typesafe_site_modes off the
-  # envelope, or emit the key path or the monthly cap in it -> red
+  # envelope, or emit the key path, the payload store dir or the monthly
+  # cap in it -> red
   def test_check_reports_typesafe_modes_but_not_the_key_path_or_cap
     section = {
       "key_path" => "/fixture/secret-key-location",
       "state_dir" => "/fixture/secret-state-location",
       "budget" => { "monthly_usd" => 4321.5 },
+      "payload_store" => { "dir" => "/fixture/secret-store-location" },
       "sites" => { "review" => { "mode" => "shadow" }, "quiet" => {} }
     }
     with_config_file("typesafe" => section) do |path|
       code, env = run_cli(["check", "--file", path])
       assert_equal 0, code
       assert_equal true, env["data"]["typesafe_declared"]
+      assert_equal true, env["data"]["typesafe_payload_store_declared"]
       assert_equal({ "review" => "shadow", "quiet" => "off" }, env["data"]["typesafe_site_modes"])
       json = JSON.generate(env)
-      refute_match(/secret-key-location|secret-state-location|4321/, json)
+      refute_match(/secret-key-location|secret-state-location|secret-store-location|4321/, json)
     end
     _code, env = run_cli(["check", "--file", "/nonexistent/wurk.local.json"])
     assert_equal false, env["data"]["typesafe_declared"]
+    assert_equal false, env["data"]["typesafe_payload_store_declared"]
     assert_equal({}, env["data"]["typesafe_site_modes"])
   end
 end
