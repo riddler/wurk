@@ -1821,7 +1821,7 @@ campaigns) - the campaign must be resumable from the journal alone. Closed event
     [discovery] [premise-corrected] [scope] [held] [operator]
     [ruling-queued] [ruling-taken] [refusal] [resource] [incident]
     [conductor-error] [correction] [cleanup] [adoption] [tracker-push]
-    [cross-campaign] [stale]
+    [cross-campaign] [stale] [presence]
 
 The vocabulary is CLOSED, and every type in it is one a reader greps
 for. A campaign that wants a type the list does not have files a retro
@@ -1846,7 +1846,16 @@ last report/commit/journal movement, each liveness probe and what it
 returned, decision). `[operator]` records mid-campaign operator
 instructions with the scope you gave them; when it is a consent
 carve-out, quote it; when it answers a queued ruling, it names the
-ruling. `[adoption]` carries (what landed, sha, kind: skill prose /
+ruling. `[presence]` records that the operator's availability changed: away,
+back, asleep by the consumer's own presence source, or a quiet window
+began or ended. It carries (the change, the source, the time, e.g.
+"operator away until 09:00") and is never a ruling. A ruling that
+arrives while the operator is away is still `[operator]`, and a
+reader resuming from the journal alone must not read an away or back
+entry as one. While the operator is away, held items and queued
+rulings keep waiting: journal the `[presence]` change once, and the
+next `[ruling-queued]` or `[held]` entry can say it is waiting on it.
+`[adoption]` carries (what landed, sha, kind: skill prose /
 agent definition / kit script / none - a landing that touches nothing
 the conductor runs on, moment: next campaign / next dispatch / next
 shell-out / this campaign by hand from here) for every landing that
