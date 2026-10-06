@@ -100,7 +100,8 @@ class Manifest
     "beads.areas" => %w[labels lands_alone always_batchable],
     "forge" => %w[kind host labels ready_idle_hours],
     "gate" => %w[cwd full loop report report_loop attest guard_ledger build_paths also_gated_paths moving_files
-                 project_level_skips not_applicable_skips sabotage timeout_seconds long_timeout_seconds],
+                 project_level_skips not_applicable_skips sabotage timeout_seconds long_timeout_seconds
+                 could_not_measure_exit],
     "gate.sabotage" => %w[test_roots test_pattern exempt_prefixes],
     "parallelism" => %w[model worktrees_dir trust warm_clone warm_globs warm repair_when repair post_branch
                         timeout_seconds preflight],
@@ -446,6 +447,15 @@ class Manifest
 
   def gate_guard_ledger
     fetch("gate.guard_ledger")
+  end
+
+  # The exit code a consumer's gate command uses to say "I could not
+  # measure" (a toolchain missing, a worker that died before reporting)
+  # rather than "I measured and it is red". nil when absent: with no
+  # declaration every non-zero exit is a plain failure, so the key can only
+  # ever narrow a failure into a more specific not-ok, never make one pass.
+  def gate_could_not_measure_exit
+    fetch("gate.could_not_measure_exit")
   end
 
   # Seconds Sh.run allows the gate command and the attest command before
@@ -946,6 +956,7 @@ class Manifest
     validate_external_tracker
     validate_gate_timeout_seconds
     validate_gate_long_timeout_seconds
+    validate_gate_could_not_measure_exit
     validate_parallelism_timeout_seconds
     validate_parallelism_preflight
     validate_gate_cwd
@@ -1104,6 +1115,19 @@ class Manifest
     return if value.is_a?(Integer) && value.positive?
 
     errors << "#{path}: gate.timeout_seconds must be a positive integer, got #{value.inspect}"
+  end
+
+  # Absent is legal (no default). Present, it must be an exit code a process
+  # can actually return and that is not success: 0 would turn every passing
+  # run into a could-not-measure one, and anything outside 1..255 is a code
+  # no gate command can exit with, so the declaration would silently never
+  # fire.
+  def validate_gate_could_not_measure_exit
+    value = fetch("gate.could_not_measure_exit")
+    return if value.nil?
+    return if value.is_a?(Integer) && value.between?(1, 255)
+
+    errors << "#{path}: gate.could_not_measure_exit must be an integer from 1 to 255, got #{value.inspect}"
   end
 
   # validate_gate_long_timeout_seconds needs no nil guard, same reason as

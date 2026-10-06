@@ -339,6 +339,9 @@ class GateTest < Minitest::Test
       codes = env["warnings"].map { |w| w["code"] }
       assert_includes codes, "stage_skipped_not_applicable"
       refute_includes codes, "stage_skipped_project_level"
+      # A not_applicable skip is not a could-not-measure stage (wu-og89).
+      assert_equal [], env["data"]["could_not_measure"]
+      assert_equal "green", env["data"]["verdict"]
     end
   end
 
@@ -787,6 +790,162 @@ class GateTest < Minitest::Test
       _code, env = run_gate
 
       assert_nil env["data"]["gate_output"]
+    end
+  end
+
+  # --- could not measure (wu-og89) --------------------------------------------
+
+  # A stage the report says could not be measured is its own outcome: not a
+  # pass (the envelope is not ok even though the report's own status says
+  # ok), and not a skip (it never lands in data.skipped_stages, whose
+  # classifications a project can declare away).
+  # sabotage: select could_not_measure stages into skipped_from's list -> red
+  def test_could_not_measure_stage_is_not_ok_and_not_a_skip
+    report = {
+      "status" => "ok",
+      "scope" => "all",
+      "stages" => [
+        { "name" => "Format", "status" => "ok", "summary" => "clean" },
+        { "name" => "Gettext", "status" => "skipped", "summary" => ":gettext not installed" },
+        { "name" => "Tests", "status" => "could_not_measure", "reason" => "worker died before reporting" }
+      ]
+    }
+
+    in_tmp_cwd do
+      expect_elixir_diff
+      expect_no_sabotage_diff
+      @fake.expect(%w[make report], out: JSON.generate(report))
+      @fake.expect(%w[make attest], out: "Full gate green...\n")
+
+      code, env = run_gate
+
+      assert_equal 1, code
+      assert_equal false, env["ok"]
+      assert_equal [{ "scope" => "stage", "name" => "Tests", "reason" => "worker died before reporting" }],
+                   env["data"]["could_not_measure"]
+      assert_equal ["Gettext"], env["data"]["skipped_stages"].map { |s| s["name"] }
+      assert_equal "could not measure", env["data"]["verdict"]
+      assert_match(/\Acould not measure: Tests \(worker died before reporting\)\z/, env["data"]["summary"])
+      assert_includes env["warnings"].map { |w| w["code"] }, "stage_could_not_measure"
+    end
+  end
+
+  # A measured failure is the stronger statement: a red stage beside a
+  # could-not-measure one reads red, so a gap can never hide a failure.
+  # sabotage: drop the measured-red-stage check from verdict -> red
+  def test_red_stage_beside_a_could_not_measure_stage_reads_red
+    report = {
+      "status" => "error",
+      "scope" => "all",
+      "stages" => [
+        { "name" => "Credo", "status" => "error", "summary" => "5 issues" },
+        { "name" => "Tests", "status" => "could_not_measure", "summary" => "toolchain missing" }
+      ]
+    }
+
+    in_tmp_cwd do
+      expect_elixir_diff
+      expect_no_sabotage_diff
+      @fake.expect(%w[make report], out: JSON.generate(report))
+      @fake.expect(%w[make attest], exitstatus: 1, err: "red\n")
+
+      code, env = run_gate
+
+      assert_equal 1, code
+      assert_equal "red", env["data"]["verdict"]
+      assert_equal "red", env["data"]["summary"]
+      assert_equal ["Tests"], env["data"]["could_not_measure"].map { |c| c["name"] }
+    end
+  end
+
+  # sabotage: in run_could_not_measure, compare the exit against 0 instead
+  # of the configured code -> red
+  def test_configured_exit_with_no_report_reads_could_not_measure
+    in_tmp_cwd(fixture: "gate_tier0_could_not_measure") do
+      expect_elixir_diff
+      @fake.expect(%w[make check], out: "mix: command not found\n", exitstatus: 3)
+
+      code, env = run_gate
+
+      assert_equal 1, code
+      assert_equal false, env["ok"]
+      entries = env["data"]["could_not_measure"]
+      assert_equal 1, entries.length
+      assert_equal "run", entries.first["scope"]
+      assert_nil entries.first["name"]
+      assert_match(/exited 3/, entries.first["reason"])
+      assert_equal "could not measure", env["data"]["verdict"]
+      assert_match(/could not measure/, env["data"]["summary"])
+      assert_equal 3, env["data"]["gate_output"]["exit_status"]
+      codes = env["warnings"].map { |w| w["code"] }
+      assert_includes codes, "gate_could_not_measure"
+      refute_includes codes, "gate_tier0_failure"
+    end
+  end
+
+  # sabotage: match any non-zero exit in run_could_not_measure -> red
+  def test_a_plain_red_exit_still_reads_red_with_the_key_declared
+    in_tmp_cwd(fixture: "gate_tier0_could_not_measure") do
+      expect_elixir_diff
+      @fake.expect(%w[make check], out: "1 failure\n", exitstatus: 1)
+
+      code, env = run_gate
+
+      assert_equal 1, code
+      assert_equal [], env["data"]["could_not_measure"]
+      assert_equal "red", env["data"]["verdict"]
+      assert_equal "red", env["data"]["summary"]
+      assert_includes env["warnings"].map { |w| w["code"] }, "gate_tier0_failure"
+    end
+  end
+
+  # With no declaration, the same exit code is a plain failure - the key is
+  # the only way into the third outcome.
+  # sabotage: default gate.could_not_measure_exit to 3 in DEFAULTS -> red
+  def test_without_the_key_that_exit_code_is_a_plain_failure
+    in_tmp_cwd(fixture: "gate_tier0") do
+      expect_elixir_diff
+      @fake.expect(%w[make check], out: "mix: command not found\n", exitstatus: 3)
+
+      code, env = run_gate
+
+      assert_equal 1, code
+      assert_equal [], env["data"]["could_not_measure"]
+      assert_equal "red", env["data"]["verdict"]
+    end
+  end
+
+  # A timed-out run was killed by the kit, so its exit code is not the gate
+  # command's own statement - even when a wrapper that traps the kill
+  # happens to exit with the declared code. It stays a plain failure.
+  # sabotage: drop the timed_out? guard in run_could_not_measure -> red
+  def test_a_timed_out_run_is_red_even_with_the_key_declared
+    in_tmp_cwd(fixture: "gate_tier0_could_not_measure") do
+      expect_elixir_diff
+      @fake.expect(%w[make check], out: "started...\n", timed_out: true, exitstatus: 3)
+
+      _code, env = run_gate
+
+      assert_equal [], env["data"]["could_not_measure"]
+      assert_equal "red", env["data"]["verdict"]
+    end
+  end
+
+  # The dogfooding case: no report, no key, a passing gate - unchanged
+  # apart from the new fields reading green.
+  # sabotage: return "red" first in verdict -> red
+  def test_green_tier_0_run_reads_green_with_no_could_not_measure_entries
+    in_tmp_cwd(fixture: "gate_tier0_could_not_measure") do
+      expect_elixir_diff
+      @fake.expect(%w[make check], out: "fine\n")
+
+      code, env = run_gate
+
+      assert_equal 0, code
+      assert_equal true, env["ok"]
+      assert_equal [], env["data"]["could_not_measure"]
+      assert_equal "green", env["data"]["verdict"]
+      assert_equal "green", env["data"]["summary"]
     end
   end
 

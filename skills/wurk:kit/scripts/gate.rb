@@ -69,6 +69,17 @@ require_relative "lib/base_ref"
 #    skipped. `data.sabotage.unverifiable` is a report on the same terms as
 #    `missing`: it names declarations this scan could not check at all, and
 #    it never flips `ok` either.
+# 4. "Could not measure" is its own outcome, never a pass and never a skip.
+#    A tier-1 stage reported with status `could_not_measure`, or (with no
+#    report) a gate command exiting the manifest's
+#    `gate.could_not_measure_exit`, lands in `data.could_not_measure` - not
+#    in `data.skipped_stages`, whose classifications describe gaps the
+#    project can declare away, which this one never is - and the envelope is
+#    not ok while any entry exists, whatever the exit code or the report's
+#    own status said. `data.verdict` names the three outcomes apart
+#    (`green`, `red`, `could not measure`) so a reader of the summary does
+#    not have to reconstruct which one a not-ok envelope was. The kit's own
+#    exit contract is unchanged: could-not-measure exits 1, like red.
 module Gate
   # Matches both accepted note forms - a real mutation
   # (`# sabotage: <what> -> red`) and a stated exemption
@@ -87,6 +98,18 @@ module Gate
   # and every line in that block has to keep matching this for the walk to
   # continue (a blank line or code line stops it, same as a missing note).
   COMMENT_LINE_RE = /\A\s*#/.freeze
+
+  # The tier-1 stage status that means "this stage could not be measured on
+  # this run" (rule 4 in the module doc). wurk's own report vocabulary, not
+  # consumer data - it stays a constant.
+  COULD_NOT_MEASURE = "could_not_measure"
+
+  # Stage statuses that are not themselves a measured failure, for telling
+  # `red` from `could not measure` on a not-ok run (see verdict). Anything
+  # else - "error", "fail", "failed", "timeout", a word this list has never
+  # seen - counts as measured red, so an unfamiliar status can only ever make
+  # the verdict stricter, never launder a failure into could-not-measure.
+  NOT_RED_STAGE_STATUSES = ["ok", "pass", "passed", "skip", "skipped", COULD_NOT_MEASURE].freeze
 
   class << self
     # The carve-out predicate (see lib/gate_paths.rb) so /wurk:commit's Step 0
@@ -323,6 +346,59 @@ module Gate
       !(summary.to_s =~ re).nil?
     end
 
+    # Stages the tier-1 report says could not be measured. Deliberately a
+    # separate list from skipped_from, never folded into it: every skip
+    # classification is something a project can declare non-blocking, and a
+    # could-not-measure stage never is (rule 4). The reason comes from the
+    # stage's `reason`, falling back to its `summary` - the gate contract's
+    # example report uses the former, the ex_quality adapter the latter.
+    def could_not_measure_from(stages)
+      Array(stages)
+        .select { |s| s["status"] == COULD_NOT_MEASURE }
+        .map { |s| { scope: "stage", name: s["name"], reason: s["reason"] || s["summary"] } }
+    end
+
+    # The whole-run entry for a gate that gave no report and exited the
+    # manifest's declared could-not-measure code, or nil. A timed-out run was
+    # killed by the kit, so whatever code it carries (a wrapper trapping the
+    # kill may exit with anything) is not the gate command's own statement,
+    # and it never matches; a successful run never does either, which is
+    # also why the manifest refuses 0 as the declared code.
+    def run_could_not_measure(res, configured)
+      return nil if configured.nil? || res.success? || res.timed_out?
+
+      code = res.status && res.status.exitstatus
+      return nil unless code == configured
+
+      { scope: "run", name: nil,
+        reason: "the gate command exited #{code}, which this project declares as could not measure " \
+                "(gate.could_not_measure_exit)" }
+    end
+
+    # One of the three words, or nil on a run that never ran the gate command
+    # (the carve-out, a command that could not start). A not-ok run with
+    # could-not-measure entries reads `could not measure` only when no stage
+    # reported a measured failure: a red stage is the stronger statement and
+    # wins, so this can never hide a real failure behind a gap.
+    def verdict(ok, could_not_measure, stages)
+      return "green" if ok
+      return "red" if could_not_measure.empty?
+      return "red" if Array(stages).any? { |s| !NOT_RED_STAGE_STATUSES.include?(s["status"]) }
+
+      "could not measure"
+    end
+
+    # The one-line human summary that leads with the verdict word.
+    def summary_line(verdict, could_not_measure)
+      return nil if verdict.nil?
+      return verdict unless verdict == "could not measure"
+
+      parts = could_not_measure.map do |c|
+        c[:name] ? "#{c[:name]} (#{c[:reason]})" : c[:reason]
+      end
+      "could not measure: #{parts.join('; ')}"
+    end
+
     # `data.gate_guard` is a report, never repaired: the ledger existence
     # check below is read-only (File.exist?), and the guarded-path findings
     # (if any) come straight from the "Gate guard" stage the gate command
@@ -538,6 +614,9 @@ module Gate
         env.data[:profile] = nil
         env.data[:stages] = []
         env.data[:skipped_stages] = []
+        env.data[:could_not_measure] = []
+        env.data[:verdict] = nil
+        env.data[:summary] = nil
         env.data[:gate_guard] = gate_guard_from([], ledger_path, manifest.checkout_root)
         env.data[:gate_cwd] = nil
         return env.emit(io)
@@ -561,6 +640,9 @@ module Gate
         env.data[:profile] = nil
         env.data[:stages] = []
         env.data[:skipped_stages] = []
+        env.data[:could_not_measure] = []
+        env.data[:verdict] = nil
+        env.data[:summary] = nil
         env.data[:gate_guard] = gate_guard_from([], ledger_path, manifest.checkout_root)
         env.data[:gate_cwd] = manifest.gate_chdir
         env.data[:attested] = false
@@ -581,6 +663,7 @@ module Gate
       report ||= {}
       stages = report["stages"] || []
       skipped = skipped_from(stages, manifest.project_level_skip_re, manifest.not_applicable_skip_re)
+      could_not_measure = could_not_measure_from(stages)
 
       env.data[:ran] = loop_mode ? "loop" : "all"
       env.data[:tier] = tier
@@ -644,10 +727,33 @@ module Gate
           # "the gate failed". data.gate_output + this warning make which one
           # it is legible; the timeout case is called out by name.
           env.data[:gate_output] = gate_failure_output(res)
-          env.warn(code: "gate_tier0_failure", message: tier0_failure_message(res))
+          run_entry = run_could_not_measure(res, manifest.gate_could_not_measure_exit)
+          if run_entry
+            could_not_measure << run_entry
+            env.warn(
+              code: "gate_could_not_measure",
+              message: "#{run_entry[:reason]} - not a pass and not a measured failure; nothing was " \
+                       "verified on this run - see data.gate_output for the output tail"
+            )
+          else
+            env.warn(code: "gate_tier0_failure", message: tier0_failure_message(res))
+          end
           env.fail!
         end
       elsif report["status"] && report["status"] != "ok"
+        env.fail!
+      end
+
+      # Rule 4: never ok while a stage could not be measured, whatever the
+      # report's own status said.
+      could_not_measure.each do |c|
+        next unless c[:scope] == "stage"
+
+        env.warn(
+          code: "stage_could_not_measure",
+          message: "#{c[:name]} could not be measured (#{c[:reason]}) - not a passing stage and not a " \
+                   "skip; the gate is not ok while it stands"
+        )
         env.fail!
       end
 
@@ -683,6 +789,9 @@ module Gate
         end
       end
 
+      env.data[:could_not_measure] = could_not_measure
+      env.data[:verdict] = verdict(env.ok?, could_not_measure, stages)
+      env.data[:summary] = summary_line(env.data[:verdict], could_not_measure)
       env.emit(io)
     end
   end

@@ -1,0 +1,48 @@
+{
+  "wurk": 1,
+  "beads": {
+    "prefix": "zz",
+    "sync": "git"
+  },
+  "forge": {
+    "kind": "github"
+  },
+  "gate": {
+    "full": [
+      "make",
+      "check"
+    ],
+    "loop": [
+      "make",
+      "quick"
+    ],
+    "guard_ledger": "docs/quality-gate-changes.md",
+    "build_paths": [
+      "lib/",
+      "test/",
+      "config/",
+      "mix.exs",
+      "mix.lock"
+    ],
+    "also_gated_paths": [
+      ".claude/scripts/",
+      ".claude/skills/"
+    ],
+    "moving_files": [
+      ".quality.exs",
+      ".credo.exs",
+      "coveralls.json"
+    ],
+    "could_not_measure_exit": 3
+  },
+  "parallelism": {
+    "model": "worktree-per-issue"
+  },
+  "artifacts": {
+    "plans": "docs/plans",
+    "research": "docs/research"
+  },
+  "changelog": {
+    "mode": "none"
+  }
+}
