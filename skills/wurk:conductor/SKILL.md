@@ -1386,7 +1386,33 @@ MR mode: where the operator's consent quotes a carve-out letting the
 conductor merge this campaign's requests, merge with the journaled
 merge method from Phase 0 and never with one the forge disallows;
 without such a carve-out the operator merges (the mode's default) and
-the conductor only verifies. Either way: verify merge via the forge,
+the conductor only verifies.
+
+A conductor-run merge is three steps in this order, and the first two
+are not the merge:
+
+1. List the default branch's movement since the composed check (the
+   check that last proved this request's tree) as its OWN command, and
+   read its output before anything else - the commit list itself, not
+   an exit status.
+2. If any commit landed that is not on the consumer's declared
+   daemon-written paths (`repo.daemon_written_paths`, the manifest key
+   documented in `docs/manifest.md`), recompose and re-gate first; the
+   merge waits. A commit touching only those paths is the daemon's
+   ledger and does not stale the composed check.
+3. Only then merge, as a separate command, never chained to the check
+   with `&&`, `;` or a pipe: a chain reads the check's output after the
+   merge has already run, so the merge cannot wait on it. Journal the
+   movement result and the merge as two entries.
+
+This is the "Confirming your own commands" rule (see that section)
+applied to the pair: a merge in the same command as the check reads
+the check's effect from its own invocation. One campaign merged in the
+same command that listed the default branch's movement, and commits from
+another session had landed after the composed check; the merge shipped a
+tree nobody had gated.
+
+Either way: verify merge via the forge,
 pull, close bead (queue the close if the tracker links it to work
 elsewhere; a pre-decided supersede/absorb lands as supersede-then-close,
 below), remove worktree, delete the remote branch only where the
