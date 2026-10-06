@@ -31,6 +31,16 @@ require_relative "lib/finding_severity"
 # default directory. Every path is a CLI argument, so the reports dir stays
 # the caller's seam value (the fleet manifest's campaignState.reports) and
 # is never spelled here.
+#
+# --notes-dir DIR adds one cross-check and keeps the script pure: the CALLER
+# (the conductor's sweep) runs bd and writes each bead's notes to
+# DIR/<bead-id>.txt, and this script only reads those files. A report whose
+# status is "complete" while the bead's last note carries the partial marker
+# warns status_contradicts_notes with both texts. It is a warning and never a
+# block, for the same reason a bad report is never rewritten here: the
+# report is the worker's statement, and the conductor decides which of the
+# two to believe. Without the flag the envelope is byte-identical to the
+# envelope before the flag existed.
 module ReportCheck
   # The per-bead file name the contract fixes: <bead-id>-report.json. A
   # directory is swept for exactly this, so a campaign's morning report
@@ -45,6 +55,15 @@ module ReportCheck
   # Bare JSON: the first non-blank character of the document is the start of
   # an object or an array.
   BARE = /\A[\[{]/.freeze
+
+  # The partial marker, spelled as the conductor's journal vocabulary spells
+  # its [partial] entry tag. Matched literally, as a substring, against the
+  # bead's LAST note only: an earlier [partial] note that a later note
+  # supersedes is history, not a contradiction.
+  PARTIAL_MARKER = "[partial]"
+
+  # The suffix the contract's per-bead file name carries after the bead id.
+  REPORT_SUFFIX = "-report.json"
 
   class << self
     # Every *-report.json directly under dir, sorted. A dir that does not
@@ -120,6 +139,44 @@ module ReportCheck
       end
     end
 
+    # The bead id a report file belongs to, from the contract's file name
+    # (<bead-id>-report.json) rather than from the JSON, so it is the same id
+    # the conductor named in the dispatch and wrote the notes file under.
+    def bead_id(path)
+      File.basename(path).delete_suffix(REPORT_SUFFIX)
+    end
+
+    # DIR/<bead-id>.txt: where the caller wrote this bead's notes.
+    def notes_path(notes_dir, report_path)
+      File.join(notes_dir, "#{bead_id(report_path)}.txt")
+    end
+
+    # The report's status field, or nil when the file does not parse or
+    # carries no string status. Only called on a report already known to
+    # parse; the nil branch keeps it total.
+    def report_status(path)
+      report = JSON.parse(read_utf8(path))
+      status = report.is_a?(Hash) ? report["status"] : nil
+      status.is_a?(String) ? status : nil
+    rescue JSON::ParserError, SystemCallError
+      nil
+    end
+
+    # The last note in a notes file. bd note appends each note to the
+    # bead's notes field verbatim, one per line with no stamp of its own, so
+    # the file holds that field as `bd show <id> --json` returns it, and the
+    # last non-blank line is the last note. Leading and trailing whitespace
+    # is dropped so a copy of the indented `bd show` rendering reads the
+    # same. nil for a file with no notes in it.
+    def last_note(content)
+      line = content.each_line.reverse_each.find { |l| !l.strip.empty? }
+      line&.strip
+    end
+
+    def partial?(note)
+      !note.nil? && note.include?(PARTIAL_MARKER)
+    end
+
     def read_utf8(path)
       File.read(path, encoding: "UTF-8")
     rescue ArgumentError
@@ -128,14 +185,21 @@ module ReportCheck
   end
 end
 
-# CLI: report_check.rb <path>... where each path is a reports directory or a
-# single report file. Read-only, so there is nothing for --dry-run to skip.
+# CLI: report_check.rb [--notes-dir DIR] <path>... where each path is a
+# reports directory or a single report file. Read-only, so there is nothing
+# for --dry-run to skip.
 class ReportCheckCli
-  USAGE = "report_check.rb [options] <reports-dir-or-file>..."
+  USAGE = "report_check.rb [--notes-dir DIR] <reports-dir-or-file>..."
 
   class << self
     def run(argv, io: $stdout)
-      parser, = Cli.build(USAGE)
+      options = {}
+      parser, = Cli.build(USAGE, options) do |opts|
+        opts.on("--notes-dir DIR",
+                "cross-check each complete report against DIR/<bead-id>.txt, the bead's notes") do |v|
+          options[:notes_dir] = v
+        end
+      end
       args = Cli.parse!(parser, argv)
 
       if args.empty?
@@ -152,6 +216,10 @@ class ReportCheckCli
       env.data[:unparseable] = reports.select { |r| r[:exists] && !r[:parsed] }.map { |r| r[:path] }
 
       reports.each { |report| judge(env, report) }
+      if options[:notes_dir]
+        env.data[:notes_dir] = options[:notes_dir]
+        reports.each { |report| check_notes(env, report, options[:notes_dir]) }
+      end
       env.emit(io)
     end
 
@@ -208,6 +276,36 @@ class ReportCheckCli
                  "between-campaigns reader parse.",
         needs: "human"
       )
+    end
+
+    # Only a parsed report whose status is "complete" is cross-checked: a
+    # blocked or failed report already says the work is not done, so a
+    # [partial] note beside it agrees with it. Both outcomes warn and never
+    # block - a missing notes file means the check did not run for that bead,
+    # and a contradiction is the conductor's to decide; neither rewrites the
+    # worker's statement.
+    def check_notes(env, report, notes_dir)
+      return unless report[:exists] && report[:parsed]
+
+      status = ReportCheck.report_status(report[:path])
+      return unless status == "complete"
+
+      bead = ReportCheck.bead_id(report[:path])
+      notes = ReportCheck.notes_path(notes_dir, report[:path])
+      unless File.file?(notes)
+        env.warn(code: "notes_missing",
+                 message: "#{bead}: no notes file at #{notes}, so its complete report at " \
+                          "#{report[:path]} was not checked against the bead's notes")
+        return
+      end
+
+      note = ReportCheck.last_note(ReportCheck.read_utf8(notes))
+      return unless ReportCheck.partial?(note)
+
+      env.warn(code: "status_contradicts_notes",
+               message: "#{bead}: report #{report[:path]} says status \"#{status}\", but the bead's " \
+                        "last note carries #{ReportCheck::PARTIAL_MARKER}: #{note.inspect}. " \
+                        "The report is not rewritten; the conductor decides which to record.")
     end
 
     # A malformed optional field warns rather than blocks: the report still

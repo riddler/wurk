@@ -1102,6 +1102,28 @@ with it. A `report_missing` warning is not that: it means the worker has
 not written its report yet, which is the ordinary state of a bead in
 flight.
 
+**Check a complete report against the bead's own notes** in the same
+call. A worker has reported status "complete" while its last bead
+note said `[partial]`, and only a careful read caught it. The script
+never runs bd, so you write the notes for it first. For each bead
+whose report you are about to land, write the bead's notes field to
+`<notes dir>/<bead-id>.txt`. The notes dir is a folder you choose
+under campaign state, such as `<reports dir>/notes`. Then pass that
+folder to the check:
+
+    bd show <id> --json | ruby -rjson -e 'd = JSON.parse($stdin.read); d = d.first if d.is_a?(Array); print d["notes"].to_s' > <notes dir>/<id>.txt
+    ruby ~/.claude/skills/wurk:kit/scripts/report_check.rb --notes-dir <notes dir> <reports dir>
+
+`status_contradicts_notes` means the bead's last note carries
+`[partial]` but its report says "complete". The warning quotes both.
+It is a warning and never a block. You still decide between [complete]
+and [partial] on your own read of the two. Never edit the report or
+the note to make them agree, because the report is the worker's
+statement. Journal the entry with the warning quoted. `notes_missing`
+means no notes file was there for a complete report, so that bead got
+no check. Write the file and run the check again. It is not a finding
+about the worker.
+
 **Triage the report once, after your own read (report_triage; off
 unless the operator turned it on).** Once you have landed a report and
 journaled your own classification - done for a [complete], blocked or
