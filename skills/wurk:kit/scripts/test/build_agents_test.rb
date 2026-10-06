@@ -362,6 +362,19 @@ class BuildAgentsShippedTest < Minitest::Test
     end
   end
 
+  # sabotage: delete either rule, or the as_of field from the result JSON,
+  # in agents/wurk-repo-worker.md.in and rebuild -> red. The report's
+  # mutable facts carry their probe and time so the conductor can re-check
+  # them, and report_check.rb blocks the head-SHA case this text requires.
+  def test_repo_worker_carries_the_as_of_field_and_both_rules
+    text = File.read(File.join(AGENTS_DIR, "wurk-repo-worker.md"))
+    assert_includes text, %("as_of": [)
+    assert_includes text, %({"fact": "head_sha", "value": "...", "probe": )
+    assert_match(/\*\*A\s+fact is mutable if anyone but you can change it\*\*/, text)
+    assert_match(/\*\*Include the probe,\s+not just the fact\*\*/, text)
+    assert_match(/A result that is\s+complete and names a request MUST carry a `head_sha` entry/, text)
+  end
+
   # sabotage: delete the absence rule from agents/wurk-diff-critic.md.in
   # and rebuild -> red. The diff critic's absence findings ("a criterion
   # with no hunk", "an error not surfaced") must state and check the benign

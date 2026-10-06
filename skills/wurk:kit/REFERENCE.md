@@ -962,6 +962,25 @@ The field is optional ("`finding_severity.rb`: the finding_severity Jev
 site"), so a report without it passes; each entry in `data.reports`
 carries `findings_by_level` as null (absent), `ok` or `malformed`.
 
+The `as_of` list is checked whenever a report carries the key. It is the
+worker's record of every mutable fact it states, one `{fact, value,
+probe, at}` object each (`agents/wurk-repo-worker.md`'s result JSON),
+so the conductor can re-run the probe before acting on the fact. A list
+that is not a list of objects blocks `as_of_malformed`; an entry with
+any of the four fields absent, null or blank blocks
+`as_of_entry_incomplete`, naming the entry's fact and the missing
+fields; a report whose status is `complete` and whose `mr` names a
+request, with no entry whose `fact` is `head_sha`, blocks
+`as_of_head_sha_missing`. Each carries the same kind of `Fix:` clause
+as `report_not_json`: the worker re-emits. A report with no `as_of` key
+at all is read as one written before the field existed: it passes, and
+only when it is complete and names a request does it warn
+`as_of_absent`, because its head SHA and request state have no probe
+behind them. The key's presence is the one in-file sign of which
+template wrote a report, so blocking its absence would fail every
+report directory written before the field. `data.reports` gains no key,
+so an envelope over pre-change reports with no request is unchanged.
+
 **`--notes-dir DIR`** adds one cross-check: worker status against the
 bead's notes. The script still runs no bd. The caller writes each
 bead's notes field (as `bd show <id> --json` returns it) to
