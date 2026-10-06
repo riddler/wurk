@@ -104,7 +104,7 @@ class Manifest
                  could_not_measure_exit],
     "gate.sabotage" => %w[test_roots test_pattern exempt_prefixes],
     "parallelism" => %w[model worktrees_dir trust warm_clone warm_globs warm repair_when repair post_branch
-                        timeout_seconds preflight],
+                        timeout_seconds preflight control_check],
     "tmux" => %w[session model layout editor],
     "models" => %w[direction],
     "artifacts" => %w[plans research adr filename repository],
@@ -599,6 +599,17 @@ class Manifest
     fetch("parallelism.preflight") == true
   end
 
+  # The consumer's pre-spawn control command: an argv the conductor runs
+  # immediately before every worker spawn, where exit 0 means spawn and
+  # anything else (or a command that cannot run) means stop dispatching.
+  # nil when absent - no default, because absent means "no check", and the
+  # kit never invents a command for a consumer. Validated as a
+  # COMMAND_FIELDS entry: an empty list or a shell string blocks.
+  def control_check_argv
+    value = fetch("parallelism.control_check")
+    value && argv(value)
+  end
+
   def tmux?
     !fetch("tmux").nil?
   end
@@ -930,7 +941,7 @@ class Manifest
   # accessor so `check` reports a shell-string command as a validation
   # error rather than exploding mid-run in whichever script reads it first.
   COMMAND_FIELDS = %w[gate.full gate.loop gate.report gate.report_loop gate.attest parallelism.trust
-                      tmux.editor].freeze
+                      parallelism.control_check tmux.editor].freeze
   COMMAND_LIST_FIELDS = %w[parallelism.warm parallelism.repair parallelism.post_branch].freeze
 
   # Fields that hold a list of regex source strings rather than argv. Each
@@ -1661,6 +1672,11 @@ module ManifestCli
       # and empty when the consumer declares none.
       env.data[:mr_review_agents] = manifest.mr_review_agents
       env.data[:artifacts_adr] = manifest.adr_dir
+
+      # The pre-spawn control command, read by /wurk:conductor before every
+      # worker spawn: the argv, or null when the consumer declares none (or
+      # the manifest is invalid, which the blocked entries below report).
+      env.data[:control_check] = manifest.valid? ? manifest.control_check_argv : nil
 
       # The external tracker lifecycle (ADR-0018, wu-yi7.4): null when the
       # section is absent. /wurk:work, /wurk:mr, /wurk:cleanup, and a
