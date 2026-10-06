@@ -594,6 +594,98 @@ class GateTest < Minitest::Test
     end
   end
 
+  # --- --force: the carve-out on a clean tree -----------------------------
+  #
+  # On the default branch right after a landing there is no diff at all, so
+  # the applicability carve-out answers applicable: false and runs nothing.
+  # A post-landing repeat of a bare gate.rb is therefore not a gate run;
+  # --force is how a caller asks for gate.full regardless.
+
+  def expect_clean_tree
+    expect_base_ref
+    @fake.expect(%w[git diff --name-only origin/main...HEAD], out: "")
+    @fake.expect(%w[git status --porcelain], out: "")
+  end
+
+  # sabotage: n/a - pins the existing carve-out on an empty diff, the
+  # baseline the --force tests below are measured against
+  def test_bare_run_on_a_clean_tree_carves_out_and_runs_no_command
+    in_tmp_cwd do
+      expect_clean_tree
+      expect_no_sabotage_diff
+      # No gate command registered: FakeSh raises if one is shelled out.
+
+      code, env = run_gate
+
+      assert_equal 0, code
+      assert_equal true, env["ok"]
+      assert_equal false, env["data"]["applicable"]
+      assert_equal false, env["data"]["forced"]
+      assert_nil env["data"]["ran"]
+    end
+  end
+
+  # sabotage: make --force a no-op (drop `&& !forced` from the carve-out
+  # condition) -> red
+  def test_force_on_a_clean_tree_runs_the_gate_and_reports_forced
+    in_tmp_cwd do
+      expect_clean_tree
+      expect_no_sabotage_diff
+      @fake.expect(%w[make report], out: JSON.generate(GREEN_REPORT))
+      @fake.expect(%w[make attest], out: "Full gate green: scope all, no profile, 2 stages considered.\n")
+
+      code, env = run_gate(["--force"])
+
+      assert_equal 0, code
+      assert_equal true, env["ok"]
+      assert_equal true, env["data"]["forced"]
+      assert_equal false, env["data"]["applicable"]
+      assert_equal "all", env["data"]["ran"]
+      assert_equal true, env["data"]["attested"]
+      # The sabotage scan and gate_guard still run on the empty diff and
+      # report nothing.
+      assert_equal true, env["data"]["sabotage"]["scanned"]
+      assert_equal [], env["data"]["sabotage"]["missing"]
+      refute_nil env["data"]["gate_guard"]
+    end
+  end
+
+  # sabotage: make --force a no-op (drop `&& !forced` from the carve-out
+  # condition) -> red
+  def test_force_on_a_clean_tree_ok_follows_the_gate_commands_exit
+    in_tmp_cwd(fixture: "gate_tier0") do
+      expect_clean_tree
+      @fake.expect(%w[make check], out: "boom\n", exitstatus: 1)
+
+      code, env = run_gate(["--force"])
+
+      assert_equal 1, code
+      assert_equal false, env["ok"]
+      assert_equal true, env["data"]["forced"]
+      assert_equal "all", env["data"]["ran"]
+    end
+  end
+
+  # sabotage: report data.forced as false unconditionally -> red
+  def test_force_with_changes_is_a_normal_run_plus_the_flag
+    in_tmp_cwd do
+      expect_elixir_diff
+      expect_no_sabotage_diff
+      @fake.expect(%w[make report], out: JSON.generate(GREEN_REPORT))
+      @fake.expect(%w[make attest], out: "Full gate green: scope all, no profile, 2 stages considered.\n")
+
+      code, env = run_gate(["--force"])
+
+      assert_equal 0, code
+      assert_equal true, env["ok"]
+      assert_equal true, env["data"]["applicable"]
+      assert_nil env["data"]["carve_out_reason"]
+      assert_equal true, env["data"]["forced"]
+      assert_equal "all", env["data"]["ran"]
+      assert_equal true, env["data"]["attested"]
+    end
+  end
+
   # --- gate contract tiers (wurk docs/gate-contract.md) -------------------
   #
   # Tier 0 is the floor every consumer repo meets: gate.full/gate.loop and an

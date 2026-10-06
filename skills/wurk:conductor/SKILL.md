@@ -1407,7 +1407,10 @@ mode, every landing under a consent carve-out that lets the conductor
 merge (there, on the pulled default branch, after the forge merge is
 verified). Its exit status gates what follows exactly as the merge's
 does, above; a non-zero exit is a stop and a queue, not a journal note
-you land past.
+you land past. When the full gate that follows runs on a tree with no
+diff against its base - the pulled default branch in MR mode - a bare
+`gate.rb` carves out and runs nothing; see
+"Repeat the gate after landing" for the forms that actually run it.
 
 Where the command comes from is decided before the first landing and
 journaled, never invented at landing time:
@@ -1521,6 +1524,18 @@ to retry past silently. Journal what else was running at the same
 time (other worker gates, another campaign's landing) alongside the
 result, since a concurrency-shaped flake only shows up under load a
 single clean run never sees.
+
+**A bare `gate.rb` on the merged tree is not a gate run.** On a clean
+default branch after a landing there is no diff, so `gate.rb`'s
+applicability carve-out answers `applicable: false`, `ok: true` and runs
+no command at all - a green that measured nothing, however many times
+it is repeated. Two downstream campaigns each had to notice this at
+landing and run the suite by hand instead. Each post-landing run is
+either `gate.rb --force`, which skips the carve-out and reports
+`data.forced: true`, or the manifest's `gate.full` invoked directly.
+Which form to run is your call; the journal names the form beside each
+run's result, and an envelope carrying `applicable: false` is recorded
+as "gate did not run", never counted toward the repeats.
 
 **Re-check a named safety property on the merged tree, both modes.**
 When a bead's acceptance names a safety property - a "must never", a

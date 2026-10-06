@@ -56,7 +56,11 @@ require_relative "lib/base_ref"
 #    value, and `--skip`/`--quick` in any form, are simply not options this
 #    parser defines - OptionParser rejects them as usage errors (exit 2)
 #    before any envelope is built. There is no flag this script owns that
-#    narrows what the gate command runs beyond that one case.
+#    narrows what the gate command runs beyond that one case. The one other
+#    flag, `--force`, only widens: it skips the applicability carve-out so
+#    gate.full runs on a tree with no changes (a clean default branch after
+#    landing, where the carve-out would otherwise report applicable: false
+#    and run nothing), and says so as `data.forced: true`.
 # 3. `data.sabotage.missing` and `data.gate_guard` are reports. Neither ever
 #    flips `ok`, and there is no code path anywhere in this file that writes
 #    docs/quality-gate-changes.md - see test/contract_test.rb. The sabotage
@@ -424,7 +428,7 @@ module Gate
     end
 
     def build_parser(options)
-      Cli.build("gate.rb [--profile loop]", options) do |opts|
+      Cli.build("gate.rb [--profile loop] [--force]", options) do |opts|
         opts.separator ""
         opts.separator "Runs the gate commands the manifest names (gate.full, gate.loop,"
         opts.separator "gate.report, gate.report_loop, gate.attest) and reports which tier of"
@@ -436,6 +440,11 @@ module Gate
         opts.separator "parser, so OptionParser rejects them as a usage error (exit 2) - there is"
         opts.separator "no way to narrow what the gate command runs beyond the one --profile loop case."
         opts.separator ""
+        opts.separator "--force skips the applicability carve-out and runs the gate command even when"
+        opts.separator "no changed file is under the gated paths - a clean default branch after a"
+        opts.separator "landing, for one. It is reported as data.forced: true; ok follows the gate"
+        opts.separator "command exactly as on any other run."
+        opts.separator ""
         opts.separator "data.sabotage.missing is a report, not a gate: it never blocks and never"
         opts.separator "flips ok. A present '# sabotage:' note is not evidence the mutation was"
         opts.separator "actually run against broken code - see docs/testing.md. The scan only runs"
@@ -445,6 +454,9 @@ module Gate
           raise OptionParser::InvalidArgument, "profile must be 'loop' (got #{v.inspect})" if v != "loop"
 
           options[:profile] = v
+        end
+        opts.on("--force", "run the gate even when the applicability carve-out would skip it") do
+          options[:force] = true
         end
       end
     end
@@ -456,6 +468,7 @@ module Gate
 
       env = Envelope.new(script: "gate")
       loop_mode = options[:profile] == "loop"
+      forced = options[:force] == true
 
       manifest = Manifest.require!(env)
       return env.emit(io) unless manifest
@@ -505,13 +518,18 @@ module Gate
 
       env.data[:applicable] = applicable
       env.data[:carve_out_reason] = applicable ? nil : carve_out_reason(manifest)
+      env.data[:forced] = forced
 
       # The carve-out ("skip the gate command and review the diff instead") is a
       # pre-commit decision about the full gate - see /wurk:commit's Step 0. It
       # does not apply to --profile loop: that flag is a deliberate ask for
       # inner-loop feedback, not a request to decide whether a commit needs
       # the gate, so it always runs and always reports attested: false.
-      if !applicable && !loop_mode
+      # Nor does it apply under --force: on a clean tree (the default branch
+      # right after a landing) there is no diff to decide from, so the
+      # carve-out would answer applicable: false and run nothing - a
+      # "gate" that proves nothing about the merged tree.
+      if !applicable && !loop_mode && !forced
         env.data[:ran] = nil
         env.data[:attested] = nil
         env.data[:attestation_message] = nil
