@@ -287,7 +287,7 @@ Fix the manifest, not the script.
   root, per ADR-0014. Consistent with a pilot's footprint, since hooks are
   untracked.
 - **Session hooks.** `ruby install.rb --with hooks` from the wurk checkout
-  links four Claude Code hooks into `~/.claude/hooks/`; it is opt-in and
+  links five Claude Code hooks into `~/.claude/hooks/`; it is opt-in and
   the default install is unchanged. `wurk-main-session-policy.sh`
   (SessionStart) tells the top-level session that it coordinates and
   delegates rather than codes, and suppresses itself inside subagents by
@@ -303,6 +303,14 @@ Fix the manifest, not the script.
   anywhere it denies `git -C <dir> stash pop|drop|clear`, naming a wip
   commit on the branch as the fix. The main checkout's own stash is
   untouched, and it is fail-open like the wait guard.
+  `wurk-scratch-rm-guard.sh` (PreToolUse on Bash) denies a recursive rm
+  whose target, after a trailing glob is stripped, is the system temp
+  root, `$TMPDIR` itself, or a parent of the session's own scratchpad -
+  the directory sibling sessions keep their scratchpads in. It learns the
+  scratchpad from `$WURK_SCRATCHPAD_DIR` when that is set, and otherwise
+  from the input's `session_id`, by the directory named for it. Deleting
+  inside one's own scratchpad and a project build dir stays allowed, and
+  it is fail-open like the other guards.
   `wurk-harness-event.sh` (PostToolUse on every tool) appends one JSON
   line per tool call - `{"timestamp", "ts", "tool", "ok", "level",
   "is_error"}` - to this machine's telemetry sink, so tool calls are
@@ -341,6 +349,10 @@ Fix the manifest, not the script.
         {"matcher": "Bash",
          "hooks": [{"type": "command",
                     "command": "<home>/.claude/hooks/wurk-safe-wait-guard.sh",
+                    "timeout": 10}]},
+        {"matcher": "Bash",
+         "hooks": [{"type": "command",
+                    "command": "<home>/.claude/hooks/wurk-scratch-rm-guard.sh",
                     "timeout": 10}]}
       ],
       "SessionStart": [

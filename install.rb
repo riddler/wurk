@@ -80,7 +80,8 @@ module Install
       "git-stash-guard.sh" => { event: "PreToolUse", matcher: "Bash" },
       "harness-event.sh" => { event: "PostToolUse", matcher: "" },
       "main-session-policy.sh" => { event: "SessionStart", matcher: "startup" },
-      "safe-wait-guard.sh" => { event: "PreToolUse", matcher: "Bash" }
+      "safe-wait-guard.sh" => { event: "PreToolUse", matcher: "Bash" },
+      "scratch-rm-guard.sh" => { event: "PreToolUse", matcher: "Bash" }
     }.freeze
 
     attr_reader :repo_root, :home, :with

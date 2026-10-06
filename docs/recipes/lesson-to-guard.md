@@ -173,7 +173,10 @@ Whatever the form, a guard is not finished until it carries all of these.
   `hooks/git-stash-guard.sh` is the worked example of a guard whose
   self-test needs real state: it builds a throwaway repository with one
   linked worktree in a temp dir, with git's global and system config
-  ignored, and never runs the command it guards.
+  ignored, and never runs the command it guards. `hooks/scratch-rm-guard.sh`
+  is the same shape for a destructive command: its fixtures are a
+  throwaway scratch tree, and the hook only evaluates the `rm` text, so no
+  test ever deletes anything but the temp dir it made.
 
 Last, write the guard's path and its test name back into the bead that
 filed the lesson. That line is what turns the next retro's grep of the
