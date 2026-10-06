@@ -498,6 +498,15 @@ the checkout root); `data.gate_cwd` reports the resolved directory. See
   `data.attested` to `false`. No `--skip`, `--quick`, or other `--profile`
   value is defined by this script's parser, so passing one is a usage error
   (exit 2), not a narrower run.
+- `--force` skips the applicability carve-out and runs the gate command even
+  when no changed file is under the gated paths, reported as
+  `data.forced: true` (`false` on every other run). Its use is a tree with
+  no diff at all - the default branch right after a landing - where a bare
+  run answers `applicable: false`, `ok: true` and runs no command, which is
+  not a gate run. With changes present it is an ordinary run plus the flag.
+  `ok` follows the gate command exactly as on any other run, and the
+  sabotage scan and `data.gate_guard` still run (on an empty diff they
+  report nothing). It only widens what runs; it narrows nothing.
 - **`data.sabotage.missing` and `data.sabotage.unverifiable` are a report,
   not a gate.** Neither ever blocks or flips `ok`. A present `# sabotage:`
   note (either a real mutation or a stated `n/a` exemption; the prefix is
