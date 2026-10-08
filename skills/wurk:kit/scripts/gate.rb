@@ -761,7 +761,9 @@ module Gate
 
       # Rule 5: the before-snapshot is taken only once the gate command is
       # certain to run, so the carve-out path above shells out nothing new.
-      tree_before = TreeSnapshot.take(manifest.checkout_root, envelope: env)
+      # Snapshotted at the work-tree anchor, the tree the gate command runs
+      # in, not manifest.checkout_root (wu-1zu).
+      tree_before = TreeSnapshot.take(root, envelope: env)
       res, report = run_quality(env, manifest, loop_mode, root)
 
       # The gate command itself never got a chance to run: a typo'd gate.cwd
@@ -859,9 +861,9 @@ module Gate
 
       # After gate.attest too: an attest command runs the gate again, and a
       # write it makes is the same defect as one the quality run makes.
-      TreeSnapshot.check!(env, root: manifest.checkout_root, allow: manifest.daemon_written_paths,
+      TreeSnapshot.check!(env, root: root, allow: manifest.daemon_written_paths,
                                 before: tree_before,
-                                after: TreeSnapshot.take(manifest.checkout_root, envelope: env))
+                                after: TreeSnapshot.take(root, envelope: env))
 
       # Tier 1 judges on the report's status; tier 0 has only the exit code,
       # which is the whole of the contract's floor. Neither substitutes for

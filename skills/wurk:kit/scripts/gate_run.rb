@@ -263,8 +263,9 @@ end
         "pid" => supervisor_pid,
         # What the supervisor needs for gate.rb's rule 5 (a gate run that
         # changed the tree blocks): it has no manifest of its own, only
-        # this file.
-        "tree_root" => manifest.checkout_root,
+        # this file. The work-tree anchor, where the gate runs - not
+        # run_dir's manifest checkout (wu-1zu).
+        "tree_root" => root,
         "tree_allow" => manifest.daemon_written_paths
       }
       write_json(File.join(run_dir, META_FILE), meta)

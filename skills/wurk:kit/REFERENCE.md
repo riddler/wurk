@@ -587,7 +587,8 @@ checkout root); `data.gate_cwd` reports the resolved directory. See
 - **A gate run that changed the tree it measured blocks.** Unlike the
   sabotage scan and `data.gate_guard`, this check sets `ok` false. Around
   the gate command run (and `gate.attest`, when declared) `gate.rb` takes a
-  per-path signature of the working tree - `git status` plus a content hash
+  per-path signature of the working tree at `data.work_tree_root` - `git
+  status` plus a content hash
   of every listed path (`lib/tree_snapshot.rb`) - and diffs the two.
   `data.tree_changed` lists every path whose status or content moved: a
   clean tracked file the run edited, a dirty file it edited again, an
@@ -633,8 +634,9 @@ half-written one.
   hand. Reads `meta.json` from `--run-dir`, runs the resolved gate argv
   through `Sh.run_streaming`, releases any locks named in `meta.json`, and
   writes the `result.json` sentinel. Around the run it takes the same tree
-  snapshots `gate.rb` does (against `meta.json`'s `tree_root`, allowing
-  `tree_allow`, both recorded by `start` from the manifest) and reports
+  snapshots `gate.rb` does (against `meta.json`'s `tree_root`, the work-tree
+  root `start` resolved, allowing `tree_allow`, recorded by `start` from the
+  manifest) and reports
   `data.tree_changed`, `data.tree_changed_allowed` and a `gate_wrote_tree`
   block the same way; its own run directory is left out of both snapshots
   when it sits inside the tree, since the supervisor writes the log there

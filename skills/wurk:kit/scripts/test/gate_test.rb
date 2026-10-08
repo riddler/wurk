@@ -2316,7 +2316,12 @@ class GateTest < Minitest::Test
   # A committed repo with tracked.txt, notes.txt and log/ledger.md, whose
   # manifest's gate.full is `/bin/sh -c <script>` run from the repo root.
   # Yields the repo dir with cwd inside it and the real Sh runner installed.
-  def with_tree_repo(script, daemon_written: nil)
+  #
+  # With worktree: true, .claude/ is gitignored and the cwd is a worktree
+  # nested at <repo>/wt, so the manifest is found by walking up into the
+  # main checkout (wu-1zu's case C) and checkout_root is NOT the tree the
+  # gate runs in. Yields (cwd, repo dir).
+  def with_tree_repo(script, daemon_written: nil, worktree: false)
     require "open3"
     scrub = TREE_GIT_SCRUB.merge(ENV.keys.grep(/\ACLAUDE_CODE_/).to_h { |k| [k, nil] })
     saved = scrub.keys.to_h { |k| [k, ENV[k]] }
@@ -2334,10 +2339,16 @@ class GateTest < Minitest::Test
       File.write(File.join(dir, "tracked.txt"), "tracked\n")
       File.write(File.join(dir, "notes.txt"), "notes\n")
       File.write(File.join(dir, "log", "ledger.md"), "first\n")
+      File.write(File.join(dir, ".gitignore"), ".claude/\nwt/\n") if worktree
       tree_git!(dir, "init", "-q", "-b", "main")
       tree_git!(dir, "add", ".")
       tree_git!(dir, "commit", "-q", "-m", "init")
-      Dir.chdir(dir) { yield dir }
+      cwd = dir
+      if worktree
+        tree_git!(dir, "worktree", "add", "-q", "-b", "wt", "wt")
+        cwd = File.join(dir, "wt")
+      end
+      Dir.chdir(cwd) { yield cwd, dir }
     end
   ensure
     Manifest.reset!
@@ -2362,6 +2373,21 @@ class GateTest < Minitest::Test
       assert_equal ["tracked.txt"], env["data"]["tree_changed"]
       assert_equal [], env["data"]["tree_changed_allowed"]
       assert_equal "red", env["data"]["verdict"]
+    end
+  end
+
+  # sabotage: snapshot manifest.checkout_root again instead of the work-tree
+  # root -> red: the main checkout's tracked.txt never moves, so
+  # tree_changed is [] and nothing blocks
+  def test_a_gate_that_edits_a_tracked_file_in_a_worktree_blocks
+    with_tree_repo("echo touched >> tracked.txt", worktree: true) do |tree, main|
+      code, env = run_gate(["--force"])
+
+      assert_equal File.realpath(main), File.realpath(Manifest.current.checkout_root)
+      assert_equal tree, env["data"]["work_tree_root"]
+      assert_equal 1, code
+      assert_equal ["gate_wrote_tree"], blocked_codes(env)
+      assert_equal ["tracked.txt"], env["data"]["tree_changed"]
     end
   end
 

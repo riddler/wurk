@@ -513,6 +513,23 @@ end
     end
   end
 
+  # sabotage: record manifest.checkout_root as tree_root again instead of the
+  # work-tree root -> red (the supervisor would snapshot the manifest's
+  # checkout, not the worktree the gate runs in)
+  def test_start_records_the_work_tree_as_the_tree_root
+    in_tmp_repo("valid") do |dir|
+      Dir.mktmpdir do |tree|
+        expect_work_tree(toplevel: tree)
+        run_dir = File.join(dir, "run")
+        run_gr(%W[start --run-dir #{run_dir}])
+
+        meta = JSON.parse(File.read(File.join(run_dir, "meta.json")))
+        assert_equal tree, meta["tree_root"]
+        refute_equal File.realpath(dir), File.realpath(meta["tree_root"])
+      end
+    end
+  end
+
   # sabotage: n/a - asserts the legacy shape stays quiet; the FakeSh above
   # would raise on any git status this path tried to run
   def test_supervise_without_a_tree_root_reports_null_tree_keys_and_no_warning

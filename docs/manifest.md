@@ -785,6 +785,8 @@ working tree carries its own .claude/wurk.json:
   the working-tree file reads behind the `# sabotage:` note check -
     gate.rb's default sabotage file reader
   gate.guard_ledger existence - gate.rb gate_guard_from
+  repo.daemon_written_paths, matched against the tree-write snapshots -
+    gate.rb's TreeSnapshot calls, and gate_run.rb's meta.json tree_root
 ```
 
 The gate family has no remaining use of the manifest's checkout root as an
