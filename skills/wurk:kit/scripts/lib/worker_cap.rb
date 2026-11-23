@@ -110,7 +110,8 @@ module WorkerCap
         return result("steady", next_state["level"], next_state, reasons)
       end
 
-      next_state["calm_since"] ||= t
+      calm_since = next_state["calm_since"]
+      next_state["calm_since"] = t if calm_since.nil? || calm_since > t
       raise_after = config["raise_after_seconds"]
       calm_long_enough = t - next_state["calm_since"] >= raise_after
       unmoved_long_enough = next_state["last_change"].nil? || t - next_state["last_change"] >= raise_after
@@ -136,7 +137,10 @@ module WorkerCap
 
     def step_down(state, t, reasons)
       return if state["level"] <= 1
-      return if state["last_lowered"] && t - state["last_lowered"] < STEP_DOWN_SECONDS
+      # A stamp in the future (the clock stepped back) counts as long ago, so
+      # a clock change can never hold the cap up under load.
+      last = state["last_lowered"]
+      return if last && last <= t && t - last < STEP_DOWN_SECONDS
 
       state["level"] -= 1
       state["last_lowered"] = t

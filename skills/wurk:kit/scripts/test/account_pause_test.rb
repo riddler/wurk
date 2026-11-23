@@ -73,6 +73,18 @@ class AccountPauseTest < Minitest::Test
     refute check[:paused]
   end
 
+  # sabotage: drop the resets_at_unknown warning -> red.
+  def test_a_spent_week_with_no_readable_reset_warns
+    write_capture(week: 100)
+    path = File.join(@root, ".state", "current.json")
+    capture = JSON.parse(File.read(path))
+    capture["windows"]["seven_day"]["resets_at"] = "soon"
+    File.write(path, JSON.generate(capture))
+    result = check
+    refute result[:paused]
+    assert_includes codes(result), "resets_at_unknown"
+  end
+
   # 3.1#5. sabotage: check the Fable week for every model -> red.
   def test_a_spent_fable_week_pauses_only_a_fable_dispatch
     write_capture(week: 40, fable: 100)

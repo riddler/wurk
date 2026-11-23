@@ -119,7 +119,16 @@ module WorkerCapCli
       workers = config.machine_workers(ncpu: reading[:ncpu])
       env.warn(code: "memory_unknown", message: "memory pressure could not be read; treated as normal") if reading[:memory] == "unknown"
 
-      decision, machine_running = update_store(options, reading, workers, now, env)
+      begin
+        decision, machine_running = update_store(options, reading, workers, now, env)
+      rescue SystemCallError => e
+        # An unwritable state dir is not a reading: block, so a dispatcher
+        # never reads a crash as "no cap".
+        env.block!(code: "state_unwritable",
+                   message: "cannot read or write the worker-cap state under #{File.dirname(WorkerCap.state_path)}: " \
+                            "#{e.class.name.split('::').last}")
+        return env.emit(io)
+      end
       cap = lower_cap(decision[:cap], workers["ceiling"], options[:ceiling], env)
 
       free = options[:slots_dir] ? Lock.free_slots(dir: options[:slots_dir], count: slot_count, now: now) : nil
