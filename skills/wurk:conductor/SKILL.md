@@ -624,7 +624,9 @@ worktree isolation when parallel workers share directories.
   dispatch only: running workers are left alone, and the campaign waits
   and reads again. The cap steps back up on its own when the load eases,
   and the pause lifts on its own after a weekly reset or an account
-  change; neither is something the conductor clears. See the kit
+  change; neither is something the conductor clears. A non-zero exit
+  (a bad machine config, an unwritable state dir) is not a cap: dispatch
+  nothing, journal the blocked code, and surface it. See the kit
   REFERENCE.md, "`worker_cap.rb`", for the rule and every field.
 
 - **Claim and probe before you dispatch.** Before you spawn a worker

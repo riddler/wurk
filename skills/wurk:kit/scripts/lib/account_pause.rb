@@ -89,6 +89,12 @@ module AccountPause
           ["fable_week_spent", fable]
         end
       account = capture["account"].is_a?(Hash) ? capture["account"] : {}
+      [week, fable].compact.each do |win|
+        next unless win["used_percentage"] >= SPENT_PERCENT && epoch(win["resets_at"]).nil?
+
+        warnings << { code: "resets_at_unknown",
+                      message: "a window reads 100 percent with no readable resets_at; not treated as a pause" }
+      end
       {
         paused: !reason.nil?,
         reason: reason,

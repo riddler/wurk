@@ -61,6 +61,12 @@ class WorkerCapDecideTest < Minitest::Test
     assert_equal 3, result[:cap]
   end
 
+  # sabotage: compare a future last_lowered without the clock guard -> red.
+  def test_a_clock_stepped_back_does_not_hold_a_step_down
+    result = decide({ one: 6.0, five: 6.0 }, state: { "level" => 4, "last_lowered" => NOW.to_i + 3600 })
+    assert_equal 3, result[:level]
+  end
+
   # 1.1#4.
   def test_level_never_drops_under_one
     result = decide({ one: 6.5, five: 6.5 }, state: { "level" => 1, "last_lowered" => ago(300) })

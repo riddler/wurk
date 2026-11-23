@@ -157,6 +157,16 @@ class WorkerCapCliTest < Minitest::Test
     assert_equal false, env["data"]["dispatch"]
   end
 
+  # sabotage: drop the SystemCallError rescue -> red (a backtrace, no envelope).
+  def test_an_unwritable_state_dir_blocks_with_an_envelope
+    blocker = File.join(@dir, "not-a-dir")
+    File.write(blocker, "")
+    ENV["XDG_STATE_HOME"] = blocker
+    code, env = run_cli(%w[check --caller a --running 0 --no-refresh])
+    assert_equal 1, code
+    assert_equal ["state_unwritable"], env["blocked"].map { |b| b["code"] }
+  end
+
   # 4.1#5.
   def test_a_negative_or_non_integer_running_count
     assert_equal 2, run_usage(%w[check --caller a --running -1]).first

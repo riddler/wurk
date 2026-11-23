@@ -969,7 +969,9 @@ A capture older than 3600 seconds, or older than 300 seconds at 95 percent
 or more, is refreshed once by running `claude-limits capture` (45 second
 limit, at most one attempt per 300 seconds per machine, never under
 `--no-refresh` or `--dry-run`) and read again; a refresh that fails warns
-`refresh_failed` and the stale capture answers. The account shows only as
+`refresh_failed` and the stale capture answers. A window at 100 percent
+whose `resets_at` cannot be read is not a pause and warns
+`resets_at_unknown`. The account shows only as
 `id`, the first 8 hex digits of a SHA-256 of its address; the address never
 appears in the envelope.
 
@@ -990,7 +992,8 @@ and a slot acquire still decides for itself.
 
 0 for every reading, cap 0 and a pause included - `dispatch` is the answer.
 1 when the machine config is invalid (`blocked` names
-`bad_machine_config`). 2, with no envelope and nothing written, for a
+`bad_machine_config`) or the state dir cannot be read or written
+(`state_unwritable`); a dispatcher dispatches nothing on either. 2, with no envelope and nothing written, for a
 malformed `--caller`, `--running` or `--ceiling`, a missing `check`, or a
 `--slots-dir` on a machine with no `machine.gate_slots`.
 
