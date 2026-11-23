@@ -3,6 +3,7 @@
 require "json"
 require_relative "envelope"
 require_relative "cli"
+require_relative "worker_cap"
 
 # UserConfig is the kit's second config reader, alongside Manifest. It
 # locates, parses, and validates the machine-level `~/.claude/wurk.local.json`
@@ -51,7 +52,8 @@ class UserConfig
     nil => %w[wurk tmux outbound_scan machine workloads metrics typesafe],
     "tmux" => %w[permission_mode],
     "outbound_scan" => %w[patterns_file control_term],
-    "machine" => %w[name gate_slots],
+    "machine" => %w[name gate_slots workers],
+    "machine.workers" => %w[ceiling load_step_up load_step_down load_pause raise_after_seconds],
     "workloads[]" => %w[root fleet_manifest enabled primary],
     "metrics" => %w[prices error_events],
     "typesafe" => %w[key_path model budget state_dir log_state payload_store sites restricted_sources],
@@ -86,6 +88,17 @@ class UserConfig
   DEFAULTS = {
     "tmux.permission_mode" => "auto"
   }.freeze
+
+  # Defaults for machine.workers, the worker-cap rule's marks (see
+  # lib/worker_cap.rb and docs/machine-config.md). The ceiling has no fixed
+  # default: absent, it is WorkerCap.default_ceiling of the core count.
+  WORKERS_DEFAULTS = {
+    "load_step_up" => 0.50,
+    "load_step_down" => 0.75,
+    "load_pause" => 1.00,
+    "raise_after_seconds" => 180
+  }.freeze
+  WORKERS_MARKS = %w[load_step_up load_step_down load_pause].freeze
 
   attr_reader :path, :raw, :errors, :warnings
 
@@ -224,6 +237,24 @@ class UserConfig
   # every machine that runs the fleet (see Lock.resolve_slot_count).
   def machine_gate_slots
     fetch("machine.gate_slots")
+  end
+
+  # The worker-cap settings for this machine, every key present: `ceiling`
+  # (machine.workers.ceiling, else WorkerCap.default_ceiling(ncpu)),
+  # `ceiling_source` ("machine_config" or "default"), the three load marks
+  # (per core) and `raise_after_seconds`, each from the config or
+  # WORKERS_DEFAULTS. Only meaningful on a valid config.
+  def machine_workers(ncpu:)
+    section = workers_section
+    set = section["ceiling"]
+    values = WORKERS_DEFAULTS.keys.each_with_object({}) do |key, out|
+      out[key] = section.key?(key) ? section[key] : WORKERS_DEFAULTS[key]
+    end
+    if set.is_a?(Integer) && set.positive?
+      values.merge("ceiling" => set, "ceiling_source" => "machine_config")
+    else
+      values.merge("ceiling" => WorkerCap.default_ceiling(ncpu), "ceiling_source" => "default")
+    end
   end
 
   # The workloads this machine runs, as an array of normalized hashes with
@@ -382,6 +413,12 @@ class UserConfig
     ENV["HOME"] || Dir.home
   end
 
+  def workers_section
+    machine = raw["machine"]
+    section = machine.is_a?(Hash) ? machine["workers"] : nil
+    section.is_a?(Hash) ? section : {}
+  end
+
   def typesafe_section
     section = raw["typesafe"]
     section.is_a?(Hash) ? section : {}
@@ -498,12 +535,55 @@ end
       end
     end
 
+    validate_machine_workers(section["workers"]) if section.key?("workers")
+
     return unless section.key?("gate_slots")
 
     slots = section["gate_slots"]
     return if slots.is_a?(Integer) && slots.positive?
 
     errors << "#{path}: machine.gate_slots must be a positive integer, got #{slots.inspect}"
+  end
+
+  # machine.workers: a positive integer `ceiling`, three positive load marks
+  # (per core) in strict order step_up < step_down < pause - an absent mark
+  # takes its default for the order check - and a non-negative integer
+  # `raise_after_seconds`. Out of order marks block: they would make a zone
+  # unreachable, and a cap rule that cannot step down is worse than none.
+  def validate_machine_workers(workers)
+    unless workers.is_a?(Hash)
+      errors << "#{path}: machine.workers must be a JSON object, got #{workers.class}"
+      return
+    end
+
+    if workers.key?("ceiling")
+      ceiling = workers["ceiling"]
+      unless ceiling.is_a?(Integer) && ceiling.positive?
+        errors << "#{path}: machine.workers.ceiling must be a positive integer, got #{ceiling.inspect}"
+      end
+    end
+
+    if workers.key?("raise_after_seconds")
+      wait = workers["raise_after_seconds"]
+      unless wait.is_a?(Integer) && !wait.negative?
+        errors << "#{path}: machine.workers.raise_after_seconds must be a non-negative integer, got #{wait.inspect}"
+      end
+    end
+
+    marks_ok = WORKERS_MARKS.all? do |key|
+      value = workers.fetch(key, WORKERS_DEFAULTS[key])
+      next true if value.is_a?(Numeric) && value.positive?
+
+      errors << "#{path}: machine.workers.#{key} must be a positive number, got #{value.inspect}"
+      false
+    end
+    return unless marks_ok
+
+    up, down, pause = WORKERS_MARKS.map { |key| workers.fetch(key, WORKERS_DEFAULTS[key]) }
+    return if up < down && down < pause
+
+    errors << "#{path}: machine.workers marks must be ordered load_step_up < load_step_down < load_pause, " \
+              "got #{up} / #{down} / #{pause} (absent marks take their defaults)"
   end
 
   # Shape validation of workloads[]: an array of objects, each with a
