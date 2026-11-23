@@ -406,7 +406,12 @@ in_tmp_repo("valid") { ... }   # a scratch dir that carries .claude/wurk.json,
 
 `in_tmp_repo` rather than a bare `mktmpdir` for anything that walks up to
 find its manifest: inside a bare one the walk-up finds nothing and falls
-through to `git rev-parse`, which `FakeSh` correctly refuses.
+through to `git rev-parse`, which `FakeSh` correctly refuses. `in_tmp_worktree`
+is the worktree counterpart: it installs the manifest in a sibling (or, with
+`nested: true`, ancestor) checkout and yields a working directory that
+carries no manifest of its own, so `Manifest#checkout_root` and the working
+tree are different paths - the shape `in_tmp_repo` cannot express, and the
+one a work-tree-anchor test needs (wu-1zu).
 
 ## `tmux_window.rb open`: the `{id}` seed placeholder
 
@@ -465,9 +470,17 @@ Runs the consumer's own gate commands - `gate.full`, `gate.loop`,
 `docs/gate-contract.md` the project reached. It knows no gate tool's flag
 surface; every command is manifest data. The most constrained script here.
 Each of the five runs in `gate.cwd` when the manifest declares one (default
-the checkout root); `data.gate_cwd` reports the resolved directory. See
+the working-tree root - `data.work_tree_root` below, not the manifest's own
+checkout root); `data.gate_cwd` reports the resolved directory. See
 `docs/manifest.md`.
 
+- `data.work_tree_root` reports the absolute path of the git working tree
+  this run measured (`git rev-parse --show-toplevel`, resolved once per
+  invocation; see `lib/work_tree.rb`) - the tree the sabotage scan diffs and
+  reads files from. It is the manifest's checkout root only when the working
+  tree carries its own `.claude/wurk.json`; a `work_tree_unresolved` warning
+  means `--show-toplevel` did not answer and this field is the manifest's
+  checkout root as a fallback, not git's own answer (wu-1zu).
 - `data.skipped_stages` always stays in the payload, for every skip. Whether
   a skip *blocks*, and whether it belongs in what you report, follows a
   three-way `classification`:
@@ -574,7 +587,8 @@ the checkout root); `data.gate_cwd` reports the resolved directory. See
 - **A gate run that changed the tree it measured blocks.** Unlike the
   sabotage scan and `data.gate_guard`, this check sets `ok` false. Around
   the gate command run (and `gate.attest`, when declared) `gate.rb` takes a
-  per-path signature of the working tree - `git status` plus a content hash
+  per-path signature of the working tree at `data.work_tree_root` - `git
+  status` plus a content hash
   of every listed path (`lib/tree_snapshot.rb`) - and diffs the two.
   `data.tree_changed` lists every path whose status or content moved: a
   clean tracked file the run edited, a dirty file it edited again, an
@@ -620,8 +634,9 @@ half-written one.
   hand. Reads `meta.json` from `--run-dir`, runs the resolved gate argv
   through `Sh.run_streaming`, releases any locks named in `meta.json`, and
   writes the `result.json` sentinel. Around the run it takes the same tree
-  snapshots `gate.rb` does (against `meta.json`'s `tree_root`, allowing
-  `tree_allow`, both recorded by `start` from the manifest) and reports
+  snapshots `gate.rb` does (against `meta.json`'s `tree_root`, the work-tree
+  root `start` resolved, allowing `tree_allow`, recorded by `start` from the
+  manifest) and reports
   `data.tree_changed`, `data.tree_changed_allowed` and a `gate_wrote_tree`
   block the same way; its own run directory is left out of both snapshots
   when it sits inside the tree, since the supervisor writes the log there

@@ -9,6 +9,7 @@ require_relative "lib/gate_paths"
 require_relative "lib/manifest"
 require_relative "lib/base_ref"
 require_relative "lib/tree_snapshot"
+require_relative "lib/work_tree"
 
 # Gate runs the consumer's own gate commands (gate.full, gate.loop,
 # gate.report, gate.report_loop, gate.attest) and reports which tier of
@@ -169,7 +170,10 @@ module Gate
     # Was a constant lambda reading `path` against Dir.pwd. Diff paths are
     # repo-root-relative, so the reader has to know the root; injected readers
     # (tests) still receive the relative path unchanged, which is what keeps
-    # this a seam rather than a signature change.
+    # this a seam rather than a signature change. `root` is the work-tree
+    # anchor `run` resolves once (lib/work_tree.rb), never
+    # manifest.checkout_root - the file being checked is tracked content of
+    # the tree being gated, not a sibling of the manifest. See wu-1zu.
     def default_sabotage_file_reader(root)
       lambda do |path|
         File.read(File.join(root, path))
@@ -374,7 +378,15 @@ module Gate
     # A failed diff means this scan checked nothing at all - a different
     # claim from "checked everything and found nothing", and the one case
     # where the blind spot covers the whole run rather than one declaration.
-    def sabotage_scan(env, manifest, base)
+    #
+    # `root` is the work-tree anchor `run` resolves once (lib/work_tree.rb)
+    # and threads in, rather than this method reaching for the manifest
+    # itself - so one invocation cannot use two different roots. Never
+    # manifest.checkout_root: that is the root of the checkout the MANIFEST
+    # was found in, which is a different checkout whenever the working tree
+    # carries no .claude/wurk.json of its own, and anchoring there inspects
+    # whatever branch that other checkout has out. See wu-1zu.
+    def sabotage_scan(env, manifest, base, root)
       return { scanned: false, missing: [], unverifiable: [], observed: [] } unless manifest.sabotage?
 
       merge_base = BaseRef.merge_base(env, base)
@@ -385,10 +397,11 @@ module Gate
 
       # Pathspecs (gate.sabotage.test_roots / exempt_prefixes) are cwd-relative
       # to git, unlike the diff output they produce - see docs/manifest.md's
-      # "what is root-relative, and against what". chdir here, never
-      # gate.cwd: this is a git command the kit itself runs, which gate.cwd
-      # is explicitly never applied to.
-      diff_res = Sh.run(sabotage_diff_args(manifest, merge_base), chdir: manifest.checkout_root, envelope: env)
+      # "what is root-relative, and against what". chdir here is the
+      # work-tree anchor, never gate.cwd (this is a git command the kit
+      # itself runs, which gate.cwd is explicitly never applied to) and never
+      # manifest.checkout_root (see the method comment above - wu-1zu).
+      diff_res = Sh.run(sabotage_diff_args(manifest, merge_base), chdir: root, envelope: env)
       unless diff_res.success?
         return { scanned: false, missing: [], observed: [],
                  unverifiable: [{ reason: "diff_failed", file: nil, text: nil,
@@ -399,7 +412,7 @@ module Gate
                               note_forms: manifest.sabotage_note_forms,
                               test_re: manifest.sabotage_test_pattern,
                               exempt_prefixes: manifest.sabotage_exempt_prefixes,
-                              file_reader: default_sabotage_file_reader(manifest.checkout_root)).merge(scanned: true)
+                              file_reader: default_sabotage_file_reader(root)).merge(scanned: true)
       result[:unverifiable] += sabotage_untracked_unverifiable(env, manifest)
       result
     end
@@ -506,10 +519,13 @@ module Gate
 
       {
         ledger_path: ledger_path,
-        # Resolved against the manifest's checkout root, not Dir.pwd: manifest
-        # resolution walks up from the working directory, so gate.rb is
-        # legitimately invoked from a subdirectory, where a bare relative
-        # File.exist? silently reports a present ledger as absent.
+        # Resolved against the root of the working tree being gated, not Dir.pwd and
+        # not the manifest's checkout root: manifest resolution walks up from the
+        # working directory, so gate.rb is legitimately invoked from a subdirectory,
+        # where a bare relative File.exist? silently reports a present ledger as
+        # absent - and the manifest may have been found in a DIFFERENT checkout
+        # entirely, where the ledger's presence answers about another branch. See
+        # lib/work_tree.rb and wu-1zu.
         ledger_exists: !ledger_path.nil? && File.exist?(File.join(root, ledger_path)),
         stage: stage && { status: stage["status"], summary: stage["summary"], findings: stage["findings"] }
       }
@@ -526,11 +542,12 @@ module Gate
     # base command this script appends a profile flag to. Composing argv
     # here would mean this script knowing one gate tool's flag surface,
     # which is exactly the coupling docs/gate-contract.md exists to avoid.
-    def run_quality(env, manifest, loop_mode)
+    def run_quality(env, manifest, loop_mode, root)
       reporting = loop_mode ? manifest.gate_report_loop : manifest.gate_report
       argv = reporting || (loop_mode ? manifest.gate_loop : manifest.gate_full)
 
-      res = Sh.run(argv, chdir: manifest.gate_chdir, envelope: env, timeout: manifest.gate_timeout_seconds)
+      res = Sh.run(argv, chdir: manifest.gate_chdir(root: root), envelope: env,
+                          timeout: manifest.gate_timeout_seconds)
       return [res, nil] unless reporting
 
       report = begin
@@ -643,11 +660,31 @@ module Gate
       manifest = Manifest.require!(env)
       return env.emit(io) unless manifest
 
+      # The tree this gate measures, resolved once and threaded (the way
+      # `changed` is) rather than re-asked at each site. Not
+      # manifest.checkout_root: that is the root of the checkout the
+      # MANIFEST was found in, which is a different checkout whenever the
+      # working tree carries no .claude/wurk.json of its own - and then the
+      # sabotage diff inspects whatever branch that other checkout has out
+      # and reports a false clean. See wu-1zu and lib/work_tree.rb.
+      work_tree = WorkTree.root(env)
+      if work_tree.nil?
+        env.warn(
+          code: "work_tree_unresolved",
+          message: "git rev-parse --show-toplevel did not answer, so the paths this gate resolves " \
+                   "on the filesystem fall back to the manifest's checkout root " \
+                   "(#{manifest.checkout_root}), which is the right tree only if the manifest was " \
+                   "found in the tree being gated"
+        )
+      end
+      root = work_tree || manifest.checkout_root
+      env.data[:work_tree_root] = root
+
       ledger_path = manifest.gate_guard_ledger
       changed = BaseRef.changed_files(env, manifest: manifest)
       applicable = gate_applicable?(manifest, changed)
 
-      scan = sabotage_scan(env, manifest, changed[:base])
+      scan = sabotage_scan(env, manifest, changed[:base], root)
       note_forms = manifest.sabotage_note_forms
       env.data[:sabotage] = {
         enabled: manifest.sabotage?,
@@ -715,7 +752,7 @@ module Gate
         env.data[:could_not_measure] = []
         env.data[:verdict] = nil
         env.data[:summary] = nil
-        env.data[:gate_guard] = gate_guard_from([], ledger_path, manifest.checkout_root)
+        env.data[:gate_guard] = gate_guard_from([], ledger_path, root)
         env.data[:gate_cwd] = nil
         env.data[:tree_changed] = nil
         env.data[:tree_changed_allowed] = nil
@@ -724,8 +761,10 @@ module Gate
 
       # Rule 5: the before-snapshot is taken only once the gate command is
       # certain to run, so the carve-out path above shells out nothing new.
-      tree_before = TreeSnapshot.take(manifest.checkout_root, envelope: env)
-      res, report = run_quality(env, manifest, loop_mode)
+      # Snapshotted at the work-tree anchor, the tree the gate command runs
+      # in, not manifest.checkout_root (wu-1zu).
+      tree_before = TreeSnapshot.take(root, envelope: env)
+      res, report = run_quality(env, manifest, loop_mode, root)
 
       # The gate command itself never got a chance to run: a typo'd gate.cwd
       # or a gate command missing from PATH (Sh::Result#start_failed?, see
@@ -746,8 +785,8 @@ module Gate
         env.data[:could_not_measure] = []
         env.data[:verdict] = nil
         env.data[:summary] = nil
-        env.data[:gate_guard] = gate_guard_from([], ledger_path, manifest.checkout_root)
-        env.data[:gate_cwd] = manifest.gate_chdir
+        env.data[:gate_guard] = gate_guard_from([], ledger_path, root)
+        env.data[:gate_cwd] = manifest.gate_chdir(root: root)
         env.data[:tree_changed] = nil
         env.data[:tree_changed_allowed] = nil
         env.data[:attested] = false
@@ -777,12 +816,12 @@ module Gate
       env.data[:profile] = report["profile"]
       env.data[:stages] = stages
       env.data[:skipped_stages] = skipped
-      env.data[:gate_guard] = gate_guard_from(stages, ledger_path, manifest.checkout_root)
+      env.data[:gate_guard] = gate_guard_from(stages, ledger_path, root)
       # Resolved absolute directory the gate command ran in, or nil when the
       # project gates from its checkout root. The `commands` trail already
       # shows it via Sh.render; this makes it machine-readable for the
       # skills.
-      env.data[:gate_cwd] = manifest.gate_chdir
+      env.data[:gate_cwd] = manifest.gate_chdir(root: root)
       # Populated only on a tier-0 failure (below); nil otherwise so the key is
       # always present. Tier 1 already carries its failure in data.stages.
       env.data[:gate_output] = nil
@@ -791,7 +830,7 @@ module Gate
         env.data[:attested] = false
         env.data[:attestation_message] = nil
       elsif manifest.gate_attest
-        verify_res = Sh.run(manifest.gate_attest, chdir: manifest.gate_chdir, envelope: env,
+        verify_res = Sh.run(manifest.gate_attest, chdir: manifest.gate_chdir(root: root), envelope: env,
                             timeout: manifest.gate_timeout_seconds)
         if verify_res.start_failed?
           # Same misconfiguration class as the quality-run case above, just
@@ -822,9 +861,9 @@ module Gate
 
       # After gate.attest too: an attest command runs the gate again, and a
       # write it makes is the same defect as one the quality run makes.
-      TreeSnapshot.check!(env, root: manifest.checkout_root, allow: manifest.daemon_written_paths,
+      TreeSnapshot.check!(env, root: root, allow: manifest.daemon_written_paths,
                                 before: tree_before,
-                                after: TreeSnapshot.take(manifest.checkout_root, envelope: env))
+                                after: TreeSnapshot.take(root, envelope: env))
 
       # Tier 1 judges on the report's status; tier 0 has only the exit code,
       # which is the whole of the contract's floor. Neither substitutes for
