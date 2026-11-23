@@ -106,6 +106,19 @@ campaigns' journals (`[cross-campaign]` event, rule 5).
 
 Locks are held across wurk:commit's internal gate re-run.
 
+The worker cap is the third machine-wide number, beside the gate slots,
+and it is shared the same way: every campaign on the machine reports its
+own running workers to `worker_cap.rb check --caller <campaign id>
+--running N`, and each one's `data.headroom` is the machine's cap less
+the sum of every caller reported in the last 15 minutes. A campaign's
+`--running` replaces only its own entry, so one campaign cannot raise
+the cap or rewrite another's count; a campaign that stops reporting
+drops out of the sum after 15 minutes. `--ceiling N` (a campaign's own
+stated cap) may lower the answer, never raise it, the same rule as
+`--slots N`. The SKILL.md dispatch loop ("Ask the machine before you
+dispatch") says when to read it; the kit REFERENCE.md, "`worker_cap.rb`",
+has the rule.
+
 ### 4. Journals, reports, ledger
 
 - Journal file per campaign: `journal/<date>-campaign-<id>.md`.

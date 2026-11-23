@@ -605,6 +605,28 @@ For each ready bead, spawn a wurk-repo-worker with the dispatch template
 (appendix). Parallel only when the graph shows genuine independence;
 worktree isolation when parallel workers share directories.
 
+- **Ask the machine before you dispatch.** How many workers run at once
+  follows the machine's load, not the size of the ready graph. Before
+  each dispatch, and again before each wave, run
+  `ruby ~/.claude/skills/wurk:kit/scripts/worker_cap.rb check --caller
+  <campaign id> --running <live workers>` - `--running` is the count of
+  this campaign's workers still running, reported fresh every time, add
+  `--slots-dir <machine slot pool>` when the campaign uses machine gate
+  slots and `--model <family>` when the worker's model family is known.
+  Dispatch at most `data.headroom` workers, and none when
+  `data.dispatch` is false. Read it again at least every 15 minutes
+  while the campaign runs, even with nothing to dispatch, so the
+  campaign's running count stays live for every other dispatcher on the
+  machine. Journal each reading with its `data.read_at`, `data.zone`,
+  `data.cap` and `data.headroom` - a reading, never a promise that room
+  or a slot is free. A cap of 0 (load or memory pressure) or
+  `data.account.paused` (the current account's week is spent) stops NEW
+  dispatch only: running workers are left alone, and the campaign waits
+  and reads again. The cap steps back up on its own when the load eases,
+  and the pause lifts on its own after a weekly reset or an account
+  change; neither is something the conductor clears. See the kit
+  REFERENCE.md, "`worker_cap.rb`", for the rule and every field.
+
 - **Claim and probe before you dispatch.** Before you spawn a worker
   for a bead - and again at the moment you FILE a discovery (Phase 5),
   not only when you dispatch one - check whether another session is

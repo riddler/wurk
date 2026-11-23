@@ -80,7 +80,14 @@ the point.
 
   "machine": {                        // (opt) facts about this box
     "name": "<a name for this machine>",   // (opt) non-blank string; no default
-    "gate_slots": 2                   // (opt) positive integer; no default - see below
+    "gate_slots": 2,                  // (opt) positive integer; no default - see below
+    "workers": {                      // (opt) the worker cap - see below
+      "ceiling": 4,                   // (opt) positive integer; default clamp(cores / 4, 1, 4)
+      "load_step_up": 0.50,           // (opt) per-core load; default 0.50
+      "load_step_down": 0.75,         // (opt) per-core load; default 0.75
+      "load_pause": 1.00,             // (opt) per-core load; default 1.00
+      "raise_after_seconds": 180      // (opt) non-negative integer; default 180
+    }
   },
 
   "workloads": [                      // (opt) what this machine runs; omit = []
@@ -267,6 +274,31 @@ full statement, with the `slots_overridden` warning and the `data.slots` /
 count in its shared manifest should move it here, one file per machine,
 and stop relaying it.
 
+### `machine.workers`: the worker cap
+
+How many workers this machine runs at once, read by
+`skills/wurk:kit/scripts/worker_cap.rb check` (the full rule is in
+`skills/wurk:kit/REFERENCE.md` under `worker_cap.rb`). Every key is
+optional; `UserConfig#machine_workers` returns all of them with the
+defaults filled in.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `ceiling` | integer >= 1 | `clamp(cores / 4, 1, 4)` | the most workers this machine ever runs |
+| `load_step_up` | number > 0 | 0.50 | 1 and 5 minute load per core both under this is calm |
+| `load_step_down` | number > 0 | 0.75 | 1 minute load per core at or above this steps the cap down one |
+| `load_pause` | number > 0 | 1.00 | 1 minute load per core at or above this is cap 0 |
+| `raise_after_seconds` | integer >= 0 | 180 | calm must hold this long, and the level must not have moved this long, before one step up |
+
+The marks must be ordered `load_step_up < load_step_down < load_pause`
+(an absent mark takes its default for the check); out of order, or any
+value of the wrong type, blocks. A machine that shares its cores with
+other work (a CI runner, say) sets lower marks, for example 0.35 / 0.50 /
+0.67 on a 12-core machine that should stop adding workers at 8 busy
+cores; a small laptop sets a lower ceiling. No usage or token number
+belongs here: the cap follows the machine's load and nothing else, and a
+spent week is a separate pause read from the account's own capture.
+
 ## `workloads`
 
 An array of the workloads this machine runs, for a daemon or a conductor to
@@ -369,7 +401,8 @@ Read it with `UserConfig#metrics_error_events_path` (nil when absent).
 No file at all is a normal, valid state: every value falls back to its
 default (`"auto"` for `tmux.permission_mode`; `outbound_scan` absent means
 disarmed; `machine.name` and `machine.gate_slots` nil, so `--slots N`
-decides the slot count as before; `workloads` empty; `metrics.prices` empty,
+decides the slot count as before; `machine.workers` at its defaults, so
+the worker cap's ceiling follows the core count; `workloads` empty; `metrics.prices` empty,
 so reported cost is null, and `metrics.error_events` nil, so the sink reads
 as zero events), and `tmux_window.rb
 open` composes exactly the command line it always has. A new machine
@@ -393,7 +426,11 @@ asymmetry (`docs/manifest.md`'s Validation section):
   `control_term` blocks. A section with only one of the two keys does not
   block here - see `## outbound_scan` above.
 - **`machine`, when present, must be an object**; a non-string or blank
-  `name`, or a `gate_slots` that is not a positive integer, blocks.
+  `name`, or a `gate_slots` that is not a positive integer, blocks; so
+  does a `workers` that is not an object, a `workers.ceiling` that is not
+  a positive integer, a load mark that is not a positive number, a
+  `raise_after_seconds` that is not a non-negative integer, or marks out
+  of order.
 - **`workloads`, when present, must be an array of objects**, each with a
   non-blank string `root`; a blank `fleet_manifest`, a non-boolean
   `enabled` or `primary`, a duplicated root, or more than one primary

@@ -247,6 +247,22 @@ module Lock
       { held: true, owner: owner, age_seconds: age_seconds, holder_alive: holder_alive, stale: stale, staleness_reason: reason }
     end
 
+    # How many of slot-1..slot-count under dir no live owner holds at the
+    # moment of the reading, by the same probe status uses: an absent slot
+    # and a provably stale one count as free, anything else as held. Read
+    # only - it takes no slot and clears none - and a count, never a promise:
+    # by the time a caller acts on it another acquire may have taken one, so
+    # a slot acquire still decides for itself (worker_cap.rb reports this
+    # with the time it was read).
+    def free_slots(dir:, count:, now: DEFAULT_CLOCK.call, stale_after_seconds: 1800)
+      raise ArgumentError, "free_slots needs a positive slot count, got #{count.inspect}" unless count.is_a?(Integer) && count.positive?
+
+      (1..count).count do |i|
+        result = probe(File.join(dir, "slot-#{i}"), now: now, stale_after_seconds: stale_after_seconds)
+        !result[:held] || result[:stale]
+      end
+    end
+
     # Refuses to remove a lock it does not own unless force: true. Owner
     # identity is compared field by field over whichever of
     # campaign/bead/pid the caller supplies in `owner` - a field the caller

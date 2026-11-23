@@ -888,6 +888,112 @@ a judgment); `acquire`, `release`, and `clear` exit 1 when they report
 spawn its keeper, and `keeper_died_immediately` when the keeper spawned but
 was already dead by the time `acquire` checked.
 
+## `worker_cap.rb`: may this machine start another worker
+
+```bash
+ruby ~/.claude/skills/wurk:kit/scripts/worker_cap.rb check \
+  --caller ID --running N [--ceiling N] [--slots-dir DIR] [--model FAMILY] [--no-refresh]
+```
+
+The one question every dispatcher (a conductor, a lane, a scheduler) asks
+before it starts a worker. The answer has two independent parts: a **cap**
+that follows the machine's load and memory pressure and nothing else, and an
+**account pause** that is on when the current account's week is spent. No
+token count, price, burn rate or usage percentage moves the cap
+(`WorkerCap.decide` has no parameter that could carry one); a spent week
+shows only as `data.account.paused` and `data.dispatch: false`.
+
+- `--caller ID` (required) - this dispatcher's id, matching
+  `\A[a-z0-9][a-z0-9_.:-]{0,63}\z`. A campaign uses its campaign id.
+- `--running N` (required) - how many workers THIS caller runs now, a
+  non-negative integer. It replaces only this caller's entry in the shared
+  state; the machine's running count is the sum over every caller that
+  reported in the last 900 seconds.
+- `--ceiling N` - lowers the cap for this answer only, never raises it and
+  never changes the stored level (the rule of `Lock.resolve_slot_count`). A
+  flag above the machine's ceiling is not used and warns
+  `ceiling_overridden`.
+- `--slots-dir DIR` - the machine gate-slot pool to count; `headroom` is then
+  at most the slots no live owner holds (`Lock.free_slots`, the same probe as
+  `lock.rb status`, read only). Needs `machine.gate_slots`; without it the
+  call is a usage error, the same no-default rule as `lock.rb acquire`.
+- `--model FAMILY` - the worker's model family; `fable` (any value
+  containing it) adds the Fable week to the pause.
+- `--no-refresh` - never run the capture tool, answer from the capture on
+  disk. `--dry-run` reads everything and writes nothing: no state update, no
+  refresh.
+
+### The cap
+
+`machine.workers` in the machine config (`docs/machine-config.md`) sets the
+ceiling and three per-core load marks; the defaults are a ceiling of
+`clamp(ncpu / 4, 1, 4)` and marks 0.50 / 0.75 / 1.00. Each reading lands in
+one zone:
+
+| zone | when | level | cap |
+|---|---|---|---|
+| `unknown` | the load or core count cannot be read | kept | 0 |
+| `pause` | memory critical, or 1 minute load per core at or above `load_pause` | down one | 0 |
+| `high` | memory warn, or 1 minute load per core at or above `load_step_down` | down one | level |
+| `steady` | between the marks (the dead band) | kept, calm clock cleared | level |
+| `calm` | 1 and 5 minute load per core both under `load_step_up` | up one after `raise_after_seconds` of calm with no level change | level |
+
+The level lives between readings in
+`<XDG_STATE_HOME or ~/.local/state>/wurk/worker-cap.json` (mode 0600,
+replaced by rename under an flock on a sibling `.lock`), with every caller's
+last report. It starts at the ceiling, never leaves 1..ceiling, steps down
+at most once per 60 seconds, and a ceiling lowered in the config pulls it
+down at the next reading. Memory pressure is
+`kern.memorystatus_vm_pressure_level` on macOS (1 normal, 2 warn, 4
+critical); Linux reads `/proc/loadavg` and its memory reads `unknown`,
+treated as normal with a `memory_unknown` warning. A corrupt state file is
+started fresh with a `state_reset` warning.
+
+`headroom` is `cap - machine running`, at most the free slots when a slot
+pool was counted, never below 0. `dispatch` is `headroom > 0` and no
+account pause.
+
+### The account pause
+
+Read from the newest limit capture on this machine,
+`<limits root>/.state/current.json` (`CLAUDE_LIMITS_ROOT`, else
+`~/.local/claude-limits`), the operator's capture tool's own output. Paused
+when `windows.seven_day.used_percentage` is at or above 100 and its
+`resets_at` is still ahead (`reason: week_spent`), or, with `--model fable`,
+when `windows.seven_day_fable` is (`fable_week_spent`). No other window is
+read. Only the account logged in now is read, so the pause lifts by itself
+after a weekly reset or an account change. A missing or unreadable capture
+is not a pause: it warns `account_reading_unknown`.
+
+A capture older than 3600 seconds, or older than 300 seconds at 95 percent
+or more, is refreshed once by running `claude-limits capture` (45 second
+limit, at most one attempt per 300 seconds per machine, never under
+`--no-refresh` or `--dry-run`) and read again; a refresh that fails warns
+`refresh_failed` and the stale capture answers. The account shows only as
+`id`, the first 8 hex digits of a SHA-256 of its address; the address never
+appears in the envelope.
+
+### `data` keys
+
+`cap`, `level`, `ceiling`, `ceiling_source` (`"machine_config"` or
+`"default"`), `zone`, `reasons[]` (`load_unknown`, `load_pause`,
+`memory_critical`, `load_high`, `memory_warn`, `stepped_down`,
+`stepped_up`, `ceiling_lowered`), `load {one, five, ncpu, per_core}`,
+`memory` (`normal`, `warn`, `critical`, `unknown`), `gate_slots {count,
+free}` or null, `running {caller, machine}`, `headroom`, `account {paused,
+reason, id, week_used, fable_used, captured_at, resets_at}`, `dispatch`,
+`read_at` (ISO-8601 UTC). Every number is a reading at `read_at`, never a
+promise: a slot counted free may be taken by the time a worker asks for it,
+and a slot acquire still decides for itself.
+
+### Exit codes
+
+0 for every reading, cap 0 and a pause included - `dispatch` is the answer.
+1 when the machine config is invalid (`blocked` names
+`bad_machine_config`). 2, with no envelope and nothing written, for a
+malformed `--caller`, `--running` or `--ceiling`, a missing `check`, or a
+`--slots-dir` on a machine with no `machine.gate_slots`.
+
 ## `campaign_state.rb`: which campaign may a scheduler start
 
 Reads a campaign directory (`--dir`, repeatable; default
